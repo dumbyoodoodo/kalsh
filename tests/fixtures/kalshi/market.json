@@ -1,0 +1,19 @@
+{
+  "market": {
+    "ticker": "KXHIGHNY-26JUL21-T85",
+    "event_ticker": "KXHIGHNY-26JUL21",
+    "market_type": "binary",
+    "title": "Highest temperature in NYC on Jul 21, 2026",
+    "subtitle": "85° or above",
+    "status": "open",
+    "yes_bid": 42,
+    "yes_ask": 47,
+    "no_bid": 53,
+    "no_ask": 58,
+    "last_price": 45,
+    "volume": 1250,
+    "open_interest": 900,
+    "close_time": "2026-07-21T23:59:00Z",
+    "rules_primary": "Settles YES if the official high temperature at KNYC on 2026-07-21 is 85F or above, per NWS CLI report."
+  }
+}

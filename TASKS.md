@@ -1,0 +1,302 @@
+# Implementation Roadmap
+
+Claude Code should work top to bottom. Each milestone must be testable and independently useful.
+
+This roadmap is organized around a research-first development philosophy: discovering a statistically significant, repeatable edge matters more than shipping trading infrastructure quickly. See `ROADMAP.md` for the version-numbered long-term view, `RESEARCH.md` for methodology, and `HYPOTHESES.md` for the process every strategy/model idea must go through before implementation. No trading logic (paper, demo order submission, or live) is added before Phase 6 (Backtesting) has something to backtest.
+
+---
+
+## Phase 1 — Infrastructure (complete)
+
+### Milestone 0 — Repository foundation
+
+- [x] Initialize Python 3.12 project with `uv`.
+- [x] Add Ruff, mypy, pytest, pytest-asyncio, Hypothesis.
+- [x] Create package layout from `CLAUDE.md` (partial by design: only packages this
+      milestone uses were created; see `docs/adr/0001-initial-architecture.md`).
+- [x] Add typed settings with explicit environment selection.
+- [x] Add `.env.example`; ensure secrets are gitignored.
+- [x] Add structured logging.
+- [x] Add Docker Compose with PostgreSQL.
+- [x] Add SQLAlchemy and Alembic baseline.
+- [x] Add CI running lint, type check, and tests.
+- [x] Add `make check` or equivalent.
+- [x] Add live-trading safety tests.
+
+Acceptance criteria:
+
+```bash
+uv run ruff check .
+uv run mypy src
+uv run pytest
+```
+
+all pass.
+
+### Milestone 1 — Kalshi read-only market-data gateway
+
+- [x] Implement environment base URLs (confirmed against live API and the
+      official Kalshi starter-code reference; see docs/API_VERIFICATION.md).
+- [x] Implement unauthenticated production market-data requests where supported.
+- [x] Implement RSA authentication module for demo/private endpoints.
+- [x] Implement API response schemas.
+- [x] Implement pagination.
+- [x] Retrieve series, events, markets, market details, trades, and order book.
+- [x] Correctly reconstruct YES and NO asks from complementary bids.
+- [x] Store raw payloads and normalized snapshots.
+- [x] Add CLI commands:
+  - `series list`
+  - `markets list`
+  - `market show TICKER`
+  - `orderbook show TICKER`
+- [x] Add unit tests with recorded fixtures.
+- [x] Add opt-in demo integration tests.
+
+**API verification: Passed** (2026-07-20) — see
+[`docs/API_VERIFICATION.md`](docs/API_VERIFICATION.md) for the full report.
+Public REST endpoints, pagination, order-book reconstruction, and
+authenticated portfolio reads are all verified against live data. Several
+confirmed wire-format mismatches were found and fixed (signing path prefix,
+`*_dollars`/`*_fp` price/quantity fields, a bad foreign key that broke
+`market show`). The initial 401s on `/portfolio/*` were a demo-vs-production
+API key mismatch (not a code defect) and are resolved with a correctly
+demo-scoped key.
+
+Acceptance criteria:
+
+- Read-only collection works.
+- Empty books and malformed responses are handled.
+- No order endpoint exists yet.
+
+---
+
+## Phase 2 — Historical Data Platform
+
+**No trading, feature, or modeling logic belongs in this phase.** The objective is collecting and versioning data correctly: Kalshi market data, order books, trades, weather forecasts, and weather observations, with point-in-time correctness and no look-ahead bias. Everything downstream (Phases 4-8) depends on getting this right.
+
+### Milestone 2 — Weather-market discovery and settlement mapping
+
+- [ ] Discover recurring weather series from API metadata.
+- [ ] Retrieve complete rules for target markets.
+- [ ] Define typed settlement specification.
+- [ ] Implement a conservative parser.
+- [ ] Mark ambiguous mappings unresolved.
+- [ ] Create manual override file with audit fields.
+- [ ] Add CLI command `settlement resolve TICKER`.
+- [ ] Build a validation report comparing parsed results with raw rules.
+
+Acceptance criteria:
+
+- At least one chosen daily-temperature series is mapped correctly.
+- No unresolved contract can reach a strategy.
+
+### Milestone 3 — Weather data ingestion
+
+- [ ] Select official provider matching settlement needs.
+- [ ] Implement station lookup and metadata.
+- [ ] Collect timestamped forecasts.
+- [ ] Collect official observations.
+- [ ] Normalize units.
+- [ ] Persist raw and normalized data.
+- [ ] Track provider issue time, receipt time, and valid time.
+- [ ] Add completeness and freshness checks.
+
+Acceptance criteria:
+
+- Re-running ingestion is idempotent.
+- Historical forecasts are never overwritten.
+- Missing/late data is visible.
+
+### Milestone 4 — Research dataset
+
+- [ ] Join market, settlement, forecast, and observation data without leakage.
+- [ ] Create point-in-time snapshots.
+- [ ] Calculate forecast residuals.
+- [ ] Export versioned Parquet datasets.
+- [ ] Add dataset manifest with date range, row count, hashes, and schema version.
+- [ ] Add leakage tests.
+
+Acceptance criteria:
+
+- Any row can be traced to raw sources.
+- Dataset can be rebuilt deterministically.
+
+---
+
+## Phase 3 — Research Framework
+
+Establishes how research is conducted and recorded for every phase from here on. This is largely a documentation and convention phase, not a large code phase.
+
+- [x] Add `RESEARCH.md` documenting research philosophy, reproducibility, dataset
+      versioning, experiment tracking, evaluation methodology, calibration,
+      statistical significance, walk-forward validation, and leakage avoidance.
+- [x] Add `HYPOTHESES.md` with the hypothesis template and process.
+- [x] Add `ROADMAP.md` with the long-term version-numbered roadmap.
+- [ ] Establish the experiment-tracking convention in practice (where results
+      get logged, what "dataset version" means concretely, given the Parquet
+      manifests from Milestone 4).
+- [ ] Record the first hypothesis (or several) in `HYPOTHESES.md` for the
+      daily-temperature thesis in `STRATEGY_SPEC.md`, before any Phase 4/5 code
+      is written against it.
+
+Acceptance criteria:
+
+- Every experiment from Phase 4 onward references a hypothesis ID (from
+  `HYPOTHESES.md`) and a dataset version (from the Milestone 4 manifest).
+
+---
+
+## Phase 4 — Feature Engineering
+
+Document the feature pipeline before building it broadly; only implement features a live hypothesis actually needs.
+
+Candidate features (examples, not commitments):
+
+- forecast error
+- ensemble spread
+- humidity
+- wind
+- pressure
+- seasonal effects
+- liquidity
+- spread
+- order-book imbalance
+- time until settlement
+
+- [ ] Implement `features/forecast_error.py` for the features the first
+      recorded hypothesis (Phase 3) actually requires.
+- [ ] Implement `features/builder.py` to assemble a point-in-time feature
+      snapshot from the Phase 2 research dataset, with no leakage.
+- [ ] Version feature definitions alongside dataset versions (see `RESEARCH.md`).
+
+Acceptance criteria:
+
+- A feature snapshot is reproducible from dataset version + feature version.
+- No feature uses data unavailable at decision time.
+
+---
+
+## Phase 5 — Probability Models
+
+Progression, evaluated primarily on calibration rather than P&L alone (see `RESEARCH.md`):
+
+1. Historical baseline (empirical residual CDF)
+2. Gaussian residual model
+3. Student-t residual model
+4. Gradient-boosted trees
+5. Bayesian approaches
+
+Do not skip ahead in this list without first showing the simpler model is insufficient — see the "prefer simple models" rule in `CLAUDE.md`.
+
+### Milestone 5 — Baseline probability model
+
+- [ ] Implement empirical residual model.
+- [ ] Implement Gaussian baseline.
+- [ ] Implement Student-t baseline.
+- [ ] Convert distributions to exact contract probabilities.
+- [ ] Add rolling/expanding time-series validation.
+- [ ] Generate calibration, Brier score, and log-loss reports.
+- [ ] Add model registry and version metadata.
+
+Acceptance criteria:
+
+- Probability predictions are valid and reproducible.
+- Baselines are compared out of sample.
+
+### Milestone 5a — Advanced models (only if justified)
+
+- [ ] Gradient-boosted trees, only after a `HYPOTHESES.md` entry shows the
+      Milestone 5 baselines are miscalibrated or insufficiently sharp in a
+      way additional structure could plausibly fix.
+- [ ] Bayesian approaches, only after the same bar is met.
+
+Acceptance criteria:
+
+- Each advanced model is compared against the best Milestone 5 baseline on
+  calibration, not just backtest return.
+
+---
+
+## Phase 6 — Backtesting
+
+Backtesting comes before paper trading. No strategy is considered successful without passing a conservative, cost-aware backtest first.
+
+### Milestone 6 — Cost and signal engine
+
+- [ ] Implement executable-price calculations.
+- [ ] Implement current fee model from configurable series metadata/schedule.
+- [ ] Implement slippage and uncertainty buffers.
+- [ ] Generate auditable signals with reason codes.
+- [ ] Add fixed-size and capped fractional-Kelly sizing.
+- [ ] Unit test all boundaries.
+
+Acceptance criteria:
+
+- No positive signal based on last-trade price alone.
+- Every rejected trade has a reason.
+
+### Milestone 7 — Event-driven backtester
+
+- [ ] Replay quotes, forecasts, signals, orders, fills, and settlement.
+- [ ] Support market orders and conservative limit-fill models.
+- [ ] Model latency, depth, partial fills, fees, and capital usage.
+- [ ] Produce prediction and trading reports.
+- [ ] Run cost and fill sensitivity analysis.
+- [ ] Add walk-forward evaluation.
+
+Acceptance criteria:
+
+- No look-ahead.
+- Results can be reproduced from config and dataset version.
+- Report prominently shows sample size and uncertainty.
+- The corresponding `HYPOTHESES.md` entry is updated with the result
+  (confirmed, rejected, or inconclusive) before moving to Phase 7 for that
+  strategy.
+
+---
+
+## Phase 7 — Paper Trading
+
+Only after: validated data (Phase 2), a calibrated probability model (Phase 5), and a strategy that has passed a conservative backtest (Phase 6) for the specific hypothesis being paper-traded.
+
+### Milestone 8 — Paper trading
+
+- [ ] Implement paper broker using live quotes.
+- [ ] Add order state machine.
+- [ ] Add position and P&L reconciliation.
+- [ ] Add stale-data and disconnect handling.
+- [ ] Add monitoring endpoints and kill switch.
+- [ ] Run continuously with no real orders.
+
+### Milestone 9 — Kalshi demo execution
+
+- [ ] Implement authenticated order submission only for demo.
+- [ ] Add client order IDs and idempotency.
+- [ ] Add cancel/replace.
+- [ ] Subscribe to fills and order updates.
+- [ ] Reconcile REST and WebSocket state.
+- [ ] Add hard risk limits.
+- [ ] Chaos-test reconnects and duplicate messages.
+
+Demo uses simulated funds only (see README environment policy); this milestone still carries no real-money risk.
+
+---
+
+## Phase 8 — Live Trading
+
+### Milestone 10 — Production review
+
+Do not implement automatically.
+
+Create a written review covering:
+
+- validation history
+- model calibration
+- backtest assumptions
+- paper/demo results
+- risk limits
+- operational failure modes
+- legal/compliance/account constraints
+- explicit human approval
+
+Production remains disabled unless the owner intentionally authorizes it. Live trading must remain disabled by default at every point before this milestone is explicitly, manually completed.

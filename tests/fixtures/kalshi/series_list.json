@@ -1,0 +1,17 @@
+{
+  "series": [
+    {
+      "ticker": "KXHIGHNY",
+      "category": "Climate and Weather",
+      "title": "Highest temperature in NYC",
+      "frequency": "daily"
+    },
+    {
+      "ticker": "KXFED",
+      "category": "Economics",
+      "title": "Fed funds rate decision",
+      "frequency": "irregular"
+    }
+  ],
+  "cursor": ""
+}

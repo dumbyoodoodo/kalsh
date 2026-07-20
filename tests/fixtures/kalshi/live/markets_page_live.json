@@ -1,0 +1,200 @@
+{
+  "markets": [
+    {
+      "can_close_early": true,
+      "close_time": "2026-08-04T16:00:00Z",
+      "created_time": "2026-07-20T21:05:36.095347Z",
+      "custom_strike": {
+        "Associated Events": "KXMLBGAME-26JUL202005CWSTEX,KXUCLGAME-26JUL21ARASHA",
+        "Associated Market Sides": "yes,yes",
+        "Associated Markets": "KXMLBGAME-26JUL202005CWSTEX-TEX,KXUCLGAME-26JUL21ARASHA-TIE",
+        "Multivariate Event Ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026770C1B2856F"
+      },
+      "event_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026770C1B2856F",
+      "expected_expiration_time": "2026-07-21T19:00:00Z",
+      "expiration_time": "2026-08-04T16:00:00Z",
+      "expiration_value": "",
+      "last_price_dollars": "0.4500",
+      "latest_expiration_time": "2026-08-04T16:00:00Z",
+      "liquidity_dollars": "0.0000",
+      "market_type": "binary",
+      "mve_collection_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-R",
+      "mve_selected_legs": [
+        {
+          "event_ticker": "KXMLBGAME-26JUL202005CWSTEX",
+          "market_ticker": "KXMLBGAME-26JUL202005CWSTEX-TEX",
+          "side": "yes"
+        },
+        {
+          "event_ticker": "KXUCLGAME-26JUL21ARASHA",
+          "market_ticker": "KXUCLGAME-26JUL21ARASHA-TIE",
+          "side": "yes"
+        }
+      ],
+      "no_ask_dollars": "1.0000",
+      "no_bid_dollars": "0.0000",
+      "no_sub_title": "yes Texas,yes Reg Time: Tie",
+      "notional_value_dollars": "1.0000",
+      "open_interest_fp": "100.00",
+      "open_time": "2026-07-20T21:05:36Z",
+      "previous_price_dollars": "0.0000",
+      "previous_yes_ask_dollars": "0.0000",
+      "previous_yes_bid_dollars": "0.0000",
+      "price_level_structure": "deci_cent",
+      "price_ranges": [
+        {
+          "end": "1.0000",
+          "start": "0.0000",
+          "step": "0.0010"
+        }
+      ],
+      "result": "",
+      "rules_primary": "",
+      "rules_secondary": "Kalshi is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Governing League. All trademarks, logos, and brand names are the property of their respective owners.",
+      "settlement_timer_seconds": 5,
+      "status": "active",
+      "strike_type": "custom",
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026770C1B2856F-7AC448EEEC5",
+      "title": "yes Texas,yes Reg Time: Tie",
+      "updated_time": "2026-07-20T21:05:36.596941Z",
+      "volume_24h_fp": "0.00",
+      "volume_fp": "100.00",
+      "yes_ask_dollars": "1.0000",
+      "yes_ask_size_fp": "0.00",
+      "yes_bid_dollars": "0.0000",
+      "yes_bid_size_fp": "0.00",
+      "yes_sub_title": "yes Texas,yes Reg Time: Tie"
+    },
+    {
+      "can_close_early": true,
+      "close_time": "2026-08-06T02:00:00Z",
+      "created_time": "2026-07-20T21:04:27.754905Z",
+      "custom_strike": {
+        "Associated Events": "KXMLBGAME-26JUL231310MINCLE,KXWNBAGAME-26JUL22DALPDX",
+        "Associated Market Sides": "yes,yes",
+        "Associated Markets": "KXMLBGAME-26JUL231310MINCLE-MIN,KXWNBAGAME-26JUL22DALPDX-DAL",
+        "Multivariate Event Ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202679CD83E52F0"
+      },
+      "event_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202679CD83E52F0",
+      "expected_expiration_time": "2026-07-23T20:10:00Z",
+      "expiration_time": "2026-08-06T02:00:00Z",
+      "expiration_value": "",
+      "last_price_dollars": "0.4500",
+      "latest_expiration_time": "2026-08-06T02:00:00Z",
+      "liquidity_dollars": "0.0000",
+      "market_type": "binary",
+      "mve_collection_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-R",
+      "mve_selected_legs": [
+        {
+          "event_ticker": "KXMLBGAME-26JUL231310MINCLE",
+          "market_ticker": "KXMLBGAME-26JUL231310MINCLE-MIN",
+          "side": "yes"
+        },
+        {
+          "event_ticker": "KXWNBAGAME-26JUL22DALPDX",
+          "market_ticker": "KXWNBAGAME-26JUL22DALPDX-DAL",
+          "side": "yes"
+        }
+      ],
+      "no_ask_dollars": "1.0000",
+      "no_bid_dollars": "0.0000",
+      "no_sub_title": "yes Minnesota,yes Dallas",
+      "notional_value_dollars": "1.0000",
+      "open_interest_fp": "100.00",
+      "open_time": "2026-07-20T21:04:27Z",
+      "previous_price_dollars": "0.0000",
+      "previous_yes_ask_dollars": "0.0000",
+      "previous_yes_bid_dollars": "0.0000",
+      "price_level_structure": "deci_cent",
+      "price_ranges": [
+        {
+          "end": "1.0000",
+          "start": "0.0000",
+          "step": "0.0010"
+        }
+      ],
+      "result": "",
+      "rules_primary": "",
+      "rules_secondary": "Kalshi is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Governing League. All trademarks, logos, and brand names are the property of their respective owners.",
+      "settlement_timer_seconds": 5,
+      "status": "active",
+      "strike_type": "custom",
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202679CD83E52F0-75AF41B6FC6",
+      "title": "yes Minnesota,yes Dallas",
+      "updated_time": "2026-07-20T21:04:28.597496Z",
+      "volume_24h_fp": "0.00",
+      "volume_fp": "100.00",
+      "yes_ask_dollars": "1.0000",
+      "yes_ask_size_fp": "0.00",
+      "yes_bid_dollars": "0.0000",
+      "yes_bid_size_fp": "0.00",
+      "yes_sub_title": "yes Minnesota,yes Dallas"
+    },
+    {
+      "can_close_early": true,
+      "close_time": "2026-07-25T19:10:00Z",
+      "created_time": "2026-07-20T21:00:59.883905Z",
+      "custom_strike": {
+        "Associated Events": "KXMLBGAME-26JUL211907TBTOR,KXMLBGAME-26JUL221510WSHCOL",
+        "Associated Market Sides": "yes,yes",
+        "Associated Markets": "KXMLBGAME-26JUL211907TBTOR-TB,KXMLBGAME-26JUL221510WSHCOL-COL",
+        "Multivariate Event Ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202663AD0574A81"
+      },
+      "event_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202663AD0574A81",
+      "expected_expiration_time": "2026-07-22T22:10:00Z",
+      "expiration_time": "2026-07-25T19:10:00Z",
+      "expiration_value": "",
+      "last_price_dollars": "0.4500",
+      "latest_expiration_time": "2026-07-25T19:10:00Z",
+      "liquidity_dollars": "0.0000",
+      "market_type": "binary",
+      "mve_collection_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-R",
+      "mve_selected_legs": [
+        {
+          "event_ticker": "KXMLBGAME-26JUL211907TBTOR",
+          "market_ticker": "KXMLBGAME-26JUL211907TBTOR-TB",
+          "side": "yes"
+        },
+        {
+          "event_ticker": "KXMLBGAME-26JUL221510WSHCOL",
+          "market_ticker": "KXMLBGAME-26JUL221510WSHCOL-COL",
+          "side": "yes"
+        }
+      ],
+      "no_ask_dollars": "1.0000",
+      "no_bid_dollars": "0.0000",
+      "no_sub_title": "yes Tampa Bay,yes Colorado",
+      "notional_value_dollars": "1.0000",
+      "open_interest_fp": "100.00",
+      "open_time": "2026-07-20T21:00:59Z",
+      "previous_price_dollars": "0.0000",
+      "previous_yes_ask_dollars": "0.0000",
+      "previous_yes_bid_dollars": "0.0000",
+      "price_level_structure": "deci_cent",
+      "price_ranges": [
+        {
+          "end": "1.0000",
+          "start": "0.0000",
+          "step": "0.0010"
+        }
+      ],
+      "result": "",
+      "rules_primary": "",
+      "rules_secondary": "Kalshi is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Governing League. All trademarks, logos, and brand names are the property of their respective owners.",
+      "settlement_timer_seconds": 5,
+      "status": "active",
+      "strike_type": "custom",
+      "ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202663AD0574A81-88E878334EA",
+      "title": "yes Tampa Bay,yes Colorado",
+      "updated_time": "2026-07-20T21:01:00.596378Z",
+      "volume_24h_fp": "0.00",
+      "volume_fp": "100.00",
+      "yes_ask_dollars": "1.0000",
+      "yes_ask_size_fp": "0.00",
+      "yes_bid_dollars": "0.0000",
+      "yes_bid_size_fp": "0.00",
+      "yes_sub_title": "yes Tampa Bay,yes Colorado"
+    }
+  ],
+  "cursor": "CgsIjY360gYQ-PDHDxInS1hNTEJTQi0yNkpVTDIwMTg0ME1JTkNMRS1NSU5STEVXSVMyMy0x"
+}

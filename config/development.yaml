@@ -1,0 +1,3 @@
+kalshi_env: development
+log_level: DEBUG
+database_url: postgresql+psycopg://kalshi:kalshi@localhost:5432/kalshi_weather

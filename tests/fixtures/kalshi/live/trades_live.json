@@ -1,0 +1,17 @@
+{
+  "cursor": "EhIKEDk3l_lQ3GDTEK248sR0c8kaDAiynPrSBhCw7rbXAg",
+  "trades": [
+    {
+      "count_fp": "0.91",
+      "created_time": "2026-07-20T21:08:02.720222Z",
+      "is_block_trade": false,
+      "no_price_dollars": "0.5100",
+      "taker_book_side": "bid",
+      "taker_outcome_side": "yes",
+      "taker_side": "yes",
+      "ticker": "KXMLBGAME-26JUL201905PITNYY-PIT",
+      "trade_id": "393797f9-50dc-60d3-10ad-b8f2c47473c9",
+      "yes_price_dollars": "0.4900"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+kalshi_env: backtest
+log_level: INFO
+database_url: duckdb:///data/backtest.duckdb

@@ -1,0 +1,140 @@
+"""SQLAlchemy ORM models for the Milestone 1 subset of DATA_MODEL.md.
+
+Settlement, forecast, model-prediction, signal, order/fill/position tables
+are deferred to the milestones that first need them (Milestone 2+).
+"""
+
+import hashlib
+import json
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import JSON, BigInteger, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# SQLite only honors autoincrement rowid-aliasing on a column declared exactly
+# as INTEGER PRIMARY KEY; BigInteger's "BIGINT" DDL breaks that on SQLite
+# (used by the in-memory unit tests), so fall back to Integer there. Postgres
+# always gets a real BIGINT.
+BigIntPK = BigInteger().with_variant(Integer, "sqlite")
+
+
+def content_hash(payload: Any) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class RawApiPayload(Base):
+    """Append-only capture of every external API response, verbatim."""
+
+    __tablename__ = "raw_api_payloads"
+    __table_args__ = (
+        Index(
+            "ix_raw_api_payloads_source_request_hash",
+            "source",
+            "request_key",
+            "content_hash",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    endpoint_or_channel: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[Any] = mapped_column(JSON, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+
+
+class SeriesRecord(Base):
+    __tablename__ = "series"
+
+    series_ticker: Mapped[str] = mapped_column(String(64), primary_key=True)
+    category: Mapped[str | None] = mapped_column(String(64))
+    title: Mapped[str | None] = mapped_column(Text)
+    frequency: Mapped[str | None] = mapped_column(String(32))
+    settlement_source: Mapped[str | None] = mapped_column(Text)
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class EventRecord(Base):
+    __tablename__ = "events"
+
+    event_ticker: Mapped[str] = mapped_column(String(64), primary_key=True)
+    series_ticker: Mapped[str | None] = mapped_column(
+        ForeignKey("series.series_ticker"), nullable=True
+    )
+    title: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(32))
+    open_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    close_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    settlement_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class MarketSnapshot(Base):
+    """A point-in-time snapshot of a market; never overwritten (append-only)."""
+
+    __tablename__ = "market_snapshots"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Not a ForeignKey: markets are commonly fetched/persisted before their
+    # parent event has been ingested (confirmed live -- see
+    # docs/API_VERIFICATION.md). Enforcing referential integrity here would
+    # make `market show` unusable until `events` is separately populated,
+    # which no current CLI command does.
+    event_ticker: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    market_type: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(Text)
+    subtitle: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(32))
+    yes_bid_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_cents: Mapped[int | None] = mapped_column(Integer)
+    last_price_cents: Mapped[int | None] = mapped_column(Integer)
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    open_interest: Mapped[int | None] = mapped_column(BigInteger)
+    close_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    rules_primary: Mapped[str | None] = mapped_column(Text)
+    rules_secondary: Mapped[str | None] = mapped_column(Text)
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class OrderbookSnapshot(Base):
+    __tablename__ = "orderbook_snapshots"
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    captured_at: Mapped[datetime] = mapped_column(nullable=False)
+    yes_levels_json: Mapped[Any] = mapped_column(JSON, nullable=False)
+    no_levels_json: Mapped[Any] = mapped_column(JSON, nullable=False)
+    best_yes_bid_cents: Mapped[int | None] = mapped_column(Integer)
+    best_yes_ask_cents: Mapped[int | None] = mapped_column(Integer)
+    best_no_bid_cents: Mapped[int | None] = mapped_column(Integer)
+    best_no_ask_cents: Mapped[int | None] = mapped_column(Integer)
+    spread_cents: Mapped[int | None] = mapped_column(Integer)
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+
+
+class TradeRecord(Base):
+    __tablename__ = "trades"
+    __table_args__ = (Index("ix_trades_market_ticker", "market_ticker"),)
+
+    trade_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    taker_side: Mapped[str | None] = mapped_column(String(8))
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))

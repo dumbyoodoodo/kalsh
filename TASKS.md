@@ -74,9 +74,30 @@ Acceptance criteria:
 
 **No trading, feature, or modeling logic belongs in this phase.** The objective is collecting and versioning data correctly: Kalshi market data, order books, trades, weather forecasts, and weather observations, with point-in-time correctness and no look-ahead bias. Everything downstream (Phases 4-8) depends on getting this right.
 
-### Milestone 2 — Weather-market discovery and settlement mapping
+### Milestone 2 — Kalshi historical market-data collector
 
-- [ ] Discover recurring weather series from API metadata.
+(Renamed/narrowed from "Weather-market discovery and settlement mapping" — the settlement-rule-parsing half of that original milestone moved to Milestone 2b below, unstarted; this milestone is complete.)
+
+- [x] Discover active weather markets automatically (category-filtered series/events/markets).
+- [x] Snapshot collector: periodic market metadata + order-book snapshots, immutable, content-hash deduplicated.
+- [x] Trade collector: incremental (`min_ts` checkpointed), deduplicated by `trade_id`, source timestamps preserved exactly.
+- [x] Schema: ingestion timestamp, source timestamp, schema version, raw-payload linkage on all normalized tables.
+- [x] Validation: duplicate detection, timestamp validation, payload integrity, malformed-item rejection that doesn't crash the cycle.
+- [x] CLI: `collector run [--once] [--interval] [--category] [--status]`, graceful SIGINT/SIGTERM shutdown.
+- [x] Comprehensive mocked unit tests (no live-API dependency).
+- [x] Documentation: `ARCHITECTURE.md`, `DATA_MODEL.md`, `docs/runbooks/collector.md`, `docs/adr/0002-ingestion-collector.md`.
+
+Acceptance criteria:
+
+- A full collection cycle runs against mocked responses without error.
+- Duplicate snapshots are skipped; malformed per-market data doesn't crash the cycle.
+- `ruff check .`, `mypy src`, `pytest -v` all pass.
+- Verified live against the demo API: `collector run --once` discovers weather markets and persists snapshots/order books/trades; a second `--once` run shows duplicates correctly skipped.
+
+### Milestone 2b — Settlement mapping
+
+(The settlement-rule-parsing half of the original Milestone 2; not started.)
+
 - [ ] Retrieve complete rules for target markets.
 - [ ] Define typed settlement specification.
 - [ ] Implement a conservative parser.

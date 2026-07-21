@@ -65,6 +65,20 @@ Responsibilities:
 
 The public market-data client and authenticated trading client should be separable.
 
+### Ingestion collector
+
+Implemented in `ingestion/` (Milestone 2, `docs/adr/0002-ingestion-collector.md`). Orchestrates the Kalshi gateway and storage layer into a repeatable collection cycle: discovery (`discovery.py`) finds weather series/events/markets and snapshots each market; the cycle (`collector.py`) then fetches each discovered market's order book and incremental trades. Runs either once (`--once`, e.g. cron) or continuously with a configurable interval and graceful shutdown (`cli.py`'s `collector run`).
+
+Responsibilities:
+
+- category-filtered series/event/market discovery
+- immutable, deduplicated market and order-book snapshots (content-hash skip on no change)
+- incremental, deduplicated trade collection (`min_ts` checkpointed per market, `trade_id` as the dedup key)
+- per-item validation and error isolation (`validation.py`) -- a malformed or failing market never aborts the cycle
+- per-cycle failure isolation -- a DB or network outage is logged and the loop waits for the next interval rather than crashing
+
+Explicitly out of scope here: settlement-rule parsing (Milestone 2b), weather data (Milestone 3), and anything downstream of "collect and store" (Phases 4+).
+
 ### Weather gateway
 
 Initial provider should be an official source suitable for the target settlement rules. Keep the provider interface abstract because forecast grids, stations, observations, and ensemble data may come from different sources.

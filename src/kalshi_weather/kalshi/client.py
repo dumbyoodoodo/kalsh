@@ -7,6 +7,7 @@ scope until a later milestone and explicit human approval per CLAUDE.md.
 """
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from types import TracebackType
 from typing import Any
@@ -33,11 +34,19 @@ from kalshi_weather.kalshi.pagination import paginate
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE_SECONDS = 0.5
+#: Minimum spacing between consecutive requests on one client, matching the
+#: 100ms threshold in Kalshi's own kalshi-starter-code-python reference
+#: client. Confirmed live that firing requests back-to-back with no spacing
+#: draws 429s well before any documented per-tier limit is exhausted (see
+#: docs/adr/0002-ingestion-collector.md) -- this is a proactive throttle, not
+#: just reactive retry-on-429 backoff.
+DEFAULT_MIN_REQUEST_INTERVAL_SECONDS = 0.1
 
 #: Called with (source, endpoint, request_key, http_status, payload_json) for
 #: every response received, before schema validation. Used to persist raw
-#: payloads immutably per the append-only raw_api_payloads table.
-RawPayloadSink = Callable[[str, str, str, int, Any], Awaitable[None]]
+#: payloads immutably per the append-only raw_api_payloads table. Returns the
+#: persisted row's id so callers can link normalized records back to it.
+RawPayloadSink = Callable[[str, str, str, int, Any], Awaitable[int]]
 
 
 class KalshiAuthError(RuntimeError):
@@ -65,6 +74,7 @@ class KalshiClient:
         private_key: rsa.RSAPrivateKey | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        min_request_interval_seconds: float = DEFAULT_MIN_REQUEST_INTERVAL_SECONDS,
         raw_payload_sink: RawPayloadSink | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -72,6 +82,8 @@ class KalshiClient:
         self._key_id = key_id
         self._private_key = private_key
         self._max_retries = max_retries
+        self._min_request_interval_seconds = min_request_interval_seconds
+        self._last_request_at: float | None = None
         self._raw_payload_sink = raw_payload_sink
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -83,6 +95,13 @@ class KalshiClient:
         # the official Kalshi/kalshi-starter-code-python reference client;
         # see docs/API_VERIFICATION.md).
         self._signing_path_prefix = self._http.base_url.path.rstrip("/")
+        #: id of the raw_api_payloads row for the most recently completed
+        #: request, if a raw_payload_sink is configured. Read this
+        #: immediately after an `await client.xxx(...)` call to link a
+        #: normalized record back to its raw payload -- it is overwritten by
+        #: the next request on this client, so it is not safe to read after
+        #: later concurrent/overlapping calls.
+        self.last_raw_payload_id: int | None = None
 
     async def __aenter__(self) -> "KalshiClient":
         return self
@@ -117,6 +136,18 @@ class KalshiClient:
             )
         return {}
 
+    async def _throttle(self) -> None:
+        """Proactively space out requests by at least min_request_interval_seconds."""
+        if self._min_request_interval_seconds <= 0:
+            return
+        now = time.monotonic()
+        if self._last_request_at is not None:
+            elapsed = now - self._last_request_at
+            remaining = self._min_request_interval_seconds - elapsed
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+        self._last_request_at = time.monotonic()
+
     async def _request(
         self,
         method: str,
@@ -129,6 +160,7 @@ class KalshiClient:
 
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
+            await self._throttle()
             try:
                 response = await self._http.request(method, path, params=params, headers=headers)
             except httpx.TransportError as exc:
@@ -147,7 +179,7 @@ class KalshiClient:
             payload = response.json()
             if self._raw_payload_sink is not None:
                 request_key = f"{method}:{path}:{params or {}}"
-                await self._raw_payload_sink(
+                self.last_raw_payload_id = await self._raw_payload_sink(
                     "kalshi_rest", path, request_key, response.status_code, payload
                 )
             return payload
@@ -168,11 +200,23 @@ class KalshiClient:
 
         return [item async for item in paginate(fetch_page)]
 
-    async def list_events(self, *, series_ticker: str | None = None) -> list[Event]:
+    async def list_events(
+        self, *, series_ticker: str | None = None, status: str | None = None
+    ) -> list[Event]:
+        """List events, optionally filtered to a series and/or status.
+
+        `status` matters in practice: an unfiltered call returns every event
+        a recurring series has ever had (confirmed live -- one weather series
+        alone had 185 events with no filter vs. 2 with `status="open"`; see
+        docs/API_VERIFICATION.md addendum / docs/adr/0002-ingestion-collector.md).
+        """
+
         async def fetch_page(cursor: str | None) -> tuple[list[Event], str | None]:
             params: dict[str, Any] = {}
             if series_ticker is not None:
                 params["series_ticker"] = series_ticker
+            if status is not None:
+                params["status"] = status
             if cursor is not None:
                 params["cursor"] = cursor
             payload = await self._request("GET", "/events", params=params)
@@ -207,11 +251,19 @@ class KalshiClient:
         payload = await self._request("GET", f"/markets/{ticker}/orderbook", params=params)
         return OrderbookResponse.model_validate(payload)
 
-    async def list_trades(self, *, ticker: str | None = None) -> list[Trade]:
+    async def list_trades(
+        self, *, ticker: str | None = None, min_ts: int | None = None
+    ) -> list[Trade]:
+        """List trades, optionally filtered to a market and/or a minimum Unix
+        timestamp (seconds) -- `min_ts` lets incremental collection avoid
+        re-fetching a market's entire trade history on every poll."""
+
         async def fetch_page(cursor: str | None) -> tuple[list[Trade], str | None]:
             params: dict[str, Any] = {}
             if ticker is not None:
                 params["ticker"] = ticker
+            if min_ts is not None:
+                params["min_ts"] = min_ts
             if cursor is not None:
                 params["cursor"] = cursor
             payload = await self._request("GET", "/markets/trades", params=params)

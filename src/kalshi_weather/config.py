@@ -56,6 +56,17 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # Collector defaults (see ingestion/collector.py). "Climate and Weather"
+    # is Kalshi's real live category value, confirmed in docs/API_VERIFICATION.md
+    # -- not "Weather", which was an earlier unverified guess.
+    collector_category: str = Field(
+        default="Climate and Weather", alias="COLLECTOR_CATEGORY"
+    )
+    collector_market_status: str = Field(default="open", alias="COLLECTOR_MARKET_STATUS")
+    collector_interval_seconds: float = Field(
+        default=300.0, alias="COLLECTOR_INTERVAL_SECONDS"
+    )
+
     @model_validator(mode="after")
     def _forbid_live_trading_outside_production(self) -> "Settings":
         if self.kalshi_env != Environment.PRODUCTION and (

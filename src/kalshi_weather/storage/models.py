@@ -62,6 +62,11 @@ class SeriesRecord(Base):
     title: Mapped[str | None] = mapped_column(Text)
     frequency: Mapped[str | None] = mapped_column(String(32))
     settlement_source: Mapped[str | None] = mapped_column(Text)
+    # Kalshi's own `last_updated_ts` for this row, distinct from `observed_at`
+    # (when *we* ingested it) -- confirmed present live, see
+    # docs/API_VERIFICATION.md / docs/adr/0002-ingestion-collector.md.
+    source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
 
@@ -73,11 +78,20 @@ class EventRecord(Base):
     series_ticker: Mapped[str | None] = mapped_column(
         ForeignKey("series.series_ticker"), nullable=True
     )
+    category: Mapped[str | None] = mapped_column(String(64))
     title: Mapped[str | None] = mapped_column(Text)
+    sub_title: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(String(32))
+    # open_time/close_time/settlement_time are part of the original
+    # DATA_MODEL.md design but are not present on live /events responses as
+    # of this writing (see docs/API_VERIFICATION.md) -- kept nullable for
+    # forward compatibility (e.g. once settlement mapping/Milestone 2b needs
+    # them) rather than removed and re-added later.
     open_time: Mapped[datetime | None] = mapped_column(nullable=True)
     close_time: Mapped[datetime | None] = mapped_column(nullable=True)
     settlement_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
 
@@ -107,6 +121,13 @@ class MarketSnapshot(Base):
     close_time: Mapped[datetime | None] = mapped_column(nullable=True)
     rules_primary: Mapped[str | None] = mapped_column(Text)
     rules_secondary: Mapped[str | None] = mapped_column(Text)
+    # Kalshi's own `updated_time` for this market, distinct from `observed_at`.
+    source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    # Hash of the normalized fields above (excluding id/observed_at/
+    # raw_payload_id), used to skip inserting a snapshot identical to the
+    # immediately-prior one for this ticker. See save_market_snapshot.
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
 
@@ -124,6 +145,10 @@ class OrderbookSnapshot(Base):
     best_no_bid_cents: Mapped[int | None] = mapped_column(Integer)
     best_no_ask_cents: Mapped[int | None] = mapped_column(Integer)
     spread_cents: Mapped[int | None] = mapped_column(Integer)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    # Hash of yes_levels_json/no_levels_json, used to skip inserting a book
+    # identical to the immediately-prior one for this ticker.
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
 
 
@@ -137,4 +162,5 @@ class TradeRecord(Base):
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False)
     taker_side: Mapped[str | None] = mapped_column(String(8))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))

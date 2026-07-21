@@ -25,25 +25,36 @@ Append-only. Deduplicate by source/request/content hash where appropriate.
 - `title`
 - `frequency`
 - `settlement_source`
+- `source_updated_at` — Kalshi's own `last_updated_ts` for this row, distinct from `observed_at`
+- `schema_version`
 - `raw_payload_id`
 - `observed_at`
+
+Upserted by `series_ticker`, not append-only (a series is a stable identity, not a point-in-time observation).
 
 ### `events`
 
 - `event_ticker` PK
 - `series_ticker`
+- `category` — present on live `/events` responses
 - `title`
-- `status`
-- `open_time`
-- `close_time`
-- `settlement_time`
+- `sub_title` — present on live `/events` responses
+- `status` — part of the original design; not present on live `/events` responses as of Milestone 2 (kept nullable for forward compatibility, e.g. once Milestone 2b settlement mapping needs it)
+- `open_time`, `close_time`, `settlement_time` — same status as above: nullable, not currently populated from source
+- `source_updated_at`
+- `schema_version`
 - `raw_payload_id`
 - `observed_at`
 
-### `markets`
+Upserted by `event_ticker`, same rationale as `series`.
 
-- `market_ticker` PK
-- `event_ticker`
+### `market_snapshots`
+
+(Implemented as `market_snapshots` — the table name in code differs from the original `markets` sketch above to make its point-in-time, append-only nature explicit rather than implying one row per market.)
+
+- `id` PK (surrogate; `market_ticker` is not unique)
+- `market_ticker`
+- `event_ticker` — not a foreign key; markets are commonly discovered before their parent event is separately persisted
 - `market_type`
 - `title`
 - `subtitle`
@@ -56,23 +67,31 @@ Append-only. Deduplicate by source/request/content hash where appropriate.
 - `close_time`
 - `rules_primary`
 - `rules_secondary`
+- `source_updated_at` — Kalshi's own `updated_time` for this market
+- `schema_version`
+- `content_hash` — hash of the fields above (excluding id/observed_at/raw_payload_id); a new snapshot identical to the immediately-prior row for this ticker is skipped rather than inserted (see `docs/adr/0002-ingestion-collector.md`)
 - `raw_payload_id`
 - `observed_at`
 
-Use a separate history table or temporal model rather than overwriting market snapshots.
+Append-only: a market's history is the full sequence of rows for its ticker, never overwritten. "Never overwritten" and "duplicate detection" are reconciled by content-hash-based skip-on-no-change, not by allowing every poll to insert a redundant identical row.
 
 ### `orderbook_snapshots`
 
 - `id`
 - `market_ticker`
-- `sequence`
 - `captured_at`
 - `yes_levels_json`
 - `no_levels_json`
 - `best_yes_bid_cents`
 - `best_yes_ask_cents`
+- `best_no_bid_cents`
+- `best_no_ask_cents`
 - `spread_cents`
+- `schema_version`
+- `content_hash` — hash of `yes_levels_json`/`no_levels_json`; a book identical to the immediately-prior snapshot for this ticker is skipped rather than inserted, same rationale as `market_snapshots`
 - `raw_payload_id`
+
+No `sequence` column: Kalshi's REST order-book endpoint (unlike its WebSocket `orderbook_delta` channel, not implemented as of Milestone 2 — see `docs/API_VERIFICATION.md`) does not provide one; ordering is by `captured_at`/`id`.
 
 Important binary relation:
 
@@ -85,13 +104,16 @@ Handle empty sides explicitly.
 
 ### `trades`
 
-- `trade_id`
+- `trade_id` PK — Kalshi's own id; used directly for duplicate detection (a repeat fetch of an already-stored trade is silently skipped, not re-inserted or erred on)
 - `market_ticker`
-- `executed_at`
+- `executed_at` — preserved exactly as received from Kalshi's `created_time`, never rounded or rewritten
 - `price_cents`
 - `count`
 - `taker_side`
+- `schema_version`
 - `raw_payload_id`
+
+Kalshi's live wire format represents price/count as decimal-dollar-string (`yes_price_dollars`/`no_price_dollars`) and fixed-point-string (`count_fp`) fields rather than the plain integers above; these are normalized at parse time (see `kalshi/models.py`). A genuinely fractional `count_fp` (observed once during Milestone 1 API verification) rounds to the nearest whole contract — a known, documented limitation, not silent data loss.
 
 ### `settlement_specs`
 
@@ -188,3 +210,15 @@ Store broker environment, client order ID, exchange order ID, status transitions
 - station and units resolved
 - no prediction uses data received after prediction time
 - no duplicate trade/fill ingestion
+
+Implemented as of Milestone 2 (`ingestion/validation.py`,
+`storage/repositories.py`; see `docs/adr/0002-ingestion-collector.md`):
+
+- source timestamps must be timezone-aware, not absurdly old (before 2018),
+  and not further than 5 minutes in the future (clock-skew tolerance)
+- market-level prices validated to `[0, 100]` cents; a bad ticker string or
+  out-of-range price is logged and the item skipped, not persisted
+- market/order-book snapshots identical to the immediately-prior stored row
+  for that ticker are skipped (content-hash comparison), not re-inserted
+- trades are deduplicated by Kalshi's own `trade_id`, skipped rather than
+  overwritten if already stored

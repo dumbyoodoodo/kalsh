@@ -1,11 +1,14 @@
 """CLI for read-only Kalshi market-data collection and inspection.
 
 Every command persists raw payloads (append-only) as they're fetched; the
-`market`/`orderbook` commands additionally persist normalized snapshots.
-No order-submission command exists here or anywhere else in this milestone.
+`market`/`orderbook` commands additionally persist normalized snapshots, and
+`collector run` runs the full historical ingestion pipeline (see
+ingestion/collector.py and docs/runbooks/collector.md). No order-submission
+command exists here or anywhere else in this milestone.
 """
 
 import asyncio
+import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -16,9 +19,11 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.config import Environment, Settings, get_settings
+from kalshi_weather.ingestion.collector import run_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
+from kalshi_weather.logging import configure_logging, get_logger
 from kalshi_weather.storage.database import create_engine, create_session_factory, session_scope
 from kalshi_weather.storage.repositories import (
     save_market_snapshot,
@@ -27,13 +32,17 @@ from kalshi_weather.storage.repositories import (
     save_series,
 )
 
+logger = get_logger(__name__)
+
 app = typer.Typer(help="Kalshi weather market-data CLI (read-only).")
 series_app = typer.Typer(help="Inspect Kalshi series.")
 markets_app = typer.Typer(help="Inspect Kalshi markets.")
 orderbook_app = typer.Typer(help="Inspect Kalshi order books.")
+collector_app = typer.Typer(help="Run the historical market-data collector.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
+app.add_typer(collector_app, name="collector")
 
 
 @asynccontextmanager
@@ -47,9 +56,7 @@ async def _open_session(settings: Settings) -> AsyncIterator[AsyncSession]:
         await engine.dispose()
 
 
-def _build_client(
-    settings: Settings, session: AsyncSession | None = None
-) -> KalshiClient:
+def _build_client(settings: Settings, session: AsyncSession | None = None) -> KalshiClient:
     base_url = settings.base_url_for(settings.kalshi_env)
     key_id: str | None = None
     private_key: rsa.RSAPrivateKey | None = None
@@ -62,8 +69,8 @@ def _build_client(
 
         async def sink(
             source: str, endpoint: str, request_key: str, status: int, payload: Any
-        ) -> None:
-            await save_raw_payload(
+        ) -> int:
+            raw = await save_raw_payload(
                 session,
                 source=source,
                 endpoint_or_channel=endpoint,
@@ -71,6 +78,7 @@ def _build_client(
                 http_status=status,
                 payload_json=payload,
             )
+            return raw.id
 
         raw_payload_sink = sink
 
@@ -100,6 +108,7 @@ def series_list(
                     category=s.category,
                     title=s.title,
                     frequency=s.frequency,
+                    raw_payload_id=client.last_raw_payload_id,
                 )
                 typer.echo(f"{s.ticker}\t{s.category or '-'}\t{s.title or '-'}")
 
@@ -147,7 +156,7 @@ def market_show(ticker: str) -> None:
                 close_time=market.close_time,
                 rules_primary=market.rules_primary,
                 rules_secondary=market.rules_secondary,
-                raw_payload_id=None,
+                raw_payload_id=client.last_raw_payload_id,
             )
             typer.echo(f"ticker:         {market.ticker}")
             typer.echo(f"title:          {market.title or '-'}")
@@ -177,7 +186,7 @@ def orderbook_show(ticker: str, depth: int | None = typer.Option(None)) -> None:
                 market_ticker=ticker,
                 yes_levels=book.orderbook.yes,
                 no_levels=book.orderbook.no,
-                raw_payload_id=None,
+                raw_payload_id=client.last_raw_payload_id,
             )
             yes_bids = [(level[0], level[1]) for level in book.orderbook.yes]
             no_bids = [(level[0], level[1]) for level in book.orderbook.no]
@@ -187,6 +196,69 @@ def orderbook_show(ticker: str, depth: int | None = typer.Option(None)) -> None:
             typer.echo(f"best_no_bid:  {quote.best_no_bid_cents}")
             typer.echo(f"best_no_ask:  {quote.best_no_ask_cents}")
             typer.echo(f"yes_spread:   {quote.yes_spread_cents}")
+
+    asyncio.run(run())
+
+
+@collector_app.command("run")
+def collector_run(
+    once: bool = typer.Option(
+        False, "--once", help="Run a single collection cycle and exit (e.g. for cron)."
+    ),
+    interval: float | None = typer.Option(
+        None, "--interval", help="Seconds between cycles (default: settings/env)."
+    ),
+    category: str | None = typer.Option(
+        None, "--category", help="Series category to collect (default: settings/env)."
+    ),
+    status: str | None = typer.Option(
+        None, "--status", help="Market status filter (default: settings/env)."
+    ),
+) -> None:
+    """Run the historical Kalshi market-data collector.
+
+    Continuous by default: runs a collection cycle, waits `--interval`
+    seconds, repeats, until interrupted (Ctrl-C / SIGTERM) -- the current
+    cycle finishes before exiting, nothing is left half-written. Use
+    `--once` to run a single cycle and exit instead, e.g. from cron.
+    See docs/runbooks/collector.md for operational details.
+    """
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        stop_event = asyncio.Event()
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+
+        logger.info(
+            "collector.starting",
+            once=once,
+            category=category or settings.collector_category,
+            market_status=status or settings.collector_market_status,
+            interval_seconds=interval
+            if interval is not None
+            else settings.collector_interval_seconds,
+        )
+        try:
+            await run_collector_loop(
+                session_factory=session_factory,
+                client_factory=lambda session: _build_client(settings, session),
+                category=category or settings.collector_category,
+                market_status=status or settings.collector_market_status,
+                interval_seconds=(
+                    interval if interval is not None else settings.collector_interval_seconds
+                ),
+                stop_event=stop_event,
+                max_cycles=1 if once else None,
+            )
+        finally:
+            await engine.dispose()
+        logger.info("collector.stopped")
 
     asyncio.run(run())
 

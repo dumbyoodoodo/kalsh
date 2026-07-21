@@ -58,6 +58,7 @@ class Series(KalshiModel):
     title: str | None = None
     frequency: str | None = None
     settlement_sources: list[dict[str, Any]] | None = None
+    last_updated_ts: datetime | None = None
 
 
 class SeriesListResponse(KalshiModel):
@@ -68,9 +69,11 @@ class SeriesListResponse(KalshiModel):
 class Event(KalshiModel):
     event_ticker: str
     series_ticker: str | None = None
+    category: str | None = None
     title: str | None = None
     sub_title: str | None = None
     status: str | None = None
+    last_updated_ts: datetime | None = None
 
 
 class EventListResponse(KalshiModel):
@@ -95,6 +98,7 @@ class Market(KalshiModel):
     close_time: datetime | None = None
     rules_primary: str | None = None
     rules_secondary: str | None = None
+    updated_time: datetime | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -1,0 +1,133 @@
+"""Weather-market discovery: finds active weather series/events/markets and
+persists series/event metadata plus a market snapshot for each market found.
+
+Settlement-rule parsing (mapping a market to its station/variable/threshold)
+is explicitly out of scope here -- see TASKS.md Milestone 2b.
+"""
+
+from dataclasses import dataclass, field
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from kalshi_weather.ingestion.validation import (
+    MalformedPayloadError,
+    validate_price_cents,
+    validate_ticker,
+)
+from kalshi_weather.kalshi.client import KalshiClient
+from kalshi_weather.logging import get_logger
+from kalshi_weather.storage.repositories import save_event, save_market_snapshot, save_series
+
+logger = get_logger(__name__)
+
+
+@dataclass(slots=True)
+class DiscoveryResult:
+    market_tickers: list[str] = field(default_factory=list)
+    market_snapshots_saved: int = 0
+    market_snapshots_duplicate: int = 0
+    invalid_items: int = 0
+
+
+async def discover_and_snapshot_weather_markets(
+    client: KalshiClient,
+    session: AsyncSession,
+    *,
+    category: str,
+    market_status: str,
+) -> DiscoveryResult:
+    """Discover weather series/events/markets for `category` (status-filtered
+    by `market_status`), persist series/event metadata and a market snapshot
+    for each market found.
+
+    A malformed item (per ingestion/validation.py) is logged and skipped,
+    not raised -- one bad series/event/market must not abort discovery.
+    """
+    result = DiscoveryResult()
+
+    series_list = await client.list_series(category=category)
+    for series in series_list:
+        try:
+            validate_ticker(series.ticker, field_name="series.ticker")
+        except MalformedPayloadError as exc:
+            logger.warning("discovery.series.invalid", error=str(exc))
+            result.invalid_items += 1
+            continue
+
+        await save_series(
+            session,
+            series_ticker=series.ticker,
+            category=series.category,
+            title=series.title,
+            frequency=series.frequency,
+            source_updated_at=series.last_updated_ts,
+            raw_payload_id=client.last_raw_payload_id,
+        )
+
+        # status-filtered: an unfiltered call returns a recurring series'
+        # entire event history (confirmed live: 185 events vs. 2 with
+        # status="open" for one weather series -- see
+        # docs/adr/0002-ingestion-collector.md).
+        events = await client.list_events(series_ticker=series.ticker, status=market_status)
+        for event in events:
+            try:
+                validate_ticker(event.event_ticker, field_name="event.event_ticker")
+            except MalformedPayloadError as exc:
+                logger.warning("discovery.event.invalid", error=str(exc))
+                result.invalid_items += 1
+                continue
+
+            await save_event(
+                session,
+                event_ticker=event.event_ticker,
+                series_ticker=event.series_ticker,
+                category=event.category,
+                title=event.title,
+                sub_title=event.sub_title,
+                source_updated_at=event.last_updated_ts,
+                raw_payload_id=client.last_raw_payload_id,
+            )
+
+            markets = await client.list_markets(
+                event_ticker=event.event_ticker, status=market_status
+            )
+            for market in markets:
+                try:
+                    validate_ticker(market.ticker, field_name="market.ticker")
+                    validate_price_cents(market.yes_bid, field_name="market.yes_bid")
+                    validate_price_cents(market.yes_ask, field_name="market.yes_ask")
+                    validate_price_cents(market.no_bid, field_name="market.no_bid")
+                    validate_price_cents(market.no_ask, field_name="market.no_ask")
+                except MalformedPayloadError as exc:
+                    logger.warning(
+                        "discovery.market.invalid", ticker=market.ticker, error=str(exc)
+                    )
+                    result.invalid_items += 1
+                    continue
+
+                save_result = await save_market_snapshot(
+                    session,
+                    market_ticker=market.ticker,
+                    event_ticker=market.event_ticker,
+                    market_type=market.market_type,
+                    title=market.title,
+                    subtitle=market.subtitle,
+                    status=market.status,
+                    yes_bid_cents=market.yes_bid,
+                    yes_ask_cents=market.yes_ask,
+                    last_price_cents=market.last_price,
+                    volume=market.volume,
+                    open_interest=market.open_interest,
+                    close_time=market.close_time,
+                    rules_primary=market.rules_primary,
+                    rules_secondary=market.rules_secondary,
+                    source_updated_at=market.updated_time,
+                    raw_payload_id=client.last_raw_payload_id,
+                )
+                if save_result.was_duplicate:
+                    result.market_snapshots_duplicate += 1
+                else:
+                    result.market_snapshots_saved += 1
+                result.market_tickers.append(market.ticker)
+
+    return result

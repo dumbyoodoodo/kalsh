@@ -240,6 +240,7 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 - **Closed:**
 - **Related:** H0002, docs/adr/0003-weather-data-source.md (same-day preliminary CLI reports)
 - **Pre-registration package:** `docs/research/experiments/PREREG-20260721-H0007-bound-violations.md` (frozen 2026-07-21, before any price inspection — elaborates this entry's terse fields to full mechanical precision: exact information set, entry conditions, outcome definition, statistical plan, execution assumptions, bias review, reproducibility manifest template; supersedes nothing below, this entry remains the canonical hypothesis record).
+- **Pre-execution amendment:** `docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md` (2026-07-21, before execution — resolves an independent audit's episode-definition/denominator/persistence/adjacency ambiguities; fee-schedule verification is **BLOCKED** — Kalshi's primary fee schedule was unreachable from this environment, see the amendment's attempt log — **H0007 must not execute until it is resolved**).
 
 **Hypothesis.** After a same-day preliminary CLI report shows a running high of X°F, markets occasionally (>0 measurable instances, aggregate mispricing exceeding costs) continue to price P(final high < X) above the level H0002's upward-revision-only constraint justifies — a model-free, logic-bound mispricing in the settlement end-game.
 

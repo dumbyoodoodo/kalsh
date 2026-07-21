@@ -23,6 +23,18 @@ H0007 has **not** been executed. This document supersedes nothing in
 with the precision this pre-registration protocol requires; the entry
 itself remains `Status: Proposed`.
 
+> **Amendment notice (2026-07-21, before execution).** An independent
+> institutional pre-registration audit identified ambiguities in this
+> document's §5/§9 episode definition, §6 opportunity-day denominator, §4.5
+> persistence scope, and §4/§9 candle-adjacency rule, and required the §8
+> fee constant to be independently verified rather than assumed. These are
+> resolved (fee verification remains **BLOCKED** — see below) in
+> `docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md`,
+> which governs wherever it conflicts with the text below. This document's
+> original wording is preserved unedited; the amendment is additive.
+> **H0007 must not execute until the amendment's Finding 5 (fee schedule)
+> is resolved.**
+
 ---
 
 ## 1. Research Question

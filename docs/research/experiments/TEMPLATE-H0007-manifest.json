@@ -2,10 +2,18 @@
   "_note": "Experiment manifest TEMPLATE for H0007, frozen 2026-07-21 by PREREG-20260721-H0007-bound-violations.md. Every value below is a placeholder to be filled in ONLY at execution time, exactly as this template specifies -- no key may be added, removed, or renamed after results are seen (RESEARCH.md 'Standard experiment protocol', step 6/8). Copy this file to EXP-<execution-date>-H0007-bound-violations-results.json and fill it in.",
   "experiment": "EXP-<YYYYMMDD>-H0007-bound-violations",
   "hypothesis": "H0007",
+  "execution_status": "BLOCKED -- fee_schedule not yet verified, see config.fee_schedule.status",
+  "permissible_conclusion_scope": "AMENDMENT Finding 6: quote-level mispricing net of fees only -- never realized profit, executable alpha, fill probability, latency-adjusted capturability, or trading viability; issuance-to-availability latency is unmeasured",
   "preregistration": {
     "document": "docs/research/experiments/PREREG-20260721-H0007-bound-violations.md",
     "frozen_date": "2026-07-21",
-    "frozen_git_commit": "<TO_BE_FILLED: git rev-parse HEAD at execution time>"
+    "frozen_git_commit": "<TO_BE_FILLED: git rev-parse HEAD at execution time>",
+    "amendment": {
+      "document": "docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md",
+      "frozen_date": "2026-07-21",
+      "resolves": ["episode_definition", "opportunity_day_denominator", "persistence_scope", "candle_adjacency", "conclusion_scope"],
+      "blocked_on": ["fee_schedule_verification"]
+    }
   },
   "dataset": {
     "version": "<TO_BE_FILLED: dataset build version label used>",
@@ -29,14 +37,29 @@
       "source": "EXP-20260721-H0002-cli-revisions-results.json: 1/1278 same-day tmax issuances revised downward",
       "definition": "unconditional empirical rate of any downward revision from a same-day-issued preliminary tmax reading"
     },
+    "episode_definition": "AMENDMENT-20260721-H0007-pre-execution.md Finding 1: a maximal run of candles that are both entry-eligible AND satisfy the fee-net residual-mass condition; entry at first qualifying candle, exit at first non-qualifying candle or close_time",
+    "opportunity_day_denominator": "AMENDMENT Finding 2: all settlement days with valid coverage for the primary tmax_f cell, including zero-opportunity days; excludes only days failing the missing-data rule",
     "persistence_min_consecutive_candles": 2,
+    "persistence_definition": "AMENDMENT Finding 3: the fee-net residual-mass condition (not merely the weather bound) must hold on both consecutive candles",
     "candle_resolution_minutes": 1,
+    "candle_adjacency_rule": "AMENDMENT Finding 4: consecutive means period_end differs by exactly 1 minute for the same market_ticker/period_interval_seconds; a gap > 1 minute breaks the episode; no forward-filling",
     "min_settlement_days_required": 60,
     "fee_schedule": {
-      "source": "<TO_BE_FILLED: official Kalshi fee documentation URL or live-verified reference, per docs/API_VERIFICATION.md precedent>",
+      "status": "BLOCKED -- see AMENDMENT-20260721-H0007-pre-execution.md Finding 5; H0007 must not execute until this block is filled in and status changed to VERIFIED",
+      "fee_function": "scripts/h0007_fees.py: contract_fee_cents (refuses to compute against an unverified FeeConfig)",
+      "source_title": "<TO_BE_FILLED: exact document title, e.g. Kalshi's primary fee schedule PDF>",
+      "source_url": "<TO_BE_FILLED>",
       "retrieved_at": "<TO_BE_FILLED: ISO timestamp>",
-      "formula": "<TO_BE_FILLED: exact formula as documented>",
-      "constant": "<TO_BE_FILLED: exact numeric constant as documented -- never guessed>"
+      "schedule_effective_date": "<TO_BE_FILLED>",
+      "series_applicability": "<TO_BE_FILLED: confirm the constant applies to the sampled KXHIGHNY/KXLOWTNYC-family markets specifically -- help.kalshi.com states fees can vary by market>",
+      "role_assumption": "<TO_BE_FILLED: taker (this design always buys the favored side at the ask -- confirm taker fee applies)>",
+      "formula": "<TO_BE_FILLED: exact formula as documented -- corroborated shape: ceil(multiplier * P * (1-P) * contracts) cents, rounded up>",
+      "rounding_rule": "<TO_BE_FILLED>",
+      "min_max_fee_behavior": "<TO_BE_FILLED: floor/cap, if any>",
+      "price_unit_convention": "<TO_BE_FILLED: cents vs dollars>",
+      "contract_count_convention": "<TO_BE_FILLED>",
+      "constant": "<TO_BE_FILLED: exact numeric constant as documented -- never guessed>",
+      "source_content_hash_or_archive": "<TO_BE_FILLED: sha256 of the retrieved document, or an archived copy reference, sufficient to reproduce this interpretation later>"
     },
     "slippage_model": "none beyond quoted bid/ask spread (unit stake, one contract)",
     "executable_price_source": "quote (yes_bid_close_cents / yes_ask_close_cents), never trade price",

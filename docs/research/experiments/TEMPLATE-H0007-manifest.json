@@ -1,0 +1,96 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0007, frozen 2026-07-21 by PREREG-20260721-H0007-bound-violations.md. Every value below is a placeholder to be filled in ONLY at execution time, exactly as this template specifies -- no key may be added, removed, or renamed after results are seen (RESEARCH.md 'Standard experiment protocol', step 6/8). Copy this file to EXP-<execution-date>-H0007-bound-violations-results.json and fill it in.",
+  "experiment": "EXP-<YYYYMMDD>-H0007-bound-violations",
+  "hypothesis": "H0007",
+  "preregistration": {
+    "document": "docs/research/experiments/PREREG-20260721-H0007-bound-violations.md",
+    "frozen_date": "2026-07-21",
+    "frozen_git_commit": "<TO_BE_FILLED: git rev-parse HEAD at execution time>"
+  },
+  "dataset": {
+    "version": "<TO_BE_FILLED: dataset build version label used>",
+    "content_hashes": {
+      "market_price_weather": "<TO_BE_FILLED>",
+      "settlement_labels": "<TO_BE_FILLED>"
+    },
+    "market_price_weather_schema_version": "<TO_BE_FILLED: MARKET_PRICE_WEATHER_SCHEMA_VERSION at execution time>",
+    "settlement_label_reconstruction_version": "<TO_BE_FILLED: RECONSTRUCTION_VERSION at execution time>",
+    "source_db_revision": "<TO_BE_FILLED: alembic_version at execution time>",
+    "git_commit": "<TO_BE_FILLED: git commit of the dataset-build + analysis code actually run>"
+  },
+  "config": {
+    "primary_cell": {
+      "variable": "tmax_f",
+      "strike_types": ["less", "between_upper_violation", "greater"]
+    },
+    "secondary_exploratory_cells": ["tmin_f"],
+    "p_bound": {
+      "value": 0.000783,
+      "source": "EXP-20260721-H0002-cli-revisions-results.json: 1/1278 same-day tmax issuances revised downward",
+      "definition": "unconditional empirical rate of any downward revision from a same-day-issued preliminary tmax reading"
+    },
+    "persistence_min_consecutive_candles": 2,
+    "candle_resolution_minutes": 1,
+    "min_settlement_days_required": 60,
+    "fee_schedule": {
+      "source": "<TO_BE_FILLED: official Kalshi fee documentation URL or live-verified reference, per docs/API_VERIFICATION.md precedent>",
+      "retrieved_at": "<TO_BE_FILLED: ISO timestamp>",
+      "formula": "<TO_BE_FILLED: exact formula as documented>",
+      "constant": "<TO_BE_FILLED: exact numeric constant as documented -- never guessed>"
+    },
+    "slippage_model": "none beyond quoted bid/ask spread (unit stake, one contract)",
+    "executable_price_source": "quote (yes_bid_close_cents / yes_ask_close_cents), never trade price",
+    "random_seed": 20260721,
+    "bootstrap_resamples": 10000,
+    "bootstrap_cluster_unit": "settlement day",
+    "confidence_level": 0.95
+  },
+  "coverage": {
+    "settlement_days_available": "<TO_BE_FILLED>",
+    "settlement_days_excluded_missing_data": "<TO_BE_FILLED>",
+    "settlement_days_excluded_note": "excluded from denominator, reported separately -- never treated as zero-opportunity days"
+  },
+  "primary_results": {
+    "opportunity_day_frequency": {
+      "days_with_opportunity": "<TO_BE_FILLED>",
+      "days_total": "<TO_BE_FILLED>",
+      "frequency": "<TO_BE_FILLED>",
+      "wilson_ci95": ["<TO_BE_FILLED>", "<TO_BE_FILLED>"]
+    },
+    "aggregate_hypothetical_pnl": {
+      "unit_stake_dollars": 0.01,
+      "n_episodes": "<TO_BE_FILLED>",
+      "total_pnl_dollars": "<TO_BE_FILLED>",
+      "bootstrap_ci95": ["<TO_BE_FILLED>", "<TO_BE_FILLED>"]
+    },
+    "decision_rule": {
+      "confirmed_if": "frequency_ci95_lower > 0.05 AND aggregate_pnl_ci95_lower > 0",
+      "rejected_if": "frequency_ci95_upper <= 0.05 OR aggregate_pnl_ci95_upper <= 0",
+      "inconclusive_if": "neither confirmed nor rejected criteria met, OR settlement_days_available < 60",
+      "outcome": "<TO_BE_FILLED: confirmed | rejected | inconclusive>"
+    }
+  },
+  "secondary_results": {
+    "edge_size_cents": {
+      "mean": "<TO_BE_FILLED>",
+      "median": "<TO_BE_FILLED>",
+      "iqr": ["<TO_BE_FILLED>", "<TO_BE_FILLED>"]
+    },
+    "persistence_minutes": {
+      "median": "<TO_BE_FILLED>",
+      "iqr": ["<TO_BE_FILLED>", "<TO_BE_FILLED>"]
+    },
+    "time_to_correction_minutes": {
+      "n_closed_before_settlement": "<TO_BE_FILLED>",
+      "median": "<TO_BE_FILLED>",
+      "iqr": ["<TO_BE_FILLED>", "<TO_BE_FILLED>"]
+    }
+  },
+  "exploratory_results": {
+    "tmin_f_cell": "<TO_BE_FILLED: same metric shape as primary_results, NOT used for the primary decision>",
+    "by_strike_type": "<TO_BE_FILLED: descriptive only>",
+    "sparse_vs_normal_coverage_markets": "<TO_BE_FILLED: descriptive robustness check only>",
+    "by_month_descriptive": "<TO_BE_FILLED: descriptive only, never used to select a favorable period>"
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

@@ -239,6 +239,7 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 - **Opened:** 2026-07-21
 - **Closed:**
 - **Related:** H0002, docs/adr/0003-weather-data-source.md (same-day preliminary CLI reports)
+- **Pre-registration package:** `docs/research/experiments/PREREG-20260721-H0007-bound-violations.md` (frozen 2026-07-21, before any price inspection — elaborates this entry's terse fields to full mechanical precision: exact information set, entry conditions, outcome definition, statistical plan, execution assumptions, bias review, reproducibility manifest template; supersedes nothing below, this entry remains the canonical hypothesis record).
 
 **Hypothesis.** After a same-day preliminary CLI report shows a running high of X°F, markets occasionally (>0 measurable instances, aggregate mispricing exceeding costs) continue to price P(final high < X) above the level H0002's upward-revision-only constraint justifies — a model-free, logic-bound mispricing in the settlement end-game.
 

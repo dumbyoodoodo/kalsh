@@ -188,6 +188,7 @@ def test_build_datasets_selection() -> None:
     built_all = B.build_datasets(_sources(markets=_markets()), [], which="all")
     assert set(built_all.frames) == {
         "weather_panel", "market_weather", "observation_issuances", "market_prices",
+        "market_price_weather",
     }
 
 

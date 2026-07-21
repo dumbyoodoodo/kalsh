@@ -26,7 +26,12 @@ import polars as pl
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kalshi_weather.dataset.asof import asof_count, asof_latest
 from kalshi_weather.dataset.market_map import MarketMapping
+from kalshi_weather.dataset.observation_timeline import (
+    attach_calendar_lock,
+    compute_running_extremes,
+)
 from kalshi_weather.dataset.pit import local_date
 from kalshi_weather.domain.time import to_utc
 from kalshi_weather.storage.models import (
@@ -49,6 +54,10 @@ _DT = pl.Datetime("us")
 #: meaning -- recorded in the dataset manifest (dataset/pipeline.py) so a
 #: consumer can tell which version of the frame's semantics produced it.
 MARKET_PRICES_SCHEMA_VERSION = "1"
+
+#: Bumped whenever build_market_price_weather's column layout or join logic
+#: changes meaning (Phase 7B, docs/adr/0008-point-in-time-alignment.md).
+MARKET_PRICE_WEATHER_SCHEMA_VERSION = "1"
 
 STATIONS_SCHEMA: dict[str, Any] = {"station_id": pl.Utf8, "timezone": pl.Utf8}
 MARKETS_SCHEMA: dict[str, Any] = {
@@ -389,75 +398,9 @@ def build_weather_panel(sources: SourceFrames) -> pl.DataFrame:
     return panel.sort(["station_id", "target_date"])
 
 
-# --- As-of join helpers ------------------------------------------------------
-
-
-def _asof_latest(
-    base: pl.DataFrame,
-    other: pl.DataFrame,
-    *,
-    by: list[str],
-    left_time: str,
-    right_time: str,
-    bring: dict[str, str],
-) -> pl.DataFrame:
-    """Left-join onto ``base`` the most recent ``other`` row per ``by`` group
-    whose ``right_time`` is <= ``base[left_time]`` (a backward as-of join --
-    the leakage-free 'latest known as of now' operation). ``bring`` maps
-    source column -> output column."""
-    if base.height == 0 or other.height == 0:
-        return base.with_columns(
-            [pl.lit(None, dtype=other.schema[src]).alias(out) for src, out in bring.items()]
-        )
-    # Select the join keys + join-time + sources once (dedup in case a source
-    # *is* the join-time column), then materialize the renamed output columns
-    # as copies so the original join-time column survives for join_asof.
-    sub = other.select(list(dict.fromkeys([*by, right_time, *bring.keys()]))).with_columns(
-        [pl.col(src).alias(out) for src, out in bring.items()]
-    )
-    left = base.sort(left_time)
-    right = sub.sort(right_time)
-    joined = left.join_asof(
-        right,
-        left_on=left_time,
-        right_on=right_time,
-        by=by,
-        strategy="backward",
-        check_sortedness=False,
-    )
-    return joined.select([*base.columns, *bring.values()])
-
-
-def _asof_count(
-    base: pl.DataFrame,
-    other: pl.DataFrame,
-    *,
-    by: list[str],
-    left_time: str,
-    right_time: str,
-    out: str,
-) -> pl.DataFrame:
-    """Attach to ``base`` the number of ``other`` rows per ``by`` group whose
-    ``right_time`` <= ``base[left_time]`` -- a running count, computed via
-    cumulative count + backward as-of so it stays leakage-free."""
-    if base.height == 0 or other.height == 0:
-        return base.with_columns(pl.lit(0, dtype=pl.Int64).alias(out))
-    counted = (
-        other.select([*by, right_time])
-        .sort([*by, right_time])
-        .with_columns(pl.int_range(1, pl.len() + 1).over(by).alias(out))
-    )
-    left = base.sort(left_time)
-    right = counted.sort(right_time)
-    joined = left.join_asof(
-        right,
-        left_on=left_time,
-        right_on=right_time,
-        by=by,
-        strategy="backward",
-        check_sortedness=False,
-    )
-    return joined.drop(right_time).with_columns(pl.col(out).fill_null(0))
+# --- As-of joins --------------------------------------------------------
+# The join engine itself lives in dataset/asof.py (reusable, independently
+# tested); this module only supplies the dataset-specific join plans.
 
 
 def _market_map_frame(mappings: list[MarketMapping]) -> pl.DataFrame:
@@ -496,7 +439,7 @@ def build_market_weather(
     fc_issue = _forecast_issue_high_low(sources.forecasts).with_columns(
         pl.col("issue_time").alias("forecast_issue_time")
     )
-    result = _asof_latest(
+    result = asof_latest(
         markets,
         fc_issue,
         by=["station_id", "target_date"],
@@ -508,7 +451,7 @@ def build_market_weather(
             "forecast_issue_time": "forecast_issue_time",
         },
     )
-    result = _asof_count(
+    result = asof_count(
         result,
         fc_issue,
         by=["station_id", "target_date"],
@@ -520,7 +463,7 @@ def build_market_weather(
     # As-of known observation for the market's own settled variable. Rename the
     # weather observation's date column to match the market's target_date key.
     obs = sources.observations.rename({"observation_date": "target_date"})
-    result = _asof_latest(
+    result = asof_latest(
         result,
         obs,
         by=["station_id", "variable", "target_date"],
@@ -529,7 +472,7 @@ def build_market_weather(
         bring={"value": "obs_value_known", "issuance_time": "obs_issuance_time_known"},
     )
 
-    result = _asof_latest(
+    result = asof_latest(
         result,
         sources.orderbooks,
         by=["market_ticker"],
@@ -541,7 +484,7 @@ def build_market_weather(
             "spread_cents": "spread_cents",
         },
     )
-    result = _asof_latest(
+    result = asof_latest(
         result,
         sources.trades,
         by=["market_ticker"],
@@ -549,7 +492,7 @@ def build_market_weather(
         right_time="executed_at",
         bring={"price_cents": "last_trade_price_cents"},
     )
-    result = _asof_count(
+    result = asof_count(
         result,
         sources.trades,
         by=["market_ticker"],
@@ -668,6 +611,140 @@ def build_market_prices(sources: SourceFrames) -> pl.DataFrame:
     ).sort(["market_ticker", "period_end"])
 
 
+#: Columns build_market_price_weather adds beyond build_market_prices + the
+#: market map -- declared once so an empty build still yields a correctly
+#: typed (empty) frame with every expected column (Phase 7B).
+MARKET_PRICE_WEATHER_EXTRA_SCHEMA: dict[str, Any] = {
+    "obs_value_known": pl.Float64,
+    "obs_issuance_time_known": _DT,
+    "obs_age_seconds": pl.Float64,
+    "observation_quality_status": pl.Utf8,
+    "running_tmax_f_known": pl.Float64,
+    "running_tmax_issuance_time_known": _DT,
+    "tmax_locked": pl.Boolean,
+    "running_tmin_f_known": pl.Float64,
+    "running_tmin_issuance_time_known": _DT,
+    "tmin_locked": pl.Boolean,
+    "theoretical_remaining_range_high_f": pl.Float64,
+    "theoretical_remaining_range_low_f": pl.Float64,
+}
+
+
+def build_market_price_weather(
+    sources: SourceFrames, mappings: list[MarketMapping]
+) -> pl.DataFrame:
+    """Per market candle, the weather-observation progression knowable as of
+    that candle's own timestamp (``period_end``) -- the point-in-time join
+    H0007's readiness assessment identified as missing (Phase 7B,
+    docs/adr/0008-point-in-time-alignment.md). Same grain as
+    ``market_prices`` (one row per stored candle), restricted to markets
+    present in ``mappings`` -- a candle for an unmapped market has no known
+    station/variable/target_date to align against, same convention as
+    ``market_weather`` (an orphan reported by validation, not a null-weather
+    row here).
+
+    Weather progression is attached entirely via `dataset/asof.py`'s
+    reusable engine, never inferred or modeled:
+
+    - ``obs_value_known``/``obs_issuance_time_known``: the latest known
+      value for the market's OWN settlement variable, exactly as
+      ``market_weather`` already defines it.
+    - ``running_tmax_f_known``/``running_tmin_f_known``: the running
+      cumulative high/low for the market's target date
+      (`observation_timeline.compute_running_extremes`), attached
+      regardless of which single variable the market itself settles on --
+      both are informative, and a market's own variable is a subset of this.
+    - ``tmax_locked``/``tmin_locked``: whether the observation window has
+      fully elapsed as of this candle (`observation_timeline.
+      attach_calendar_lock` -- pure calendar arithmetic), independent of
+      whether an issuance has actually arrived yet. Two columns, not one
+      shared flag: every resolved settlement spec today uses
+      ``observation_window="local_calendar_day"`` for both variables, so
+      they currently always agree, but a future spec could diverge.
+    - ``theoretical_remaining_range_{high,low}_f``: 0.0 once the
+      corresponding variable is locked (no further data can move the
+      running value -- H0007's own rationale's "hard bound"), else null
+      ("unbounded" -- deliberately not a modeled or forecast estimate).
+    - ``obs_age_seconds``: seconds between this candle and the market's own
+      variable's ``obs_issuance_time_known`` (null if nothing is known yet).
+    - ``observation_quality_status``: ``"known"`` if the market's own
+      variable has an as-of observation by this candle, else ``"unknown"``.
+    """
+    market_map = _market_map_frame(mappings)
+    prices = build_market_prices(sources).join(market_map, on="market_ticker", how="inner")
+    if prices.height == 0:
+        return prices.with_columns(
+            [
+                pl.lit(None, dtype=dt).alias(name)
+                for name, dt in MARKET_PRICE_WEATHER_EXTRA_SCHEMA.items()
+            ]
+        )
+
+    obs = sources.observations.rename({"observation_date": "target_date"})
+    result = asof_latest(
+        prices,
+        obs,
+        by=["station_id", "variable", "target_date"],
+        left_time="period_end",
+        right_time="issuance_time",
+        bring={"value": "obs_value_known", "issuance_time": "obs_issuance_time_known"},
+    )
+
+    running = compute_running_extremes(sources.observations).rename(
+        {"observation_date": "target_date"}
+    )
+    result = asof_latest(
+        result,
+        running.filter(pl.col("variable") == "tmax_f"),
+        by=["station_id", "target_date"],
+        left_time="period_end",
+        right_time="issuance_time",
+        bring={
+            "running_extreme_f": "running_tmax_f_known",
+            "issuance_time": "running_tmax_issuance_time_known",
+        },
+    )
+    result = asof_latest(
+        result,
+        running.filter(pl.col("variable") == "tmin_f"),
+        by=["station_id", "target_date"],
+        left_time="period_end",
+        right_time="issuance_time",
+        bring={
+            "running_extreme_f": "running_tmin_f_known",
+            "issuance_time": "running_tmin_issuance_time_known",
+        },
+    )
+
+    result = attach_calendar_lock(
+        result,
+        sources.stations,
+        timestamp_col="period_end",
+        target_date_col="target_date",
+        out_col="_observation_window_elapsed",
+    )
+    result = result.with_columns(
+        tmax_locked=pl.col("_observation_window_elapsed"),
+        tmin_locked=pl.col("_observation_window_elapsed"),
+    ).drop("_observation_window_elapsed")
+
+    result = result.with_columns(
+        theoretical_remaining_range_high_f=pl.when(pl.col("tmax_locked"))
+        .then(pl.lit(0.0))
+        .otherwise(pl.lit(None, dtype=pl.Float64)),
+        theoretical_remaining_range_low_f=pl.when(pl.col("tmin_locked"))
+        .then(pl.lit(0.0))
+        .otherwise(pl.lit(None, dtype=pl.Float64)),
+        obs_age_seconds=(
+            pl.col("period_end") - pl.col("obs_issuance_time_known")
+        ).dt.total_seconds(),
+        observation_quality_status=pl.when(pl.col("obs_value_known").is_not_null())
+        .then(pl.lit("known"))
+        .otherwise(pl.lit("unknown")),
+    )
+    return result.sort(["market_ticker", "period_end"])
+
+
 def build_datasets(
     sources: SourceFrames,
     mappings: list[MarketMapping],
@@ -675,7 +752,8 @@ def build_datasets(
     which: str = "all",
 ) -> BuiltDataset:
     """Build the requested dataset(s). ``which`` is 'all', 'weather_panel',
-    'market_weather', 'observation_issuances', or 'market_prices'."""
+    'market_weather', 'observation_issuances', 'market_prices', or
+    'market_price_weather'."""
     frames: dict[str, pl.DataFrame] = {}
     if which in ("all", "weather_panel"):
         frames["weather_panel"] = build_weather_panel(sources)
@@ -685,6 +763,8 @@ def build_datasets(
         frames["observation_issuances"] = build_observation_issuances(sources)
     if which in ("all", "market_prices"):
         frames["market_prices"] = build_market_prices(sources)
+    if which in ("all", "market_price_weather"):
+        frames["market_price_weather"] = build_market_price_weather(sources, mappings)
     if not frames:
         raise ValueError(f"unknown dataset selection {which!r}")
     return BuiltDataset(frames=frames)

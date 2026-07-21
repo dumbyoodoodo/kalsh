@@ -103,6 +103,7 @@ async def test_pipeline_build_produces_valid_datasets(session: AsyncSession) -> 
         "market_weather",
         "observation_issuances",
         "market_prices",
+        "market_price_weather",
         "settlement_labels",
     }
     # E-A: explicit stage-labelled columns exist; settled_value is unchanged

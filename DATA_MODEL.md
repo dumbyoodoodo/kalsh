@@ -346,3 +346,25 @@ represents unsupported markets.
 
 `MARKET_PRICES_SCHEMA_VERSION` is recorded in every manifest alongside
 `RECONSTRUCTION_VERSION`, gating comparability across rebuilds the same way.
+
+### `market_price_weather.parquet`
+
+(Implemented in Phase 7B, `docs/adr/0008-point-in-time-alignment.md`.) Grain:
+one row per stored candle, same as `market_prices`, but restricted to
+markets present in the settlement map (`dataset/market_map.py`) — same
+convention as `market_weather`, since weather progression is meaningless for
+a market with no known station/variable/target_date.
+
+- every `market_prices` column (candle OHLC/quotes, `data_quality_status`, market metadata, strike)
+- `obs_value_known`, `obs_issuance_time_known`, `obs_age_seconds` — the latest known value for the market's OWN settlement variable as of this candle, and how old it is (same as-of semantics `market_weather` already defines, joined here against the full historical candle archive rather than the ~zero-depth live snapshot history)
+- `running_tmax_f_known`, `running_tmax_issuance_time_known` / `running_tmin_f_known`, `running_tmin_issuance_time_known` — the cumulative running high/low known so far for the market's target date (attached regardless of which single variable the market itself settles on)
+- `tmax_locked`, `tmin_locked` — whether that variable's observation window (a station-local calendar day) has fully elapsed as of this candle; pure calendar arithmetic, independent of whether the confirming issuance has actually arrived
+- `theoretical_remaining_range_high_f`, `theoretical_remaining_range_low_f` — `0.0` once locked (no further data can move the running value), else `null` ("unbounded" — never a modeled or forecast estimate)
+- `observation_quality_status` (`"known"` / `"unknown"`) — whether the market's own variable has any as-of observation yet
+- the same settlement-label columns as `market_weather` (`value_at_close`, `value_at_settlement`, `latest_final_value`, `settlement_label_status`, `settlement_label_version`) — **market experiments must use `value_at_settlement`**, same rule as every other frame
+
+`MARKET_PRICE_WEATHER_SCHEMA_VERSION` is recorded in every manifest. Leakage
+is enforced structurally by `dataset/asof.py`'s backward-only join (a future
+row cannot be selected) and verified explicitly — see the ADR's "Leakage
+validation" section, including a 0-violation check over the full 761,475-row
+production archive.

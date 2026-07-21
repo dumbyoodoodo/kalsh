@@ -486,7 +486,10 @@ def _echo_summary(output: dataset_pipeline.BuildOutput) -> None:
 @dataset_app.command("build")
 def dataset_build(
     which: str = typer.Option(
-        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+        "all",
+        help=(
+            "Dataset to build: all|weather_panel|market_weather|market_prices|market_price_weather."
+        ),
     ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
@@ -525,7 +528,10 @@ def dataset_build(
 @dataset_app.command("validate")
 def dataset_validate(
     which: str = typer.Option(
-        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+        "all",
+        help=(
+            "Dataset to build: all|weather_panel|market_weather|market_prices|market_price_weather."
+        ),
     ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
@@ -552,7 +558,10 @@ def dataset_validate(
 @dataset_app.command("stats")
 def dataset_stats(
     which: str = typer.Option(
-        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+        "all",
+        help=(
+            "Dataset to build: all|weather_panel|market_weather|market_prices|market_price_weather."
+        ),
     ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
@@ -576,7 +585,10 @@ def dataset_stats(
 @dataset_app.command("export")
 def dataset_export(
     which: str = typer.Option(
-        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+        "all",
+        help=(
+            "Dataset to build: all|weather_panel|market_weather|market_prices|market_price_weather."
+        ),
     ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),

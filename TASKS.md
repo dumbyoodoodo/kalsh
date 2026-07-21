@@ -179,6 +179,19 @@ H0007's price/quote data dependency; does not run H0007 itself.
 - [x] **Live-verified, 2026-07-21**: full backfill over all 804 discoverable settled markets — 804/804 `complete`, 0 failures of any kind, 761,475 candles saved, 0 duplicates; coverage report agrees with backfill totals exactly; 12-market stratified live-API sample matched stored counts exactly (12/12).
 - [x] H0007 readiness artifact (report only, H0007 not run): `docs/research/2026-07-21-h0007-readiness.md`.
 
+### Milestone 4e — Point-in-time price/observation alignment (Phase 7B; complete)
+
+Closes the single blocker Milestone 4d's H0007 readiness artifact
+identified — `docs/adr/0008-point-in-time-alignment.md`. Feature-engineering
+only: does not run H0007, does not analyze prices, does not fit models.
+
+- [x] Reusable as-of join engine extracted to `dataset/asof.py` (`asof_latest`, `asof_count`) out of `builder.py`'s private helpers — deterministic, vectorized (Polars `join_asof(strategy="backward")`), works for any `by` key set (multiple cities), any timestamp resolution; independently tested (`tests/unit/test_dataset_asof.py`).
+- [x] Observation timeline reconstruction (`dataset/observation_timeline.py`): `compute_running_extremes` (cumulative max/min across same-day issuances, leak-free by construction) and `attach_calendar_lock` (pure calendar arithmetic — station-local day-elapsed, vectorized per timezone) — both model-free, no forecasting.
+- [x] New `market_price_weather` dataset frame (candle grain, mapped markets only): `obs_value_known`/`obs_issuance_time_known`/`obs_age_seconds`, `running_tmax_f_known`/`running_tmin_f_known` + their issuance times, `tmax_locked`/`tmin_locked`, `theoretical_remaining_range_{high,low}_f` (0.0 once locked, else null — never a modeled estimate), `observation_quality_status`; registered in `build_datasets` and `pipeline.build`'s settlement-label join; `MARKET_PRICE_WEATHER_SCHEMA_VERSION` in manifests.
+- [x] Leakage validation (unit tests + full-scale check): engine-level (future row never selected), frame-level (a same-day-preliminary-then-revision scenario proves locking is never a shortcut to reveal the final value early; blanket structural invariant over every row), pipeline-level (through the real settlement-label join, DB-backed). **Verified live over the full 761,475-row production archive: 0 leakage violations.**
+- [x] Full test suite: 320 passed, 4 skipped; `ruff check .` and `mypy src` clean; existing test suite unaffected by the `asof.py` extraction.
+- [x] Readiness verification (report only): `docs/research/2026-07-21-h0007-readiness-update.md`.
+
 ### Milestone 4b — Research operations (Phase 6 of the working plan; complete)
 
 Makes the platform run reliably for months with minimal intervention — see `docs/runbooks/operations.md`.

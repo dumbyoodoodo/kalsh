@@ -109,6 +109,7 @@ def validate(
     for name, keys in (
         ("weather_panel", ["station_id", "target_date"]),
         ("market_weather", ["market_ticker", "observed_at"]),
+        ("market_price_weather", ["market_ticker", "period_end"]),
     ):
         frame = frames.get(name)
         if frame is None or frame.height == 0:

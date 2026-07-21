@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.dataset.builder import (
+    MARKET_PRICE_WEATHER_SCHEMA_VERSION,
     MARKET_PRICES_SCHEMA_VERSION,
     build_datasets,
     load_source_frames,
@@ -74,7 +75,11 @@ async def build(
     produced (e.g. settlement parser version) in the manifest config."""
     sources = await load_source_frames(session, start=start, end=end)
     built = build_datasets(sources, mappings, which=which)
-    if "market_weather" in built.frames or "market_prices" in built.frames:
+    if (
+        "market_weather" in built.frames
+        or "market_prices" in built.frames
+        or "market_price_weather" in built.frames
+    ):
         labels = await build_labels(session)
         labels_frame = _labels_frame(labels)
         built.frames["settlement_labels"] = labels_frame
@@ -116,6 +121,24 @@ async def build(
                 on="market_ticker",
                 how="left",
             )
+        if "market_price_weather" in built.frames:
+            # market_price_weather already carries station_id/variable/
+            # target_date from the market map join (Phase 7B); only pull the
+            # stage-value columns from labels_frame, same set as
+            # market_weather (not market_prices' wider set, which needs
+            # those three columns because it isn't map-restricted).
+            built.frames["market_price_weather"] = built.frames["market_price_weather"].join(
+                labels_frame.select(
+                    "market_ticker",
+                    "value_at_close",
+                    "value_at_settlement",
+                    "latest_final_value",
+                    "settlement_label_status",
+                    "settlement_label_version",
+                ),
+                on="market_ticker",
+                how="left",
+            )
     report = validate(sources, built.frames, mappings)
     stats = compute_stats(sources, built.frames)
     manifest = build_manifest(
@@ -132,6 +155,7 @@ async def build(
             "market_map_size": len(mappings),
             "settlement_label_reconstruction_version": RECONSTRUCTION_VERSION,
             "market_prices_schema_version": MARKET_PRICES_SCHEMA_VERSION,
+            "market_price_weather_schema_version": MARKET_PRICE_WEATHER_SCHEMA_VERSION,
             **({"resolver": resolver_meta} if resolver_meta else {}),
         },
         repo_dir=repo_dir,

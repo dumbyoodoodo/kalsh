@@ -128,10 +128,14 @@ No strategy may trade a market whose settlement mapping is unresolved or ambiguo
 
 Implemented in `dataset/` (Milestone 4, `docs/adr/0004-research-dataset.md`). A **read-only** layer over the collected source tables that produces versioned, point-in-time-correct research datasets --- the join surface Phases 4+ consume. No feature/model/trading logic lives here.
 
-Two datasets are built (pure Polars functions over frames read from the DB):
+Four datasets are built (pure Polars functions over frames read from the DB):
 
 - `weather_panel` --- per (station, target_date): settled tmax/tmin (latest observation issuance), forecast summary, and forecast residuals.
 - `market_weather` --- per market snapshot: forecast/observation/order-book/trade facts joined **as-of** the snapshot's timestamp (backward `join_asof`, so a later revision can never leak into an earlier row --- the concrete enforcement of `RESEARCH.md`'s look-ahead rule), plus the post-settlement outcome as a labelled target column.
+- `market_prices` --- per stored candlestick (Phase 7A): OHLC trade/quote prices, volume, open interest, plus static market metadata; covers every captured market, not only mapped ones.
+- `market_price_weather` --- per stored candlestick, restricted to mapped markets (Phase 7B, `docs/adr/0008-point-in-time-alignment.md`): the observation progression (latest known value, running high/low, calendar-based lock state, theoretical remaining range) knowable **as of that candle's own timestamp** --- the point-in-time join H0007's readiness assessment identified as missing, now closed.
+
+The as-of join primitive itself lives in `dataset/asof.py` (`asof_latest`, `asof_count`) --- a reusable, independently-tested engine every point-in-time frame builds from, rather than each frame reimplementing `join_asof` calls. `dataset/observation_timeline.py` reconstructs the observation-side state (`compute_running_extremes`: cumulative max/min across same-day issuances; `attach_calendar_lock`: pure calendar arithmetic, vectorized per station timezone) that `market_price_weather` joins against.
 
 Responsibilities:
 
@@ -140,7 +144,7 @@ Responsibilities:
 - a reproducibility manifest per build (git commit, source DB Alembic revision, credential-free DB URL, per-frame content hashes, generation config) and immutable versioned Parquet export under the configurable `DATASET_ROOT`
 - validation (missing/duplicate/impossible/mismatch/orphan checks) and summary statistics emitted alongside each build
 
-Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+).
+Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+) --- `market_price_weather` deliberately stops at attaching known facts; no forecasting feature, model input, or statistical estimate lives in this layer.
 
 ### Research operations
 

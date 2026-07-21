@@ -11,3 +11,8 @@ original document -- the same discipline RESEARCH.md already applies to
 research plans and settlement labels. An experiment manifest template
 (TEMPLATE-<hypothesis-id>-manifest.json) accompanies a pre-registration
 when the eventual results record needs a fixed schema pinned in advance.
+When a hypothesis's *implementation* is updated to reflect infrastructure
+that changed since it was first written (not an audit finding -- see
+AMENDMENT above for that case), catalogue every deviation in a dated
+DIFFERENCES-<YYYYMMDD>-<hypothesis-id>-from-original-design.md rather than
+silently editing the original HYPOTHESES.md text or the prior PREREG.

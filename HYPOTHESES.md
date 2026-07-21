@@ -177,6 +177,7 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 - **Opened:** 2026-07-21
 - **Closed:**
 - **Related:** H0006, RESEARCH.md (calibration methodology)
+- **Pre-registration package:** `docs/research/experiments/PREREG-20260721-H0005-calibration.md` (frozen 2026-07-21, before any calibration outcome inspected — updates the data source from the originally-assumed prospective 5-minute snapshot collection, which never accrued useful depth, to the archived 1-minute candle record; freezes horizons, deciles, price definition, cost band, bootstrap/replication mechanics, and success thresholds to full mechanical precision. Every deviation from this entry's original text is catalogued in `docs/research/experiments/DIFFERENCES-20260721-H0005-from-original-design.md`; this entry's Hypothesis/Rationale/Required data/Experiment design/Metrics/Statistical tests/Failure modes/Difficulty/Dependencies remain the canonical, unedited record below.)
 
 **Hypothesis.** (Null form — expected to broadly survive.) Kalshi daily-temperature market mid-prices, sampled at fixed horizons before close, are calibrated probability estimates of YES settlement: across price buckets, realized YES frequency deviates from the bucket's mean implied probability by less than the round-trip cost band (~fees + half-spread). The research value lies in *where* it fails, if anywhere.
 

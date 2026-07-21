@@ -1,0 +1,86 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0005, frozen 2026-07-21 by PREREG-20260721-H0005-calibration.md. Every value below is a placeholder to be filled in ONLY at execution time, exactly as this template specifies -- no key may be added, removed, or renamed after results are seen (RESEARCH.md 'Standard experiment protocol', step 6/8). Copy this file to EXP-<execution-date>-H0005-calibration-results.json and fill it in.",
+  "experiment": "EXP-<YYYYMMDD>-H0005-calibration",
+  "hypothesis": "H0005",
+  "preregistration": {
+    "document": "docs/research/experiments/PREREG-20260721-H0005-calibration.md",
+    "frozen_date": "2026-07-21",
+    "frozen_git_commit": "b30f92e3c8db17e2a246fb1be9d1f6328161a1e9",
+    "protocol_differences_document": "docs/research/experiments/DIFFERENCES-20260721-H0005-from-original-design.md",
+    "original_hypotheses_entry": "HYPOTHESES.md H0005, opened 2026-07-21"
+  },
+  "dataset": {
+    "version": "<TO_BE_FILLED: dataset build version label used, e.g. exp-<date>-h0005>",
+    "content_hashes": {
+      "market_price_weather": "<TO_BE_FILLED>",
+      "settlement_labels": "<TO_BE_FILLED>"
+    },
+    "market_price_weather_schema_version": "<TO_BE_FILLED: MARKET_PRICE_WEATHER_SCHEMA_VERSION at execution time>",
+    "settlement_label_reconstruction_version": "<TO_BE_FILLED: RECONSTRUCTION_VERSION at execution time>",
+    "source_db_revision": "<TO_BE_FILLED: alembic_version at execution time>",
+    "git_commit": "<TO_BE_FILLED: git commit of the dataset-build + analysis code actually run>"
+  },
+  "config": {
+    "primary_series": "KXHIGHNY",
+    "exploratory_series": ["KXLOWTNYC"],
+    "horizons_hours": [72, 48, 24, 12, 6, 2],
+    "candle_staleness_tolerance_minutes": 15,
+    "decile_boundaries_pct": [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+    "primary_price_definition": "mid = (yes_bid_close_cents + yes_ask_close_cents) / 2",
+    "secondary_price_definitions": ["ask_implied = yes_ask_close_cents/100", "bid_implied = yes_bid_close_cents/100"],
+    "fee_config": {
+      "source": "scripts/h0007_fees.py: KALSHI_WEATHER_TAKER_FEE_CONFIG",
+      "multiplier": "0.07",
+      "verified": true,
+      "verified_date": "2026-07-21"
+    },
+    "cost_band_formula": "fee_cents_for_one_contract_at_round(mid_price_cents) + half_spread_cents",
+    "outcome_derivation": "settlement/labels.py implied_result(value_at_settlement, strike_type, floor_strike, cap_strike); requires settlement_label_status == 'resolved'",
+    "primary_family_size": 60,
+    "bonferroni_alpha": 0.0008333333333333334,
+    "confidence_level": 0.95,
+    "random_seed": 20260721,
+    "bootstrap_resamples": 10000,
+    "bootstrap_cluster_unit": "settlement day",
+    "min_settlement_days_required": 60,
+    "min_days_per_cell": 20,
+    "replication_split": "chronological halves of the valid-day population, 1-day embargo at the boundary"
+  },
+  "coverage": {
+    "settlement_days_available": "<TO_BE_FILLED>",
+    "settlement_days_excluded_missing_data": "<TO_BE_FILLED>",
+    "excluded_days": "<TO_BE_FILLED>",
+    "discovery_slice_days": "<TO_BE_FILLED>",
+    "holdout_slice_days": "<TO_BE_FILLED>",
+    "observations_excluded_stale": "<TO_BE_FILLED>",
+    "cells_below_min_n": "<TO_BE_FILLED: list of (horizon, decile) pairs>"
+  },
+  "primary_results": {
+    "cells": "<TO_BE_FILLED: array of 60 objects, one per (horizon, decile): {horizon_hours, decile, n_days_discovery, n_days_holdout, mean_predicted_probability, realized_yes_frequency, calibration_error, cost_band_cents, discovery_ci95, discovery_bonferroni_pass, holdout_ci95, holdout_pass, insufficient_n}>",
+    "cells_rejecting_null": "<TO_BE_FILLED: list of (horizon, decile) pairs clearing both screens>",
+    "decision_rule": {
+      "confirmed_if": "no primary-family cell clears both the Bonferroni-adjusted discovery-slice screen and the hold-out replication screen",
+      "rejected_if": "at least one primary-family cell clears both screens",
+      "inconclusive_if": "settlement_days_available < 60, OR every discovery-screen-passing cell falls below min_days_per_cell in the holdout slice",
+      "outcome": "<TO_BE_FILLED: confirmed | rejected | inconclusive>",
+      "reason": "<TO_BE_FILLED>"
+    }
+  },
+  "secondary_results": {
+    "reliability_curves_by_horizon": "<TO_BE_FILLED>",
+    "brier_score_by_horizon": "<TO_BE_FILLED: {horizon: {brier, baseline_brier}}>",
+    "log_loss_by_horizon": "<TO_BE_FILLED: {horizon: {log_loss, baseline_log_loss}}>",
+    "ece_by_horizon": "<TO_BE_FILLED: {horizon: ece}>",
+    "calibration_slope_intercept_by_horizon": "<TO_BE_FILLED: {horizon: {slope, intercept}}>",
+    "executable_price_robustness": "<TO_BE_FILLED: for each cell in cells_rejecting_null, ask-implied and bid-implied recomputation>"
+  },
+  "exploratory_results": {
+    "kxlowtnyc_cell": "<TO_BE_FILLED: same metric shape as primary_results, NOT used for the primary decision>",
+    "by_month_descriptive": "<TO_BE_FILLED: descriptive only, never used to select a favorable period>"
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": "<TO_BE_FILLED: true/false>",
+    "config_matches_prereg": "<TO_BE_FILLED: true/false>"
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

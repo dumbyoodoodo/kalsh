@@ -191,6 +191,16 @@ assert nothing about Kalshi's actual current fee**, only that the function
 is mathematically correct for whatever verified constant is eventually
 supplied.
 
+> **Follow-up (2026-07-21, same day, before execution).** A dedicated
+> exhaustive-source-search pass,
+> `docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md`,
+> confirms `fee_type="quadratic"`/`fee_multiplier=1` uniformly for both
+> weather series (KXHIGHNY, KXLOWTNYC) via live Kalshi API data, and finds
+> no series- or event-level fee override exists for either — resolving the
+> *applicability* half of this finding. The numeric coefficient itself
+> remains unverified for the reasons above; **this finding remains
+> BLOCKED.**
+
 ## Finding 6 — Permissible conclusion scope (resolves F6)
 
 **Frozen interpretation boundary**, to be applied verbatim when H0007's

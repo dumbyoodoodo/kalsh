@@ -13,6 +13,12 @@
       "frozen_date": "2026-07-21",
       "resolves": ["episode_definition", "opportunity_day_denominator", "persistence_scope", "candle_adjacency", "conclusion_scope"],
       "blocked_on": ["fee_schedule_verification"]
+    },
+    "fee_verification_amendment": {
+      "document": "docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md",
+      "frozen_date": "2026-07-21",
+      "resolves": ["fee_type_and_multiplier_applicability", "series_and_event_override_check", "rounding_mechanics_partial"],
+      "still_blocked_on": ["quadratic_fee_coefficient (kalshi.com/docs/kalshi-fee-schedule.pdf unreachable, HTTP 429, from this environment and from Archive.org's own crawler since 2026-03-03)"]
     }
   },
   "dataset": {
@@ -45,21 +51,26 @@
     "candle_adjacency_rule": "AMENDMENT Finding 4: consecutive means period_end differs by exactly 1 minute for the same market_ticker/period_interval_seconds; a gap > 1 minute breaks the episode; no forward-filling",
     "min_settlement_days_required": 60,
     "fee_schedule": {
-      "status": "BLOCKED -- see AMENDMENT-20260721-H0007-pre-execution.md Finding 5; H0007 must not execute until this block is filled in and status changed to VERIFIED",
+      "status": "STILL BLOCKED -- coefficient unverified; see AMENDMENT-20260721-H0007-fee-verification.md. Everything else in this block is now VERIFIED against authoritative Kalshi sources (2026-07-21) and may not be re-guessed once the coefficient is found -- only that one field remains a placeholder.",
       "fee_function": "scripts/h0007_fees.py: contract_fee_cents (refuses to compute against an unverified FeeConfig)",
-      "source_title": "<TO_BE_FILLED: exact document title, e.g. Kalshi's primary fee schedule PDF>",
-      "source_url": "<TO_BE_FILLED>",
-      "retrieved_at": "<TO_BE_FILLED: ISO timestamp>",
-      "schedule_effective_date": "<TO_BE_FILLED>",
-      "series_applicability": "<TO_BE_FILLED: confirm the constant applies to the sampled KXHIGHNY/KXLOWTNYC-family markets specifically -- help.kalshi.com states fees can vary by market>",
-      "role_assumption": "<TO_BE_FILLED: taker (this design always buys the favored side at the ask -- confirm taker fee applies)>",
-      "formula": "<TO_BE_FILLED: exact formula as documented -- corroborated shape: ceil(multiplier * P * (1-P) * contracts) cents, rounded up>",
-      "rounding_rule": "<TO_BE_FILLED>",
-      "min_max_fee_behavior": "<TO_BE_FILLED: floor/cap, if any>",
-      "price_unit_convention": "<TO_BE_FILLED: cents vs dollars>",
-      "contract_count_convention": "<TO_BE_FILLED>",
-      "constant": "<TO_BE_FILLED: exact numeric constant as documented -- never guessed>",
-      "source_content_hash_or_archive": "<TO_BE_FILLED: sha256 of the retrieved document, or an archived copy reference, sufficient to reproduce this interpretation later>"
+      "fee_type": "quadratic",
+      "fee_type_source": "live GET /series (production, category=Climate and Weather), raw_api_payloads content_hash 533079a18e233d72efe71bdd2f115dc25e1d22dca546c2405e1f9513e5714a6e, received_at 2026-07-21T13:45:49Z; corroborated by docs.kalshi.com/openapi.yaml v3.25.0 FeeType schema, retrieved 2026-07-21T16:09:45Z, sha256 f26ddccd92e5805f935ed3de1effd9f9a99b4a3bba6e8cb563cd2258722826ce",
+      "fee_multiplier": 1.0,
+      "fee_multiplier_source": "same live /series payload as fee_type -- uniform across all 289 'Climate and Weather' series, including both KXHIGHNY and KXLOWTNYC specifically",
+      "series_or_event_overrides": "NONE -- verified live: GET /series/fee_changes?series_ticker=KXHIGHNY&show_historical=true and ?series_ticker=KXLOWTNYC&show_historical=true both returned series_fee_change_arr: [] (2026-07-21); GET /events/fee_changes?show_historical=true (unfiltered) returned event_fee_changes: [] (2026-07-21) -- no event-level override exists exchange-wide",
+      "source_title": "<TO_BE_FILLED: 'Fee Schedule for July 2026 - 7.7.26 Update' per search-result title -- content not yet retrieved, see below>",
+      "source_url": "https://kalshi.com/docs/kalshi-fee-schedule.pdf",
+      "retrieved_at": "NOT RETRIEVED -- HTTP 429 on every attempt (2026-07-21), see AMENDMENT-20260721-H0007-fee-verification.md source log",
+      "schedule_effective_date": "<TO_BE_FILLED: the PDF's own title implies 2026-07-07, but this could not be confirmed by reading the document itself>",
+      "series_applicability": "VERIFIED for KXHIGHNY and KXLOWTNYC specifically -- see fee_type/fee_multiplier/series_or_event_overrides above. help.kalshi.com's general 'some markets have different fees' statement does not apply to these two series (confirmed uniform via direct API data).",
+      "role_assumption": "<TO_BE_FILLED: this design (AMENDMENT-20260721-H0007-pre-execution.md) always buys the favored side at the ask -- a taker fill under normal circumstances. fee_type='quadratic' (not 'quadratic_with_maker_fees') means weather markets have no separate maker-fee schedule per docs.kalshi.com/openapi.yaml, so this distinction may be moot for these series specifically -- to be confirmed once the base formula is read.>",
+      "formula": "<TO_BE_FILLED: docs.kalshi.com/openapi.yaml explicitly states the numeric formula for fee_type=quadratic is defined in the (unreachable) PDF's 'General Trading Fees Table' -- not embedded in any reachable official source>",
+      "rounding_rule": "PARTIALLY VERIFIED: docs.kalshi.com/getting_started/fee_rounding (retrieved 2026-07-21) states trade fee rounds UP to the nearest $0.0001, then a 'rounding fee' floors balance_change to the user's target balance precision ($0.01 for non-direct members, $0.0001 for direct members), charging the difference; net fee = trade fee + rounding fee - rebate (>= $0.00); a $0.01 rebate is issued once accumulated rounding exceeds $0.01. This is a per-order, multi-fill accumulator mechanism; its single-fill, unit-stake simplification for a non-direct/standard account is: settle to whole-cent precision. Account tier (direct vs. non-direct) applicable to this research is NOT independently confirmed.",
+      "min_max_fee_behavior": "<TO_BE_FILLED: not found in any reachable source>",
+      "price_unit_convention": "dollars internally (per fee_rounding page's $0.0001 precision), cents at the API's public price fields",
+      "contract_count_convention": "<TO_BE_FILLED: not found in any reachable source>",
+      "constant": "<TO_BE_FILLED: exact numeric constant as documented -- never guessed. NOT '0.07' -- that figure is third-party-sourced and one such source explicitly labels it 'the February 2026 schedule', which predates the confirmed July 2026 update and is not treated as current.>",
+      "source_content_hash_or_archive": "NOT AVAILABLE -- PDF unreachable from this environment; last successful Wayback Machine archive is 2026-02-18 (pre-dates the July 2026 update, not used as current)"
     },
     "slippage_model": "none beyond quoted bid/ask spread (unit stake, one contract)",
     "executable_price_source": "quote (yes_bid_close_cents / yes_ask_close_cents), never trade price",

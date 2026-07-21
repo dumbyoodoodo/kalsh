@@ -34,6 +34,16 @@ itself remains `Status: Proposed`.
 > original wording is preserved unedited; the amendment is additive.
 > **H0007 must not execute until the amendment's Finding 5 (fee schedule)
 > is resolved.**
+>
+> **Second amendment (2026-07-21, same day, before execution).**
+> `docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md`
+> documents an exhaustive, sourced search for Kalshi's official fee
+> schedule. It confirms fee *applicability* (`fee_type="quadratic"`,
+> `fee_multiplier=1`, no series/event overrides, for both KXHIGHNY and
+> KXLOWTNYC) from live, first-party Kalshi API data, but the exact numeric
+> fee coefficient remains unverified — the one document that states it was
+> unreachable (HTTP 429) from every method attempted. **H0007 remains
+> BLOCKED.**
 
 ---
 

@@ -1,20 +1,22 @@
 """Kalshi trading-fee calculation for H0007
 (docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md,
-Finding 5).
+Finding 5; verification attempt continued in
+docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md).
 
 The formula's mathematical STRUCTURE below (ceil(multiplier * P * (1-P) *
-contracts) cents, rounded up) matches Kalshi's publicly documented
-percentage-of-p(1-p) fee shape, corroborated by multiple independent
-secondary sources during the amendment's fee-verification attempt. The
-CONSTANT is deliberately **not** hardcoded as a verified production value:
-Kalshi's own primary fee-schedule documents (kalshi.com/docs/kalshi-fee-
-schedule.pdf, kalshi.com/fee-schedule) were unreachable from this
-environment (HTTP 429 / bot checkpoint on every attempt -- the same class of
-failure this project already documented for docs.kalshi.com in
-docs/API_VERIFICATION.md), and Kalshi's own help center states "some markets
-have fees that are different from those of other markets" -- so a single
-constant cannot be assumed uniform across the weather category without the
-primary schedule confirming it. See the amendment for the full attempt log.
+contracts) cents, rounded up) matches Kalshi's own documented `fee_type:
+"quadratic"` shape -- confirmed applicable, uniformly, to every weather
+series (including KXHIGHNY and KXLOWTNYC) via live Kalshi API data
+(`fee_multiplier: 1`, no series/event overrides -- see the fee-verification
+amendment). The CONSTANT (the actual coefficient inside that formula) is
+deliberately **not** hardcoded as a verified production value: the one
+document that states it, kalshi.com/docs/kalshi-fee-schedule.pdf, returned
+HTTP 429 on every attempt across two verification sessions -- the same class
+of failure this project already documented for docs.kalshi.com in
+docs/API_VERIFICATION.md -- and its most recent successfully-archived
+snapshot predates a confirmed subsequent revision, so it was not used as a
+stand-in for the current schedule either. See the fee-verification amendment
+for the full attempt log and everything that *is* now verified.
 
 `contract_fee_cents` refuses to run against an unverified `FeeConfig` --
 this is the enforcement mechanism that keeps H0007 BLOCKED on this step

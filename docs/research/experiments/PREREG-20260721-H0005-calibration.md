@@ -15,6 +15,21 @@ the original design is catalogued, separately, in
 **This document computes, inspects, or reports no price data, no
 calibration outcomes, and no statistics.** H0005 has **not** been executed.
 
+> **Amendment notice (2026-07-21, before execution).** An independent
+> institutional pre-registration audit identified nine precision gaps —
+> the research-question/decision-rule wording (§1 vs §12), the bootstrap
+> sampling-pool separation and RNG consumption order (§10), the
+> evaluation-order for Confirmed/Rejected/Inconclusive (§12), the exact
+> fee-function invocation (§9), `close_time` immutability, empty-cell
+> handling in the metric formulas (§9), chronological-split tie-breaking
+> (§10), and duplicate-observation invariants (§5) — none of which changed
+> any horizon, bucket, threshold, or success criterion. All nine are
+> resolved by addition in
+> `docs/research/experiments/AMENDMENT-20260721-H0005-pre-execution.md`,
+> which governs wherever it adds precision to the text below. This
+> document's original wording is preserved unedited; the amendment is
+> additive. H0005 has still not been executed.
+
 ## 0. Relationship to H0007
 
 H0007 is closed (Rejected, 2026-07-21) and is not reopened, revisited, or

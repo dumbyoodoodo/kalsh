@@ -6,10 +6,10 @@ are deferred to the milestones that first need them (Milestone 2+).
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -164,3 +164,110 @@ class TradeRecord(Base):
     taker_side: Mapped[str | None] = mapped_column(String(8))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+
+
+class WeatherStation(Base):
+    """Static registry entry (weather/stations.py) persisted for FK/audit
+    purposes; upserted, not append-only -- station identity doesn't change."""
+
+    __tablename__ = "weather_stations"
+
+    station_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_location_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    office: Mapped[str | None] = mapped_column(String(8))
+    latitude: Mapped[Any] = mapped_column(Numeric(9, 6), nullable=False)
+    longitude: Mapped[Any] = mapped_column(Numeric(9, 6), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class WeatherObservation(Base):
+    """A single station/variable value from one issuance of a CLI report.
+
+    Append-only: CLI reports are reissued multiple times per day (a same-day
+    preliminary issuance, then a final one after midnight -- see
+    weather/cli_parser.py) and every issuance is kept, never overwritten.
+    `observation_date` is the calendar day the value describes; `issuance_time`
+    is when *this version* of the report was published -- "the latest version
+    for a date" is a query (max issuance_time per station/variable/date), not
+    a mutation.
+    """
+
+    __tablename__ = "weather_observations"
+    __table_args__ = (
+        Index(
+            "ix_weather_observations_dedup",
+            "station_id",
+            "variable",
+            "issuance_time",
+            unique=True,
+        ),
+        Index(
+            "ix_weather_observations_lookup",
+            "station_id",
+            "variable",
+            "observation_date",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    station_id: Mapped[str] = mapped_column(
+        ForeignKey("weather_stations.station_id"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    variable: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[Any] = mapped_column(Numeric(6, 2), nullable=False)
+    unit: Mapped[str] = mapped_column(String(8), nullable=False)
+    observation_date: Mapped[date] = mapped_column(nullable=False)
+    issuance_time: Mapped[datetime] = mapped_column(nullable=False)
+    source_product_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class WeatherForecast(Base):
+    """A single station/variable forecast period from one forecast issuance.
+
+    Append-only: never overwrite a forecast with a later one (DATA_MODEL.md);
+    `issue_time` is what makes forecast-error research free of look-ahead
+    bias later -- a decision at time T may only use forecasts with
+    issue_time <= T.
+    """
+
+    __tablename__ = "weather_forecasts"
+    __table_args__ = (
+        Index(
+            "ix_weather_forecasts_dedup",
+            "station_id",
+            "variable",
+            "issue_time",
+            "valid_start",
+            unique=True,
+        ),
+        Index(
+            "ix_weather_forecasts_lookup",
+            "station_id",
+            "variable",
+            "valid_start",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    station_id: Mapped[str] = mapped_column(
+        ForeignKey("weather_stations.station_id"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    variable: Mapped[str] = mapped_column(String(32), nullable=False)
+    point_estimate: Mapped[Any] = mapped_column(Numeric(6, 2), nullable=False)
+    unit: Mapped[str] = mapped_column(String(8), nullable=False)
+    issue_time: Mapped[datetime] = mapped_column(nullable=False)
+    valid_start: Mapped[datetime] = mapped_column(nullable=False)
+    valid_end: Mapped[datetime] = mapped_column(nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)

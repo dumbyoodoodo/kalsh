@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -6,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from kalshi_weather.storage.models import Base
 from kalshi_weather.storage.repositories import (
+    get_latest_observation_date,
     get_latest_trade_timestamp,
     save_event,
     save_market_snapshot,
@@ -13,6 +15,9 @@ from kalshi_weather.storage.repositories import (
     save_raw_payload,
     save_series,
     save_trade,
+    save_weather_forecast,
+    save_weather_observation,
+    save_weather_station,
 )
 
 
@@ -229,3 +234,141 @@ async def test_get_latest_trade_timestamp_returns_max(session: AsyncSession) -> 
     latest = await get_latest_trade_timestamp(session, "ABC-1")
     assert latest is not None
     assert latest.hour == 12
+
+
+async def _make_weather_station(session: AsyncSession, **overrides: object):  # type: ignore[no-untyped-def]
+    defaults: dict[str, object] = {
+        "station_id": "NYC",
+        "provider": "nws",
+        "source_location_code": "NYC",
+        "office": "OKX",
+        "latitude": Decimal("40.7829"),
+        "longitude": Decimal("-73.9654"),
+        "name": "Central Park, NY",
+        "timezone": "America/New_York",
+        "raw_payload_id": None,
+    }
+    defaults.update(overrides)
+    return await save_weather_station(session, **defaults)  # type: ignore[arg-type]
+
+
+async def test_save_weather_station_upserts(session: AsyncSession) -> None:
+    first = await _make_weather_station(session)
+    second = await _make_weather_station(session, office="BOX")
+
+    assert first.station_id == second.station_id == "NYC"
+    assert second.office == "BOX"
+
+
+async def _make_weather_observation(session: AsyncSession, **overrides: object):  # type: ignore[no-untyped-def]
+    defaults: dict[str, object] = {
+        "station_id": "NYC",
+        "provider": "nws",
+        "variable": "tmax_f",
+        "value": Decimal(81),
+        "unit": "F",
+        "observation_date": date(2026, 7, 20),
+        "issuance_time": datetime(2026, 7, 20, 20, 37, tzinfo=UTC),
+        "source_product_id": "prod-1",
+        "raw_payload_id": None,
+    }
+    defaults.update(overrides)
+    return await save_weather_observation(session, **defaults)  # type: ignore[arg-type]
+
+
+async def test_save_weather_observation_inserts_new(session: AsyncSession) -> None:
+    result = await _make_weather_observation(session)
+    assert result.was_duplicate is False
+    assert result.record.value == Decimal(81)
+
+
+async def test_save_weather_observation_skips_same_issuance(session: AsyncSession) -> None:
+    first = await _make_weather_observation(session)
+    second = await _make_weather_observation(session, value=Decimal(999))
+
+    assert second.was_duplicate is True
+    assert second.record.id == first.record.id
+    assert second.record.value == first.record.value  # not overwritten
+
+
+async def test_save_weather_observation_keeps_distinct_issuances(session: AsyncSession) -> None:
+    """CLI reports are reissued multiple times per day -- a later issuance
+    for the same station/variable must be stored, not treated as a dup."""
+    first = await _make_weather_observation(session)
+    second = await _make_weather_observation(
+        session,
+        value=Decimal(83),
+        issuance_time=datetime(2026, 7, 21, 6, 0, tzinfo=UTC),
+    )
+
+    assert second.was_duplicate is False
+    assert second.record.id != first.record.id
+
+
+async def _make_weather_forecast(session: AsyncSession, **overrides: object):  # type: ignore[no-untyped-def]
+    defaults: dict[str, object] = {
+        "station_id": "NYC",
+        "provider": "nws",
+        "variable": "temperature",
+        "point_estimate": Decimal(75),
+        "unit": "F",
+        "issue_time": datetime(2026, 7, 20, 18, 0, tzinfo=UTC),
+        "valid_start": datetime(2026, 7, 20, 18, 0, tzinfo=UTC),
+        "valid_end": datetime(2026, 7, 21, 6, 0, tzinfo=UTC),
+        "raw_payload_id": None,
+    }
+    defaults.update(overrides)
+    return await save_weather_forecast(session, **defaults)  # type: ignore[arg-type]
+
+
+async def test_save_weather_forecast_inserts_new(session: AsyncSession) -> None:
+    result = await _make_weather_forecast(session)
+    assert result.was_duplicate is False
+    assert result.record.point_estimate == Decimal(75)
+
+
+async def test_save_weather_forecast_skips_same_issue_and_valid_start(
+    session: AsyncSession,
+) -> None:
+    first = await _make_weather_forecast(session)
+    second = await _make_weather_forecast(session, point_estimate=Decimal(999))
+
+    assert second.was_duplicate is True
+    assert second.record.id == first.record.id
+    assert second.record.point_estimate == first.record.point_estimate  # never overwritten
+
+
+async def test_save_weather_forecast_keeps_distinct_revisions(session: AsyncSession) -> None:
+    """A later forecast issuance for the same validity window must be stored
+    alongside the earlier one -- forecasts are never overwritten."""
+    first = await _make_weather_forecast(session)
+    second = await _make_weather_forecast(
+        session,
+        point_estimate=Decimal(78),
+        issue_time=datetime(2026, 7, 21, 0, 0, tzinfo=UTC),
+    )
+
+    assert second.was_duplicate is False
+    assert second.record.id != first.record.id
+
+
+async def test_get_latest_observation_date_none_when_no_observations(
+    session: AsyncSession,
+) -> None:
+    assert await get_latest_observation_date(session, "NYC", "tmax_f") is None
+
+
+async def test_get_latest_observation_date_returns_max(session: AsyncSession) -> None:
+    await _make_weather_observation(
+        session,
+        observation_date=date(2026, 7, 18),
+        issuance_time=datetime(2026, 7, 18, 20, 37, tzinfo=UTC),
+    )
+    await _make_weather_observation(
+        session,
+        observation_date=date(2026, 7, 20),
+        issuance_time=datetime(2026, 7, 20, 20, 37, tzinfo=UTC),
+    )
+
+    latest = await get_latest_observation_date(session, "NYC", "tmax_f")
+    assert latest == date(2026, 7, 20)

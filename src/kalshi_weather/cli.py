@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.config import Environment, Settings, get_settings
 from kalshi_weather.ingestion.collector import run_collector_loop
+from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
@@ -31,6 +32,8 @@ from kalshi_weather.storage.repositories import (
     save_raw_payload,
     save_series,
 )
+from kalshi_weather.weather.provider import NwsProvider
+from kalshi_weather.weather.stations import UnknownStationError, get_station, list_stations
 
 logger = get_logger(__name__)
 
@@ -39,10 +42,14 @@ series_app = typer.Typer(help="Inspect Kalshi series.")
 markets_app = typer.Typer(help="Inspect Kalshi markets.")
 orderbook_app = typer.Typer(help="Inspect Kalshi order books.")
 collector_app = typer.Typer(help="Run the historical market-data collector.")
+weather_app = typer.Typer(help="Weather station data and collector.")
+weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
 app.add_typer(collector_app, name="collector")
+app.add_typer(weather_app, name="weather")
+weather_app.add_typer(weather_stations_app, name="stations")
 
 
 @asynccontextmanager
@@ -259,6 +266,107 @@ def collector_run(
         finally:
             await engine.dispose()
         logger.info("collector.stopped")
+
+    asyncio.run(run())
+
+
+def _build_weather_provider(settings: Settings, session: AsyncSession | None = None) -> NwsProvider:
+    raw_payload_sink = None
+    if session is not None:
+
+        async def sink(
+            source: str, endpoint: str, request_key: str, status: int, payload: Any
+        ) -> int:
+            raw = await save_raw_payload(
+                session,
+                source=source,
+                endpoint_or_channel=endpoint,
+                request_key=request_key,
+                http_status=status,
+                payload_json=payload,
+            )
+            return raw.id
+
+        raw_payload_sink = sink
+
+    return NwsProvider(user_agent=settings.weather_user_agent, raw_payload_sink=raw_payload_sink)
+
+
+@weather_stations_app.command("list")
+def weather_stations_list() -> None:
+    """List the static weather station registry (weather/stations.py)."""
+    for station in list_stations():
+        typer.echo(
+            f"{station.station_id}\t{station.name}\t{station.latitude},{station.longitude}"
+            f"\t{station.timezone}"
+        )
+
+
+@weather_app.command("collect")
+def weather_collect(
+    once: bool = typer.Option(
+        False, "--once", help="Run a single collection cycle and exit (e.g. for cron)."
+    ),
+    interval: float | None = typer.Option(
+        None, "--interval", help="Seconds between cycles (default: settings/env)."
+    ),
+    station: str | None = typer.Option(
+        None, "--station", help="Collect only this station_id (default: all registered)."
+    ),
+    backfill_days: int | None = typer.Option(
+        None, "--backfill-days", help="Initial backfill window for a new station."
+    ),
+) -> None:
+    """Run the historical weather data collector (stations/observations/forecasts).
+
+    Continuous by default; `--once` runs a single cycle and exits, e.g. from
+    cron. See docs/runbooks/weather_collector.md for operational details.
+    """
+    stations = None
+    if station is not None:
+        try:
+            stations = [get_station(station)]
+        except UnknownStationError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        stop_event = asyncio.Event()
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+
+        resolved_backfill_days = (
+            backfill_days if backfill_days is not None else settings.weather_backfill_days
+        )
+        resolved_interval = (
+            interval if interval is not None else settings.weather_interval_seconds
+        )
+        logger.info(
+            "weather_collector.starting",
+            once=once,
+            stations=[s.station_id for s in stations] if stations else "all",
+            backfill_days=resolved_backfill_days,
+            interval_seconds=resolved_interval,
+        )
+        try:
+            await run_weather_collector_loop(
+                session_factory=session_factory,
+                provider_factory=lambda session: _build_weather_provider(settings, session),
+                stations=stations,
+                backfill_days=resolved_backfill_days,
+                interval_seconds=resolved_interval,
+                stop_event=stop_event,
+                max_cycles=1 if once else None,
+            )
+        finally:
+            await engine.dispose()
+        logger.info("weather_collector.stopped")
 
     asyncio.run(run())
 

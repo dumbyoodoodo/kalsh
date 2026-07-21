@@ -1,0 +1,36 @@
+547
+CDUS41 KOKX 150620
+CLINYC
+
+CLIMATE REPORT
+NATIONAL WEATHER SERVICE NEW YORK, NY
+220 AM EDT MON JUN 15 2026
+
+...................................
+
+...THE CENTRAL PARK NY CLIMATE SUMMARY FOR JUNE 14 2026...
+
+CLIMATE NORMAL PERIOD 1991 TO 2020
+CLIMATE RECORD PERIOD 1869 TO 2026
+
+
+WEATHER ITEM   OBSERVED TIME   RECORD YEAR NORMAL DEPARTURE LAST
+                VALUE   (LST)  VALUE       VALUE  FROM      YEAR
+                                                  NORMAL
+...................................................................
+TEMPERATURE (F)
+ YESTERDAY
+  MAXIMUM         87    212 PM  99    1956  79      8       68
+  MINIMUM         70   1159 PM  49    1875  64      6       59
+  AVERAGE         79                        72      7       64
+
+PRECIPITATION (IN)
+  YESTERDAY        0.25          2.54 1917   0.17   0.08     0.23
+  MONTH TO DATE    1.66                      2.31  -0.65     1.36
+  SINCE JUN 1      1.66                      2.31  -0.65     1.36
+  SINCE JAN 1     16.09                     21.48  -5.39    19.92
+
+SNOWFALL (IN)
+  YESTERDAY        0.0           0.0  2001   0.0    0.0      0.0
+                                      2002
+  MONTH TO DATE    0.0                       0.0    0.0      0.0

@@ -113,20 +113,21 @@ Acceptance criteria:
 
 ### Milestone 3 — Weather data ingestion
 
-- [ ] Select official provider matching settlement needs.
-- [ ] Implement station lookup and metadata.
-- [ ] Collect timestamped forecasts.
-- [ ] Collect official observations.
-- [ ] Normalize units.
-- [ ] Persist raw and normalized data.
-- [ ] Track provider issue time, receipt time, and valid time.
-- [ ] Add completeness and freshness checks.
+- [x] Select official provider matching settlement needs (NWS Climatological Report / "CLI" text product, confirmed live against real Kalshi rules text — `docs/adr/0003-weather-data-source.md`).
+- [x] Implement station lookup and metadata (`weather/stations.py`, `WeatherProvider.get_station_metadata`).
+- [x] Collect timestamped forecasts (`get_forecast`, live-only — historical forecast backfill is a documented, deferred limitation, see the ADR).
+- [x] Collect official observations, with historical backfill beyond the live API's retention window (`get_observations`, routed between `api.weather.gov` and IEM).
+- [x] Normalize units (Fahrenheit, `Decimal`).
+- [x] Persist raw and normalized data (`weather_stations`/`weather_observations`/`weather_forecasts`, `raw_api_payloads`).
+- [x] Track provider issue time, receipt time, and valid time (`issuance_time`/`issue_time`, `observed_at`, `valid_start`/`valid_end`).
+- [x] Add completeness and freshness checks (per-item validation in `ingestion/validation.py`: temperature plausibility, timestamp sanity; malformed CLI reports logged and skipped, not silently dropped).
 
 Acceptance criteria:
 
-- Re-running ingestion is idempotent.
-- Historical forecasts are never overwritten.
-- Missing/late data is visible.
+- [x] Re-running ingestion is idempotent (dedup by `(station_id, variable, issuance_time)` / `(station_id, variable, issue_time, valid_start)`; verified by `tests/unit/test_weather_collector.py` and `tests/unit/test_repositories.py`).
+- [x] Historical forecasts are never overwritten (every issuance is a new row; historical *backfill* of forecasts predating the collector's first run is explicitly not implemented — a stated limitation, not silent data loss).
+- [x] Missing/late data is visible (invalid/malformed items counted in `WeatherCycleStats.invalid_items` and logged; per-station and per-cycle failures logged and counted rather than crashing).
+- [x] `ruff check .`, `mypy src`, `pytest -v` all pass.
 
 ### Milestone 4 — Research dataset
 

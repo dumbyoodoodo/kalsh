@@ -136,34 +136,59 @@ Kalshi's live wire format represents price/count as decimal-dollar-string (`yes_
 - `resolution_notes`
 - `created_at`
 
+### `weather_stations`
+
+(Implemented in Milestone 3, `docs/adr/0003-weather-data-source.md`. Not in the original sketch above — added because station identity/metadata needed its own table once a real provider existed.)
+
+- `station_id` PK — our internal id, matching `weather/stations.py`'s static registry (e.g. `"NYC"`)
+- `provider`
+- `source_location_code` — the provider's own code for this station (e.g. NWS CLI product location code, currently identical to `station_id`)
+- `office` — NWS WFO office code (e.g. `"OKX"`), confirmed live via `/points`
+- `latitude`, `longitude`
+- `name`
+- `timezone` — IANA name, used to interpret provider-local timestamps
+- `schema_version`
+- `raw_payload_id`
+- `observed_at`
+
+Upserted by `station_id`, same rationale as `series`/`events` — station identity is a stable entity, not a point-in-time observation.
+
 ### `weather_forecasts`
 
-- `id`
-- `station_id`
-- `provider`
-- `model_name`
-- `issue_time`
-- `valid_start`
-- `valid_end`
-- `horizon_hours`
-- `variable`
-- `point_estimate`
-- `distribution_json`
-- `unit`
-- `raw_payload_id`
+(Implemented as sketched, with a few additions below.)
 
-Never overwrite a forecast with a later forecast; issue time is essential for preventing look-ahead bias.
+- `id` PK (surrogate)
+- `station_id` — references `weather_stations.station_id`
+- `provider`
+- `variable` — `"temperature"` to start
+- `point_estimate`
+- `unit`
+- `issue_time` — when this forecast was issued (NWS `updateTime`)
+- `valid_start`, `valid_end` — the period this point estimate covers
+- `schema_version`
+- `raw_payload_id` — set per-record at creation time, not read from a single "last request" attribute after the call that produced it (`get_forecast` makes several requests internally; see the ADR)
+- `observed_at`
+
+Not implemented from the original sketch: `model_name`, `horizon_hours`, `distribution_json` — no consumer needs them yet; add when a model actually requires them, per `CLAUDE.md`'s storage philosophy. Deduplicated/never-overwritten by `(station_id, variable, issue_time, valid_start)` — a later forecast issuance for the same validity window is stored as a new row, never merged into or replacing an earlier one; issue time is essential for preventing look-ahead bias. Historical forecast backfill (pre-dating whenever the collector first ran for a station) is not implemented this phase — a documented limitation, not a silent gap (see the ADR).
 
 ### `weather_observations`
 
-- `id`
-- `station_id`
-- `observed_at`
-- `variable`
+(Implemented as sketched, with a few additions below.)
+
+- `id` PK (surrogate)
+- `station_id` — references `weather_stations.station_id`
+- `provider`
+- `variable` — `"tmax_f"` / `"tmin_f"` to start
 - `value`
 - `unit`
-- `quality_flag`
-- `raw_payload_id`
+- `observation_date` — the calendar day this value describes, read from the CLI report's own header line, not inferred from issuance time (an early-morning issuance can report on the previous day; see `weather/cli_parser.py` and the ADR)
+- `issuance_time` — when *this version* of the report was issued; CLI reports are reissued multiple times per day, and this is what dedup/recency is keyed on, not `observation_date`
+- `source_product_id` — the provider's id for the specific report this value came from
+- `schema_version`
+- `raw_payload_id` — same per-record capture rationale as `weather_forecasts`
+- `observed_at`
+
+Not implemented from the original sketch: `quality_flag` — no consumer needs it yet. Deduplicated/never-overwritten by `(station_id, variable, issuance_time)` — every report reissuance is a distinct, valuable row (a later, more authoritative issuance for the same date is not a duplicate of an earlier provisional one). Historical backfill beyond `api.weather.gov`'s live retention window is implemented via IEM's text-product archive (see the ADR); observations, unlike forecasts, do get a historical-backfill path.
 
 ### `model_predictions`
 

@@ -67,6 +67,18 @@ class Settings(BaseSettings):
         default=300.0, alias="COLLECTOR_INTERVAL_SECONDS"
     )
 
+    # Weather collector defaults (see ingestion/weather_collector.py,
+    # weather/provider.py). NWS asks API consumers to identify themselves in
+    # the User-Agent; there's no authentication to configure.
+    weather_user_agent: str = Field(
+        default="kalshi-weather-research (github.com/kalshi-weather-research)",
+        alias="WEATHER_USER_AGENT",
+    )
+    weather_backfill_days: int = Field(default=30, alias="WEATHER_BACKFILL_DAYS")
+    weather_interval_seconds: float = Field(
+        default=1800.0, alias="WEATHER_INTERVAL_SECONDS"
+    )
+
     @model_validator(mode="after")
     def _forbid_live_trading_outside_production(self) -> "Settings":
         if self.kalshi_env != Environment.PRODUCTION and (

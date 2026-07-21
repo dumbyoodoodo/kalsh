@@ -24,6 +24,8 @@ Read-only Kalshi market-data gateway: authenticated/public REST client, order-bo
 
 Weather-market discovery, settlement-rule mapping, and weather forecast/observation ingestion. Still no trading logic — this is collection and normalization only.
 
+Kalshi market discovery and the historical snapshot/trade collector (`TASKS.md` Milestone 2) are complete — see `docs/runbooks/collector.md`. Weather forecast/observation ingestion (Milestone 3) is also complete — see `docs/runbooks/weather_collector.md` and `docs/adr/0003-weather-data-source.md`. Settlement-rule mapping (Milestone 2b), which joins the two, remains.
+
 ## 0.3 — Historical Database
 
 Point-in-time research datasets joining market, settlement, forecast, and observation data without leakage, exported as versioned Parquet with a manifest. This version also stands up the research framework itself (`RESEARCH.md`, `HYPOTHESES.md`, dataset versioning and experiment-tracking conventions) — the historical database and the framework for using it rigorously ship together.

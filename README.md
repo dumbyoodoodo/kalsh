@@ -86,8 +86,8 @@ Exact commands may evolve as the repository is implemented.
 
 ## Project status
 
-Phase 1 (Infrastructure) is complete: a read-only Kalshi market-data gateway with raw-payload capture and normalized storage. Phase 2 (Historical Data Platform) is next. No order-submission code exists anywhere in the repository.
+Phase 1 (Infrastructure) is complete: a read-only Kalshi market-data gateway with raw-payload capture and normalized storage. Within Phase 2 (Historical Data Platform), the Kalshi market-data collector (Milestone 2) and the weather forecast/observation collector (Milestone 3) are both complete — see `docs/runbooks/collector.md` and `docs/runbooks/weather_collector.md`. Settlement-rule mapping (Milestone 2b) and the joined research dataset (Milestone 4) remain. No order-submission code exists anywhere in the repository.
 
 ## Initial deliverable
 
-The first release collected and normalized Kalshi weather-market data. It does not place orders. See `ROADMAP.md` for what comes after.
+The first release collected and normalized Kalshi weather-market data. The second collected and normalized NWS weather forecasts and observations (the confirmed settlement source, `docs/adr/0003-weather-data-source.md`) for later joining with the Kalshi data. Neither places orders. See `ROADMAP.md` for what comes after.

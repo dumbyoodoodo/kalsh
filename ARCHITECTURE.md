@@ -81,16 +81,28 @@ Explicitly out of scope here: settlement-rule parsing (Milestone 2b), weather da
 
 ### Weather gateway
 
-Initial provider should be an official source suitable for the target settlement rules. Keep the provider interface abstract because forecast grids, stations, observations, and ensemble data may come from different sources.
+Implemented in `weather/` (Milestone 3, `docs/adr/0003-weather-data-source.md`). A `WeatherProvider` `Protocol` (`provider.py`) abstracts the data source; the only implementation so far is `NwsProvider`, confirmed live as the source Kalshi's own settlement rules cite (NWS Climatological Report / "CLI" text product). Internally it routes between two backends — `api.weather.gov` for recent data and IEM's text-product archive for historical backfill beyond the live API's ~5-day retention — but that split is invisible to callers; a future non-NWS provider implements the same `Protocol` without changing downstream code.
 
 Responsibilities:
 
-- station metadata
-- forecast issue time and valid time
-- observations
-- units and conversions
-- source/version metadata
-- raw payload persistence
+- station metadata (`weather/stations.py` — a small static registry, since Kalshi cites stations by name in prose, not a resolvable code)
+- forecast issue time and valid time (`get_forecast`, live-only this phase — historical forecast backfill is a documented, deferred limitation, see the ADR)
+- observations, with historical backfill (`get_observations`, live + IEM-backed)
+- a single shared CLI-text parser (`cli_parser.py`) used by both backends
+- units and conversions (Fahrenheit, as reported)
+- source/version metadata and raw payload persistence, with `raw_payload_id` threaded through individual returned records rather than read from the client after a multi-request call (see the ADR — a `get_observations`/`get_forecast` call issues several requests internally)
+
+Explicitly out of scope here: settlement-rule parsing / market-to-station mapping (Milestone 2b) and anything downstream of "collect and store" (Phases 4+).
+
+### Weather collector
+
+Implemented in `ingestion/weather_collector.py` (Milestone 3), mirroring the shape of the Kalshi ingestion collector above. For each registered station: refresh station metadata, collect observations (bounded initial backfill via `WEATHER_BACKFILL_DAYS`, then incremental — the most recently seen day is always re-fetched too, since a more authoritative issuance may have since been published for it), and collect the current forecast. Runs either once (`--once`) or continuously with a configurable interval and graceful shutdown (`cli.py`'s `weather collect`).
+
+Responsibilities:
+
+- per-station error isolation — one station's failure is logged and counted, collection continues with the next
+- per-item validation (`validation.py`'s `validate_temperature_f`, plus `validate_timestamp` with a weather-specific floor) — a malformed observation or forecast is logged and skipped, not stored, and does not abort the station
+- dedup via the repository layer's insert-if-not-exists by natural key (never overwrite a stored observation or forecast)
 
 ### Settlement resolver
 

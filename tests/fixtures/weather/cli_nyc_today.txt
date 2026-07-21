@@ -1,0 +1,63 @@
+000
+CDUS41 KOKX 202037
+CLINYC
+
+CLIMATE REPORT
+NATIONAL WEATHER SERVICE NEW YORK, NY
+437 PM EDT MON JUL 20 2026
+
+...................................
+
+...THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 20 2026...
+VALID TODAY AS OF 0400 PM LOCAL TIME.
+
+CLIMATE NORMAL PERIOD 1991 TO 2020
+CLIMATE RECORD PERIOD 1869 TO 2026
+
+
+WEATHER ITEM   OBSERVED TIME   RECORD YEAR NORMAL DEPARTURE LAST
+                VALUE   (LST)  VALUE       VALUE  FROM      YEAR
+                                                  NORMAL
+...................................................................
+TEMPERATURE (F)
+ TODAY
+  MAXIMUM         81    125 PM 101    1980  85     -4       88
+  MINIMUM         63    541 AM  55    1890  71     -8       75
+  AVERAGE         72                        78     -6       82
+
+PRECIPITATION (IN)
+  TODAY            0.00          1.97 1889   0.16  -0.16      T
+  MONTH TO DATE    3.45                      2.86   0.59     3.42
+  SINCE JUN 1      6.84                      7.40  -0.56     5.88
+  SINCE JAN 1     21.27                     26.57  -5.30    24.44
+
+SNOWFALL (IN)
+  TODAY            0.0           0.0  2001   0.0    0.0      0.0
+                                      2002
+  MONTH TO DATE    0.0                       0.0    0.0      0.0
+  SINCE JUN 1      0.0                       0.0    0.0      0.0
+  SINCE JUL 1      0.0                       0.0    0.0      0.0
+  SNOW DEPTH       0
+
+DEGREE DAYS
+ HEATING
+  TODAY            0                         0      0        0
+  MONTH TO DATE    0                         0      0        0
+  SINCE JUN 1      4                        15    -11       16
+  SINCE JUL 1      0                         0      0        0
+
+ COOLING
+  TODAY            7                        13     -6       17
+  MONTH TO DATE  256                       249      7      286
+  SINCE JUN 1    518                       475     43      558
+  SINCE JAN 1    656                       556    100      615
+...................................................................
+
+
+WIND (MPH)
+  HIGHEST WIND SPEED     9   HIGHEST WIND DIRECTION    NW (320)
+  HIGHEST GUST SPEED    18   HIGHEST GUST DIRECTION     N (340)
+  AVERAGE WIND SPEED     2.4
+
+
+SKY COVER

@@ -1,11 +1,14 @@
-"""Validation for incoming Kalshi market data before it's persisted.
+"""Validation for incoming Kalshi market data and weather data before it's
+persisted.
 
 Keeps a single bad item from corrupting storage or crashing a collection
 cycle: callers catch MalformedPayloadError per-item (see
-ingestion/collector.py), log it, and skip that item -- the cycle continues.
+ingestion/collector.py and ingestion/weather_collector.py), log it, and skip
+that item -- the cycle continues.
 """
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from kalshi_weather.domain.time import NaiveDatetimeError, to_utc, utc_now
 
@@ -19,6 +22,19 @@ DEFAULT_MAX_FUTURE_SKEW = timedelta(minutes=5)
 #: A source timestamp before this is treated as corrupt rather than real --
 #: Kalshi's weather markets didn't exist yet.
 SANE_TIMESTAMP_FLOOR = datetime(2018, 1, 1, tzinfo=UTC)
+
+#: NWS's text-product sources (live api.weather.gov + historical IEM
+#: archive) realistically cover back to the early 1980s -- see
+#: docs/adr/0003-weather-data-source.md. Deliberately looser than
+#: SANE_TIMESTAMP_FLOOR since weather issuance timestamps can legitimately
+#: be much older than Kalshi's.
+WEATHER_TIMESTAMP_FLOOR = datetime(1980, 1, 1, tzinfo=UTC)
+
+#: Fahrenheit values outside this range are almost certainly a
+#: parsing/transcription error, not real weather -- generous margin either
+#: side of any plausible contiguous-US station reading.
+MIN_TEMPERATURE_F = -60
+MAX_TEMPERATURE_F = 130
 
 
 class MalformedPayloadError(ValueError):
@@ -73,3 +89,16 @@ def validate_ticker(value: str, *, field_name: str) -> None:
     """Validate a ticker/id string is non-empty after stripping whitespace."""
     if not value or not value.strip():
         raise MalformedPayloadError(f"{field_name} is empty")
+
+
+def validate_temperature_f(
+    value: Decimal,
+    *,
+    field_name: str,
+    min_f: int = MIN_TEMPERATURE_F,
+    max_f: int = MAX_TEMPERATURE_F,
+) -> None:
+    """Validate a Fahrenheit temperature is within a physically plausible
+    range -- catches a parser/transcription error, not real weather."""
+    if not (min_f <= value <= max_f):
+        raise MalformedPayloadError(f"{field_name}={value} out of range [{min_f}, {max_f}]")

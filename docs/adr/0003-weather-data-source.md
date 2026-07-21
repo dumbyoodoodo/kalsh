@@ -1,0 +1,40 @@
+# ADR 0003: Weather data source, provider design, and historical ingestion
+
+## Status
+
+Accepted.
+
+## Context
+
+`TASKS.md` Milestone 3 calls for weather forecast/observation ingestion, to be joined with Kalshi market data later (Milestone 4). Per `CLAUDE.md`'s non-negotiable rule ("treat contract settlement rules as authoritative... do not infer the weather station, time window, rounding rule, or source from the title alone") and the explicit instruction for this phase ("do not guess"), the settlement source had to be confirmed against live data before any provider code was written.
+
+## Settlement source research (live-verified)
+
+- Fetched real `rules_primary`/`rules_secondary` text from multiple live Kalshi daily-temperature markets (e.g. `KXHIGHTLV`, `KXLOWTNYC`). Every one of them cites the **NWS Climatological Report (Daily)** — the "CLI" text product (`CLINYC`, `CLILAS`, etc.) — for a named station per city (e.g. "Central Park NY", not the airport). Kalshi explicitly disclaims other sources (AccuWeather etc.) in this rules text.
+- Confirmed via `api.weather.gov`: `/points/{lat},{lon}` resolves a coordinate to its NWS Weather Forecast Office (WFO). For Central Park, NY's coordinates this returns office `OKX`, matching Kalshi's own rules-text citation for NYC markets — corroborating the station/office mapping independently of Kalshi's prose.
+- Fetched and inspected real CLI product text via `/products?type=CLI&location=<code>&start=&end=`: a fixed-width report with `MAXIMUM`/`MINIMUM` values under a `TEMPERATURE (F)` section, and a `"...CLIMATE SUMMARY FOR <month> <day> <year>..."` header line giving the authoritative date the report covers.
+- **CLI reports are reissued multiple times per day.** Fetched two same-day issuances for the same station and observed different values/times — an afternoon issuance is explicitly provisional ("AS OF 4 PM"), consistent with Kalshi's own rules text ("use the latest version of the data available for the desired date"). This means observations require the same immutable, append-only, issuance-time-tracked treatment as forecasts — a single value per station/day is not sufficient.
+- One parsing subtlety found by comparing a live-fetched sample against a historical (IEM-fetched) sample: an early-morning issuance labels its temperature section `YESTERDAY`, not `TODAY`, but the covered calendar date must still be read from the header line, not inferred from the section label — the label alone is ambiguous around local midnight. `weather/cli_parser.py` implements this.
+
+## API limitations (confirmed empirically)
+
+- **`api.weather.gov`'s live `/products` endpoint has a short retention window.** Bisected by probing date ranges: a request for CLI products ~3 days old succeeds; ~7 days old returns nothing. `provider.py` uses a conservative `LIVE_RETENTION_DAYS = 5` cutoff rather than the exact boundary.
+- For historical backfill beyond that window, two options were evaluated:
+  - **IEM** (Iowa Environmental Mesonet, `mesonet.agron.iastate.edu`) mirrors the same raw NWS text products by AFOS PIL (`CLI<location>`), with good coverage from roughly 2008 onward (some offices further back). This is what `provider.py` uses — it serves the *identical* raw text NWS itself issued, so the same shared CLI-text parser applies to both the live and historical backends with no divergent logic.
+  - **NCEI GHCN-Daily** is NOAA's independent long-term daily max/min archive. It was not chosen as the primary historical source because it is not guaranteed to reproduce the exact CLI-report value in every edge case (rounding/station-identity differences); it remains a candidate for an independent cross-check provider later, not a replacement.
+- **Historical forecasts are a known, deferred gap.** `/gridpoints/{office}/{x,y}/forecast` (used for the live forecast) is live-only; the official historical forecast archive is NCEI's NDFD archive, distributed as GRIB2/NetCDF grid data — materially heavier to parse than a text product, with no consumer yet. This phase collects forecasts going forward from whenever the collector first runs (same live-only window as observations before backfill), and does **not** attempt to backfill historical forecasts. This is a stated limitation, not a silent omission: see `Consequences` below and the `TASKS.md` acceptance criteria.
+
+## Decisions
+
+1. **One `WeatherProvider` with two backends behind it, not two providers.** The live/historical split for CLI observations (recent → `api.weather.gov`, older → IEM) is an implementation detail of "the NWS provider," not something callers should know about. `get_observations(station, start, end)` picks the right backend internally based on the requested range and the `LIVE_RETENTION_DAYS` cutoff. A future non-NWS provider (e.g. a different official source for a different contract type) implements the same `Protocol` (`weather/provider.py`) without changing any downstream ingestion code.
+2. **A single shared CLI-text parser** (`weather/cli_parser.py`), since both backends return the identical raw NWS text format. Unparseable text is caught, logged, and skipped per-item — the raw payload is still stored unconditionally (`raw_api_payloads`, before parsing is even attempted), matching the "raw immutable, normalized best-effort" pattern already used for Kalshi payloads (`kalshi/models.py`'s `extra="allow"`).
+3. **A small static station registry, not dynamic discovery** (`weather/stations.py`). Kalshi cites stations by name in prose (e.g. "Central Park NY"), not a resolvable code — there is no API to auto-derive "NYC" from that text. The registry starts with one entry (`NYC`, matching `STRATEGY_SPEC.md`'s initial single-station scope) and is extended by adding data, not code. Mapping *which* Kalshi market maps to *which* registry entry is Milestone 2b's job (settlement resolution); this registry only tracks stations we've already decided to collect weather data for.
+4. **Observations get historical backfill; forecasts don't, this phase** (see API limitations above). Documented explicitly rather than silently skipped.
+5. **Same append-only/versioned/validated pattern as Milestone 2's Kalshi collector**: `schema_version`, source timestamps (`issuance_time` for observations, `issue_time` for forecasts), raw-payload linkage, per-item validation with error isolation, dedup by natural key — `(station_id, variable, issuance_time)` for observations, `(station_id, variable, issue_time, valid_start)` for forecasts. Neither table is ever overwritten; every issuance/revision is a new row.
+6. **`raw_payload_id` is threaded through individual returned records, not read from a single "last request" attribute after a multi-request call.** `get_observations()`/`get_forecast()` each make several internal HTTP requests (one per product/day fetched); a single `provider.last_raw_payload_id` read after the whole call returns would misattribute every record but the very last one. `ObservationRecord`/`ForecastRecord` (`weather/models.py`) instead carry their own `raw_payload_id`, set by the provider immediately after the specific request that produced that record. (`KalshiClient.last_raw_payload_id` remains safe as a read-after-call attribute because its methods each make exactly one request per call — a materially different shape.)
+
+## Consequences
+
+- A future NDFD-based historical-forecast backfill provider is welcome to slot in behind the same `WeatherProvider.get_forecast` shape (or a dedicated historical-forecast method added to the Protocol) without touching `weather_collector.py`'s orchestration — but it is not scheduled and has no consumer yet.
+- Anyone adding a new station must add it to `weather/stations.py` (data only) and confirm its NWS location code and WFO office live, the same way NYC was confirmed here — not guess from a city name.
+- Anyone adding a new weather variable (e.g. precipitation) needs a corresponding parser addition in `cli_parser.py`, since `MAXIMUM`/`MINIMUM` temperature parsing is currently the only implemented extraction.

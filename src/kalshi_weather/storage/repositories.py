@@ -8,7 +8,8 @@ and save_orderbook_snapshot, and docs/adr/0002-ingestion-collector.md.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -23,6 +24,9 @@ from kalshi_weather.storage.models import (
     RawApiPayload,
     SeriesRecord,
     TradeRecord,
+    WeatherForecast,
+    WeatherObservation,
+    WeatherStation,
     content_hash,
 )
 
@@ -334,6 +338,157 @@ async def get_latest_trade_timestamp(
         select(TradeRecord.executed_at)
         .where(TradeRecord.market_ticker == market_ticker)
         .order_by(TradeRecord.executed_at.desc())
+        .limit(1)
+    )
+    return result
+
+
+async def save_weather_station(
+    session: AsyncSession,
+    *,
+    station_id: str,
+    provider: str,
+    source_location_code: str,
+    office: str | None,
+    latitude: Decimal,
+    longitude: Decimal,
+    name: str,
+    timezone: str,
+    raw_payload_id: int | None = None,
+) -> WeatherStation:
+    """Upsert a station row; station identity doesn't change, so this is not
+    append-only (same rationale as save_series)."""
+    existing = await session.get(WeatherStation, station_id)
+    if existing is not None:
+        existing.provider = provider
+        existing.source_location_code = source_location_code
+        existing.office = office
+        existing.latitude = latitude
+        existing.longitude = longitude
+        existing.name = name
+        existing.timezone = timezone
+        existing.raw_payload_id = raw_payload_id
+        existing.observed_at = utc_now()
+        await session.flush()
+        return existing
+
+    record = WeatherStation(
+        station_id=station_id,
+        provider=provider,
+        source_location_code=source_location_code,
+        office=office,
+        latitude=latitude,
+        longitude=longitude,
+        name=name,
+        timezone=timezone,
+        raw_payload_id=raw_payload_id,
+        observed_at=utc_now(),
+    )
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def save_weather_observation(
+    session: AsyncSession,
+    *,
+    station_id: str,
+    provider: str,
+    variable: str,
+    value: Decimal,
+    unit: str,
+    observation_date: date,
+    issuance_time: datetime,
+    source_product_id: str,
+    raw_payload_id: int | None,
+) -> SaveResult[WeatherObservation]:
+    """Insert an observation, unless this exact (station, variable,
+    issuance_time) has already been stored -- CLI reports are reissued
+    multiple times per day and every issuance is kept, never overwritten
+    (see storage/models.py WeatherObservation)."""
+    existing = await session.scalar(
+        select(WeatherObservation).where(
+            WeatherObservation.station_id == station_id,
+            WeatherObservation.variable == variable,
+            WeatherObservation.issuance_time == issuance_time,
+        )
+    )
+    if existing is not None:
+        return SaveResult(record=existing, was_duplicate=True)
+
+    record = WeatherObservation(
+        station_id=station_id,
+        provider=provider,
+        variable=variable,
+        value=value,
+        unit=unit,
+        observation_date=observation_date,
+        issuance_time=issuance_time,
+        source_product_id=source_product_id,
+        raw_payload_id=raw_payload_id,
+        observed_at=utc_now(),
+    )
+    session.add(record)
+    await session.flush()
+    return SaveResult(record=record, was_duplicate=False)
+
+
+async def save_weather_forecast(
+    session: AsyncSession,
+    *,
+    station_id: str,
+    provider: str,
+    variable: str,
+    point_estimate: Decimal,
+    unit: str,
+    issue_time: datetime,
+    valid_start: datetime,
+    valid_end: datetime,
+    raw_payload_id: int | None,
+) -> SaveResult[WeatherForecast]:
+    """Insert a forecast period, unless this exact (station, variable,
+    issue_time, valid_start) has already been stored -- never overwrite a
+    forecast with a later one (DATA_MODEL.md)."""
+    existing = await session.scalar(
+        select(WeatherForecast).where(
+            WeatherForecast.station_id == station_id,
+            WeatherForecast.variable == variable,
+            WeatherForecast.issue_time == issue_time,
+            WeatherForecast.valid_start == valid_start,
+        )
+    )
+    if existing is not None:
+        return SaveResult(record=existing, was_duplicate=True)
+
+    record = WeatherForecast(
+        station_id=station_id,
+        provider=provider,
+        variable=variable,
+        point_estimate=point_estimate,
+        unit=unit,
+        issue_time=issue_time,
+        valid_start=valid_start,
+        valid_end=valid_end,
+        raw_payload_id=raw_payload_id,
+        observed_at=utc_now(),
+    )
+    session.add(record)
+    await session.flush()
+    return SaveResult(record=record, was_duplicate=False)
+
+
+async def get_latest_observation_date(
+    session: AsyncSession, station_id: str, variable: str
+) -> date | None:
+    """Latest stored observation_date for a station/variable, used to decide
+    where incremental observation collection should resume from."""
+    result: date | None = await session.scalar(
+        select(WeatherObservation.observation_date)
+        .where(
+            WeatherObservation.station_id == station_id,
+            WeatherObservation.variable == variable,
+        )
+        .order_by(WeatherObservation.observation_date.desc())
         .limit(1)
     )
     return result

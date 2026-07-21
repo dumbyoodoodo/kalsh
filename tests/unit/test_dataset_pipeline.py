@@ -98,7 +98,11 @@ async def test_pipeline_build_produces_valid_datasets(session: AsyncSession) -> 
     assert mw["settled_value"] == 81.0
 
     assert output.validation.ok
-    assert set(output.manifest.content_hashes) == {"weather_panel", "market_weather"}
+    assert set(output.manifest.content_hashes) == {
+        "weather_panel",
+        "market_weather",
+        "observation_issuances",
+    }
     # sqlite test DB has no alembic_version table -> None, and no crash
     assert output.manifest.source_db_revision is None
     assert "sqlite" in output.manifest.database_url

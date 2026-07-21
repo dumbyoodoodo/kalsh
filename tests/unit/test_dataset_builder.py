@@ -183,4 +183,20 @@ def test_build_datasets_selection() -> None:
     built = B.build_datasets(_sources(), [], which="weather_panel")
     assert set(built.frames) == {"weather_panel"}
     built_all = B.build_datasets(_sources(markets=_markets()), [], which="all")
-    assert set(built_all.frames) == {"weather_panel", "market_weather"}
+    assert set(built_all.frames) == {"weather_panel", "market_weather", "observation_issuances"}
+
+
+def test_observation_issuances_frame_is_verbatim_passthrough() -> None:
+    """The issuance extract carries every stored issuance row unchanged --
+    no aggregation, no derivation (its provenance value is being the exact
+    source data, versioned)."""
+    sources = _sources()
+    frame = B.build_observation_issuances(sources)
+    assert frame.height == sources.observations.height  # every issuance row
+    assert set(frame.columns) == set(sources.observations.columns)
+    # both issuances of the revised tmax day are present
+    tmax_rows = frame.filter(
+        (pl.col("variable") == "tmax_f") & (pl.col("observation_date") == date(2026, 7, 20))
+    )
+    assert tmax_rows.height == 2
+    assert tmax_rows["value"].to_list() == [79.0, 81.0]  # sorted by issuance_time

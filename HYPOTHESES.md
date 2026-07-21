@@ -80,10 +80,10 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0002 — CLI settlement-revision risk is material
 
-- **Status:** Proposed
+- **Status:** Confirmed
 - **Opened:** 2026-07-21
-- **Closed:**
-- **Related:** docs/adr/0003-weather-data-source.md (CLI reissuance), docs/research/2026-07-21-research-plan.md (§4, first experiment)
+- **Closed:** 2026-07-21
+- **Related:** docs/adr/0003-weather-data-source.md (CLI reissuance), docs/research/2026-07-21-research-plan.md (§4, first experiment), H0011 (follow-up)
 
 **Hypothesis.** For NYC daily max/min temperature, the first-issued CLI report value differs from the final settled value on more than 5% of station/variable-days, and differs by more than 1°F on more than 1% of days — i.e., settlement-label noise between preliminary and final reports is material, not negligible, for modeling and near-settlement decision-making.
 
@@ -105,9 +105,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** None — runnable now. Feeds H0005/H0006/H0007 (label-noise handling) and any Phase 6+ near-settlement logic.
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-21 — [EXP-20260721-H0002-cli-revisions](docs/research/experiments/EXP-20260721-H0002-cli-revisions.md), dataset version `exp-20260721-h0002`. N = 2,564 station/variable-days (NYC, 2022-12-31→2026-07-20; 99.5% of days had ≥2 issuances, so the pre-registered coverage caveat did not bite). Revision frequency **18.76%**, Wilson 95% CI [17.30%, 20.32%] — lower bound far above the 5% threshold. P(|Δ|>1°F) **12.25%**, CI [11.03%, 13.57%] — lower bound far above 1%. Mean |Δ| when revised 3.32°F (max 18°F). Same-day preliminary tmax revisions: 169/170 upward (sign test p ≈ 2.3×10⁻⁴⁹). Stable across years (17.1-21.7%, overlapping CIs); material in every calendar month (11-26%).
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Confirmed**, per the pre-registered decision rule (both CI lower bounds cleared their thresholds by wide margins). Settlement labels carry material revision noise; downstream hypotheses must treat the first-issued CLI value as provisional (~19% revised, mean miss 3.3°F when revised), and H0007 should use the measured 169/170 upward-asymmetry rather than assuming a perfectly hard preliminary-high floor. Exploratory observation (not pre-registered): tmin labels revise ~2× as often as tmax (24.3% vs 13.3%) — spun out as H0011. Conclusion claimed for NYC, window 2023-2026.
 
 ### H0003 — NWS forecast error has a stable, estimable distribution by horizon
 
@@ -352,6 +352,37 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 **Difficulty.** Small (a re-slicing of H0005/H0006 outputs).
 
 **Dependencies.** H0005 and H0006 run.
+
+**Results.** Not yet run.
+
+**Conclusion.** Not yet concluded.
+
+### H0011 — Daily-low settlement labels are structurally noisier (midnight-boundary effect)
+
+- **Status:** Proposed
+- **Opened:** 2026-07-21
+- **Closed:**
+- **Related:** H0002 (source of the exploratory observation), H0005/H0006/H0007 (consumers)
+
+**Hypothesis.** For NYC, tmin settlement labels revise significantly more often than tmax labels (H0002 measured 24.3% vs 13.3%, exploratory), and the excess is concentrated in revisions whose final issuance follows the local-midnight boundary — i.e., the daily minimum's proximity to the day boundary, not reporting quality generally, drives the difference. Consequence if confirmed: label-noise handling in H0005/H0006/H0007 must be variable-specific, and daily-LOW (KXLOWT-family) markets carry structurally higher settlement risk than daily-HIGH markets at equal model quality.
+
+**Rationale.** The daily maximum occurs mid-afternoon, safely inside its local day; the daily minimum frequently occurs near sunrise or just after local midnight, where the calendar-day attribution of a cooling trend is decided at the boundary. A same-day preliminary report cannot yet know whether the late-night temperature will undercut the morning low. H0002's by-variable split (2× revision rate) is consistent with this mechanism but was not a pre-registered claim; this entry pre-registers it properly before any further analysis.
+
+**Required data.** The same issuance-level extract as H0002 (`observation_issuances` frame; dataset version `exp-20260721-h0002` suffices, or a newer version). No new collection.
+
+**Experiment design.** For every revised station/variable-day: classify the revision by (a) variable and (b) whether the value change first appears in an issuance timestamped after local midnight of the observation date. Decision rule, pre-registered: **confirmed** if (1) the tmin-vs-tmax revision-rate difference has a two-proportion 95% CI excluding zero, AND (2) the fraction of excess tmin revisions (beyond the tmax rate) attributable to post-midnight final issuances exceeds 50% with a Wilson 95% CI lower bound above 50%; **rejected** if (1) fails; **inconclusive** if (1) holds but (2)'s CI straddles 50%.
+
+**Metrics.** Two-proportion difference with CI; post-midnight attribution fraction with Wilson CI; revision-timing histograms by variable (descriptive).
+
+**Required features.** F7/F8 only (same as H0002); local-time conversion of issuance timestamps.
+
+**Statistical tests.** Two-proportion z (or Newcombe) CI for the rate difference; Wilson CI for the attribution fraction.
+
+**Failure modes.** (1) Attribution ambiguity when multiple post-first issuances exist → classify by the first issuance at which the final value appears, pre-registered here. (2) NYC-specific timing conventions → NYC-only claim, as with H0002. (3) This entry was motivated by looking at H0002's split — the rate-difference part of the claim is partially post-hoc; mitigation: the mechanism part (post-midnight attribution) is genuinely untested, and the whole entry must replicate on ≥1 additional station once registry expansion lands before being treated as general.
+
+**Difficulty.** Trivial (same dataset, one classification pass).
+
+**Dependencies.** H0002 (done). Station expansion strengthens the claim but is not required for the NYC version.
 
 **Results.** Not yet run.
 

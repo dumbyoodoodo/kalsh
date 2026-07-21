@@ -1,0 +1,482 @@
+{
+  "experiment": "EXP-20260721-H0002-cli-revisions",
+  "hypothesis": "H0002",
+  "dataset": {
+    "version": "exp-20260721-h0002",
+    "content_hashes": {
+      "market_weather": "4cee373b0435177cc1c99f96cc237dc2d23b848581575140a01080f1121aba56",
+      "observation_issuances": "ec38d1a66d7d93eeccdd6ca6df34d14d6e5214477a50c903e976a24f5f327ca9",
+      "weather_panel": "e59b4cf48fa62128bab42608bbc00a821b6631788a802e6810efa5d015cde028"
+    },
+    "git_commit": "2e76d32065b46b3e470bcf7bf088d393c5d6fc1f",
+    "source_db_revision": "0005"
+  },
+  "analysis": {
+    "station": "NYC",
+    "variables": [
+      "tmax_f",
+      "tmin_f"
+    ],
+    "date_range": [
+      "2022-12-31",
+      "2026-07-20"
+    ],
+    "primary": {
+      "days": 2564,
+      "revised_days": 481,
+      "revision_frequency": 0.187597503900156,
+      "revision_frequency_ci95": [
+        0.17295810337091216,
+        0.2031716049111038
+      ],
+      "days_abs_delta_gt_1f": 314,
+      "p_abs_delta_gt_1f": 0.12246489859594384,
+      "p_abs_delta_gt_1f_ci95": [
+        0.11033761613099194,
+        0.13572175667424088
+      ]
+    },
+    "decision_rule": {
+      "confirmed_if": "CI lower bounds: revision_frequency > 0.05 AND p_gt1 > 0.01",
+      "outcome": "confirmed"
+    },
+    "coverage": {
+      "days_total": 2564,
+      "days_with_ge2_issuances": 2552,
+      "coverage_ge2_fraction": 0.9953198127925117,
+      "note": "single-issuance days count as unrevised in the primary metrics; IEM gaps could hide revisions on those days, so the primary estimates are lower bounds in that respect",
+      "revision_frequency_among_ge2_days": {
+        "days": 2552,
+        "revised_days": 481,
+        "revision_frequency": 0.1884796238244514,
+        "revision_frequency_ci95": [
+          0.17377838572712062,
+          0.20411729926828148
+        ],
+        "days_abs_delta_gt_1f": 314,
+        "p_abs_delta_gt_1f": 0.12304075235109718,
+        "p_abs_delta_gt_1f_ci95": [
+          0.11085983532200341,
+          0.1363548174648857
+        ]
+      }
+    },
+    "abs_delta_histogram_f": [
+      {
+        "bucket": 1,
+        "count": 167
+      },
+      {
+        "bucket": 2,
+        "count": 90
+      },
+      {
+        "bucket": 3,
+        "count": 70
+      },
+      {
+        "bucket": 4,
+        "count": 38
+      },
+      {
+        "bucket": 5,
+        "count": 30
+      },
+      {
+        "bucket": 6,
+        "count": 27
+      },
+      {
+        "bucket": 7,
+        "count": 21
+      },
+      {
+        "bucket": 8,
+        "count": 5
+      },
+      {
+        "bucket": 9,
+        "count": 8
+      },
+      {
+        "bucket": 10,
+        "count": 3
+      },
+      {
+        "bucket": 11,
+        "count": 7
+      },
+      {
+        "bucket": 12,
+        "count": 4
+      },
+      {
+        "bucket": 13,
+        "count": 4
+      },
+      {
+        "bucket": 14,
+        "count": 2
+      },
+      {
+        "bucket": 15,
+        "count": 1
+      },
+      {
+        "bucket": 16,
+        "count": 1
+      },
+      {
+        "bucket": 17,
+        "count": 2
+      },
+      {
+        "bucket": 18,
+        "count": 1
+      }
+    ],
+    "delta_stats": {
+      "max_abs_delta": 18.0,
+      "mean_abs_delta_when_revised": 3.322245322245322,
+      "mean_signed_delta_when_revised": -1.8835758835758836
+    },
+    "sign_asymmetry_same_day_tmax": {
+      "tmax_days_with_same_day_first_issuance": 1278,
+      "revised_of_those": 170,
+      "revised_upward": 169,
+      "revised_downward": 1,
+      "upward_fraction_of_revised": 0.9941176470588236,
+      "sign_test_two_sided_p": 2.2852138271288273e-49,
+      "note": "physical prior: a same-day running max can only rise; downward revisions indicate boundary/correction effects"
+    },
+    "by_year": [
+      {
+        "year": "2022",
+        "days": 2,
+        "revised_days": 0,
+        "revision_frequency": 0.0,
+        "revision_frequency_ci95": [
+          0.0,
+          0.6576197724933469
+        ],
+        "days_abs_delta_gt_1f": 0,
+        "p_abs_delta_gt_1f": 0.0,
+        "p_abs_delta_gt_1f_ci95": [
+          0.0,
+          0.6576197724933469
+        ],
+        "coverage_ge2_fraction": 0.0
+      },
+      {
+        "year": "2023",
+        "days": 720,
+        "revised_days": 123,
+        "revision_frequency": 0.17083333333333334,
+        "revision_frequency_ci95": [
+          0.14510677860033042,
+          0.20005369235106266
+        ],
+        "days_abs_delta_gt_1f": 79,
+        "p_abs_delta_gt_1f": 0.10972222222222222,
+        "p_abs_delta_gt_1f_ci95": [
+          0.0889308248187151,
+          0.13465606268061586
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "year": "2024",
+        "days": 726,
+        "revised_days": 134,
+        "revision_frequency": 0.18457300275482094,
+        "revision_frequency_ci95": [
+          0.15803870629969252,
+          0.2144277458801357
+        ],
+        "days_abs_delta_gt_1f": 89,
+        "p_abs_delta_gt_1f": 0.12258953168044077,
+        "p_abs_delta_gt_1f_ci95": [
+          0.10069952458815784,
+          0.1484524749632523
+        ],
+        "coverage_ge2_fraction": 0.9944903581267218
+      },
+      {
+        "year": "2025",
+        "days": 720,
+        "revised_days": 138,
+        "revision_frequency": 0.19166666666666668,
+        "revision_frequency_ci95": [
+          0.16458191636183372,
+          0.22202409440276233
+        ],
+        "days_abs_delta_gt_1f": 93,
+        "p_abs_delta_gt_1f": 0.12916666666666668,
+        "p_abs_delta_gt_1f_ci95": [
+          0.10662299424681373,
+          0.15564639707817338
+        ],
+        "coverage_ge2_fraction": 0.9916666666666667
+      },
+      {
+        "year": "2026",
+        "days": 396,
+        "revised_days": 86,
+        "revision_frequency": 0.21717171717171718,
+        "revision_frequency_ci95": [
+          0.17938306067370619,
+          0.26039489366681384
+        ],
+        "days_abs_delta_gt_1f": 53,
+        "p_abs_delta_gt_1f": 0.13383838383838384,
+        "p_abs_delta_gt_1f_ci95": [
+          0.10379846191176738,
+          0.17091406826122724
+        ],
+        "coverage_ge2_fraction": 1.0
+      }
+    ],
+    "by_variable": [
+      {
+        "variable": "tmax_f",
+        "days": 1282,
+        "revised_days": 170,
+        "revision_frequency": 0.13260530421216848,
+        "revision_frequency_ci95": [
+          0.11513327150869077,
+          0.15227252448737813
+        ],
+        "days_abs_delta_gt_1f": 73,
+        "p_abs_delta_gt_1f": 0.05694227769110764,
+        "p_abs_delta_gt_1f_ci95": [
+          0.04553089876299609,
+          0.07100093165264534
+        ],
+        "coverage_ge2_fraction": 0.9953198127925117
+      },
+      {
+        "variable": "tmin_f",
+        "days": 1282,
+        "revised_days": 311,
+        "revision_frequency": 0.24258970358814352,
+        "revision_frequency_ci95": [
+          0.21991697099511875,
+          0.2668004656900251
+        ],
+        "days_abs_delta_gt_1f": 241,
+        "p_abs_delta_gt_1f": 0.18798751950078002,
+        "p_abs_delta_gt_1f_ci95": [
+          0.16754429187302203,
+          0.21029502532109165
+        ],
+        "coverage_ge2_fraction": 0.9953198127925117
+      }
+    ],
+    "by_month": [
+      {
+        "month": "1",
+        "days": 246,
+        "revised_days": 50,
+        "revision_frequency": 0.2032520325203252,
+        "revision_frequency_ci95": [
+          0.15770731893392315,
+          0.2579220938578863
+        ],
+        "days_abs_delta_gt_1f": 39,
+        "p_abs_delta_gt_1f": 0.15853658536585366,
+        "p_abs_delta_gt_1f_ci95": [
+          0.11819391495104363,
+          0.20937965593268226
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "2",
+        "days": 224,
+        "revised_days": 45,
+        "revision_frequency": 0.20089285714285715,
+        "revision_frequency_ci95": [
+          0.15366649995896042,
+          0.25820524325413563
+        ],
+        "days_abs_delta_gt_1f": 30,
+        "p_abs_delta_gt_1f": 0.13392857142857142,
+        "p_abs_delta_gt_1f_ci95": [
+          0.09544929457320805,
+          0.18475194338908857
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "3",
+        "days": 244,
+        "revised_days": 54,
+        "revision_frequency": 0.22131147540983606,
+        "revision_frequency_ci95": [
+          0.1737681818463899,
+          0.2774939247957763
+        ],
+        "days_abs_delta_gt_1f": 36,
+        "p_abs_delta_gt_1f": 0.14754098360655737,
+        "p_abs_delta_gt_1f_ci95": [
+          0.10851490473726083,
+          0.19749305366312586
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "4",
+        "days": 232,
+        "revised_days": 53,
+        "revision_frequency": 0.22844827586206898,
+        "revision_frequency_ci95": [
+          0.17910768931871895,
+          0.28663509979879814
+        ],
+        "days_abs_delta_gt_1f": 33,
+        "p_abs_delta_gt_1f": 0.14224137931034483,
+        "p_abs_delta_gt_1f_ci95": [
+          0.103110082806243,
+          0.19302724253905723
+        ],
+        "coverage_ge2_fraction": 0.9913793103448276
+      },
+      {
+        "month": "5",
+        "days": 248,
+        "revised_days": 52,
+        "revision_frequency": 0.20967741935483872,
+        "revision_frequency_ci95": [
+          0.16363498666068077,
+          0.2645767117851856
+        ],
+        "days_abs_delta_gt_1f": 28,
+        "p_abs_delta_gt_1f": 0.11290322580645161,
+        "p_abs_delta_gt_1f_ci95": [
+          0.07927815279648447,
+          0.1583374451313373
+        ],
+        "coverage_ge2_fraction": 0.9919354838709677
+      },
+      {
+        "month": "6",
+        "days": 232,
+        "revised_days": 42,
+        "revision_frequency": 0.1810344827586207,
+        "revision_frequency_ci95": [
+          0.1368141718008994,
+          0.2356456122418984
+        ],
+        "days_abs_delta_gt_1f": 24,
+        "p_abs_delta_gt_1f": 0.10344827586206896,
+        "p_abs_delta_gt_1f_ci95": [
+          0.0705068214322776,
+          0.14930804521552507
+        ],
+        "coverage_ge2_fraction": 0.9913793103448276
+      },
+      {
+        "month": "7",
+        "days": 224,
+        "revised_days": 34,
+        "revision_frequency": 0.15178571428571427,
+        "revision_frequency_ci95": [
+          0.1106974611090013,
+          0.20461591158684178
+        ],
+        "days_abs_delta_gt_1f": 20,
+        "p_abs_delta_gt_1f": 0.08928571428571429,
+        "p_abs_delta_gt_1f_ci95": [
+          0.05854188643818366,
+          0.1338790146902467
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "8",
+        "days": 186,
+        "revised_days": 21,
+        "revision_frequency": 0.11290322580645161,
+        "revision_frequency_ci95": [
+          0.0750412813049239,
+          0.16643104568552303
+        ],
+        "days_abs_delta_gt_1f": 13,
+        "p_abs_delta_gt_1f": 0.06989247311827956,
+        "p_abs_delta_gt_1f_ci95": [
+          0.04129721625374692,
+          0.11589425818008303
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "9",
+        "days": 180,
+        "revised_days": 25,
+        "revision_frequency": 0.1388888888888889,
+        "revision_frequency_ci95": [
+          0.09587747021305285,
+          0.19699150050811212
+        ],
+        "days_abs_delta_gt_1f": 15,
+        "p_abs_delta_gt_1f": 0.08333333333333333,
+        "p_abs_delta_gt_1f_ci95": [
+          0.05114986208169917,
+          0.13292971951964502
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "10",
+        "days": 184,
+        "revised_days": 30,
+        "revision_frequency": 0.16304347826086957,
+        "revision_frequency_ci95": [
+          0.11665992703264674,
+          0.22320891353909625
+        ],
+        "days_abs_delta_gt_1f": 17,
+        "p_abs_delta_gt_1f": 0.09239130434782608,
+        "p_abs_delta_gt_1f_ci95": [
+          0.05848533193932188,
+          0.1429689106877866
+        ],
+        "coverage_ge2_fraction": 1.0
+      },
+      {
+        "month": "11",
+        "days": 178,
+        "revised_days": 27,
+        "revision_frequency": 0.15168539325842698,
+        "revision_frequency_ci95": [
+          0.10638925612452266,
+          0.21169804473533815
+        ],
+        "days_abs_delta_gt_1f": 23,
+        "p_abs_delta_gt_1f": 0.12921348314606743,
+        "p_abs_delta_gt_1f_ci95": [
+          0.08766711131430463,
+          0.1864258218590956
+        ],
+        "coverage_ge2_fraction": 0.9775280898876404
+      },
+      {
+        "month": "12",
+        "days": 186,
+        "revised_days": 48,
+        "revision_frequency": 0.25806451612903225,
+        "revision_frequency_ci95": [
+          0.20052355007764888,
+          0.3253966542913804
+        ],
+        "days_abs_delta_gt_1f": 36,
+        "p_abs_delta_gt_1f": 0.1935483870967742,
+        "p_abs_delta_gt_1f_ci95": [
+          0.14320836306153875,
+          0.2562905624725651
+        ],
+        "coverage_ge2_fraction": 0.989247311827957
+      }
+    ]
+  }
+}

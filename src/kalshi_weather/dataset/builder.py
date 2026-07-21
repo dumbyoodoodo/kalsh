@@ -526,19 +526,33 @@ def orphan_station_ids(sources: SourceFrames) -> list[str]:
     return sorted(referenced - registry)
 
 
+def build_observation_issuances(sources: SourceFrames) -> pl.DataFrame:
+    """Issuance-level observation extract: one row per stored CLI issuance,
+    verbatim from the source table (no derivation). Exists so issuance-level
+    research (H0002's pre-registered "versioned weather_panel-adjacent extract
+    of first/last issuance per station/variable/day") runs against a
+    versioned, content-hashed export rather than an unpinned ad hoc query --
+    per RESEARCH.md's standard experiment protocol, step 2."""
+    return sources.observations.sort(
+        ["station_id", "variable", "observation_date", "issuance_time"]
+    )
+
+
 def build_datasets(
     sources: SourceFrames,
     mappings: list[MarketMapping],
     *,
     which: str = "all",
 ) -> BuiltDataset:
-    """Build the requested dataset(s). ``which`` is 'all', 'weather_panel', or
-    'market_weather'."""
+    """Build the requested dataset(s). ``which`` is 'all', 'weather_panel',
+    'market_weather', or 'observation_issuances'."""
     frames: dict[str, pl.DataFrame] = {}
     if which in ("all", "weather_panel"):
         frames["weather_panel"] = build_weather_panel(sources)
     if which in ("all", "market_weather"):
         frames["market_weather"] = build_market_weather(sources, mappings)
+    if which in ("all", "observation_issuances"):
+        frames["observation_issuances"] = build_observation_issuances(sources)
     if not frames:
         raise ValueError(f"unknown dataset selection {which!r}")
     return BuiltDataset(frames=frames)

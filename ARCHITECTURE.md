@@ -120,6 +120,8 @@ Deliberately not parsed here: thresholds/strike structure (payoff, not settlemen
 
 The config market-map file survives as the manual override layer (audit fields: `reason`/`author`/`added_on`), taking precedence over parsed output and recorded in the resolution report and dataset manifest.
 
+**Settlement-time labels** (`settlement/labels.py`, E-A, `docs/adr/0006-settlement-labels.md`): for every settled market, a typed versioned label distinguishing the value at market close, the value at Kalshi's exact `settlement_ts`, and the latest (possibly post-settlement-corrected) final value — validated against Kalshi's own exposed `expiration_value`/`result`. Strict as-of selection; statuses gate downstream use; exported as a `settlement_labels` dataset frame and as explicit stage columns on `market_weather`. Market experiments must use `value_at_settlement` as the outcome label.
+
 No strategy may trade a market whose settlement mapping is unresolved or ambiguous — enforced by construction: only `resolved` specs ever become mappings.
 
 ### Research dataset

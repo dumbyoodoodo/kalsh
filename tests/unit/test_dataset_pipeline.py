@@ -102,7 +102,11 @@ async def test_pipeline_build_produces_valid_datasets(session: AsyncSession) -> 
         "weather_panel",
         "market_weather",
         "observation_issuances",
+        "settlement_labels",
     }
+    # E-A: explicit stage-labelled columns exist; settled_value is unchanged
+    assert "value_at_settlement" in output.frames["market_weather"].columns
+    assert "value_at_close" in output.frames["market_weather"].columns
     # sqlite test DB has no alembic_version table -> None, and no crash
     assert output.manifest.source_db_revision is None
     assert "sqlite" in output.manifest.database_url

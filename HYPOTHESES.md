@@ -387,3 +387,34 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 **Results.** Not yet run.
 
 **Conclusion.** Not yet concluded.
+
+### H0012 — Settlement-time labels are stable; close-time labels are not
+
+- **Status:** Inconclusive (retry ≥ 2026-08-19)
+- **Opened:** 2026-07-21
+- **Closed:**
+- **Related:** H0002 (extends; does not alter its concluded result), docs/adr/0006-settlement-labels.md, EXP-20260721-H0002-cli-revisions.md (whose 18.76% preliminary-to-final rate this decomposes)
+
+**Hypothesis.** Two claims about NYC daily-temperature settlement labels, using the reconstructed settlement timeline (value at market close vs. value at Kalshi's settlement determination vs. latest final value): (A) the close-time label is materially non-final — P(value_at_close ≠ latest_final) exceeds 5% — because markets close (~00:59 ET) before the final morning CLI report issues; and (B) the settlement-time label is stable — P(latest_final ≠ value_at_settlement), the post-settlement correction rate, is below 2% — so the settlement-time value can serve as the canonical downstream label without per-case correction modeling.
+
+**Rationale.** H0002 measured first-issuance-to-final revision (18.76%) but that conflates intraday information flow (the 4pm preliminary is issued before the day ends — an *expected* update, not label noise) with genuine post-settlement instability. The decision-relevant quantities for market research are stage-specific: what was knowable at close (when trading stops), at settlement (when Kalshi pays), and finally (after corrections). Kalshi's exposed `settlement_ts` (~8am ET, after the ~2:15am final report) should make the settlement-time label nearly final; the close-time label should inherit most of H0002's preliminary-revision rate.
+
+**Required data.** The reconstructed settlement labels (settlement/labels.py) over settled KXHIGHNY/KXLOWTNYC markets 2023+ joined to the 3.5-year CLI issuance history; a versioned dataset export containing the `settlement_labels` frame, version recorded at run time.
+
+**Experiment design.** Unit of analysis: one observation per (variable, target_date) — strikes of the same event share a settlement timeline and must not be double-counted. Population: dates with a usable (resolved or bounded) label. Compute, with Wilson 95% CIs: P(value_at_close ≠ latest_final); P(latest_final ≠ value_at_settlement) [post-settlement correction rate]; P(value_at_settlement ≠ value_at_close); P(value_at_settlement ≠ first-issued preliminary); |Δ| magnitudes per category; all split by variable (tmax/tmin); revisions categorized same-day continuation (a later issuance on/for the same local day before settlement) vs later correction (issuance after settlement). Decision rule, pre-registered: **confirmed** if claim A's CI lower bound > 5% AND claim B's CI upper bound < 2%; **rejected** if A's CI upper bound < 5% OR B's CI lower bound > 2%; otherwise inconclusive. Bounded-status labels are included in primary metrics with a sensitivity check excluding them; exact-vs-bounded counts reported.
+
+**Metrics.** The four probabilities above with CIs; magnitude distributions per category; per-variable splits; exact/bounded label counts.
+
+**Required features.** The settlement-label reconstruction only (no F10+, no market prices).
+
+**Statistical tests.** Wilson 95% CIs on proportions; no fitting.
+
+**Failure modes.** (1) Bounded labels (missing settlement_ts) could misclassify late corrections → sensitivity check excluding bounded. (2) Issuance-archive gaps → labels with missing_source_data are excluded and counted, never silently dropped. (3) Payout-agreement failures (reconstruction bugs) would corrupt these metrics → the engineering validation gate (payout agreement vs Kalshi's own expiration_value/result) must pass before this analysis is credited.
+
+**Difficulty.** Trivial (measurement over the reconstruction).
+
+**Dependencies.** E-A reconstruction validated against Kalshi payouts.
+
+**Results.** Run 2026-07-21 — [EXP-20260721-EA-settlement-labels](docs/research/experiments/EXP-20260721-EA-settlement-labels.md), dataset version `exp-20260721-ea-labels`, reconstruction v1. Engineering gate passed decisively: **791/791 (100%) payout agreement** with Kalshi's own `expiration_value`/`result` across every settled market with data. n = 132 variable-dates (2026-05-16→07-20, all with exact `settlement_ts`). Claim A: P(value_at_close ≠ latest_final) = 18.94% [13.17%, 26.47%] — confirmed (lower bound ≫ 5%); per-variable rates (tmax 13.6%, tmin 24.2%) match H0002's 3.5-year values almost exactly. Claim B: post-settlement corrections **0/132**, CI [0%, 2.83%] — point estimate perfect but the upper bound misses the pre-registered 2% bar at this n; zero events requires n ≥ 189.
+
+**Conclusion.** **Inconclusive** (for sample size, per the pre-registered rule — not adjusted retroactively). Claim A is established; claim B's evidence is uniformly favorable but underpowered by ~57 variable-dates. Retry on or after **2026-08-19** (~29 more days of two-variable market accumulation). Interim practical guidance stands regardless of B's final verdict: market experiments must use `value_at_settlement` (validated 100% against actual payouts), and close-time reasoning must treat the label as unknown ~1 time in 5.

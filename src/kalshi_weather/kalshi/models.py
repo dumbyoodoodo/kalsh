@@ -99,6 +99,17 @@ class Market(KalshiModel):
     rules_primary: str | None = None
     rules_secondary: str | None = None
     updated_time: datetime | None = None
+    # Settlement fields, verified live on finalized markets (E-A research,
+    # docs/adr/0006-settlement-labels.md): `result` is the payout side,
+    # `expiration_value` is the underlying value Kalshi settled against
+    # (e.g. "90.00" degrees), `settlement_ts` is the exact determination
+    # time, and floor/cap/strike_type are the structured strike definition.
+    result: str | None = None
+    expiration_value: str | None = None
+    settlement_ts: datetime | None = None
+    floor_strike: float | None = None
+    cap_strike: float | None = None
+    strike_type: str | None = None
 
     @model_validator(mode="before")
     @classmethod

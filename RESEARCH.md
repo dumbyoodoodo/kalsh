@@ -83,7 +83,7 @@ Concrete rules:
 
 - Every forecast row is keyed by **issue time**, not valid time; a decision at time `t` may only use forecasts with issue time `<= t`. This is why `DATA_MODEL.md`'s `weather_forecasts` table says "never overwrite a forecast with a later forecast."
 - Market/order-book snapshots used in a backtest must be timestamped at or before the simulated decision time, using the same append-only history the live system would have seen — not a market's final/settled state.
-- Settlement outcomes are never available before `settlement_time`; a backtest may not use them earlier.
+- Settlement outcomes are never available before `settlement_time`; a backtest may not use them earlier. Symmetrically, the outcome *label* itself must be the settlement-time value: market experiments score against `value_at_settlement` (the value Kalshi actually paid on, `docs/adr/0006-settlement-labels.md`), never the latest-final CLI value, which can include corrections published after settlement that no market participant ever saw.
 - When in doubt, ask: "could the live system, running at this exact historical instant with only the data it had ingested by then, have produced this input?" If not, it's leakage.
 
 ## Avoiding data leakage

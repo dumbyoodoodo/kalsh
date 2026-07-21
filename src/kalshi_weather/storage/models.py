@@ -121,6 +121,16 @@ class MarketSnapshot(Base):
     close_time: Mapped[datetime | None] = mapped_column(nullable=True)
     rules_primary: Mapped[str | None] = mapped_column(Text)
     rules_secondary: Mapped[str | None] = mapped_column(Text)
+    # Settlement fields (E-A, docs/adr/0006-settlement-labels.md): populated
+    # once a market settles. `expiration_value` is the underlying value Kalshi
+    # paid on (e.g. degrees F); `settlement_ts` the exact determination time;
+    # floor/cap/strike_type the structured strike definition.
+    result: Mapped[str | None] = mapped_column(String(16))
+    expiration_value: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
+    settlement_ts: Mapped[datetime | None] = mapped_column(nullable=True)
+    floor_strike: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
+    cap_strike: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
+    strike_type: Mapped[str | None] = mapped_column(String(16))
     # Kalshi's own `updated_time` for this market, distinct from `observed_at`.
     source_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")

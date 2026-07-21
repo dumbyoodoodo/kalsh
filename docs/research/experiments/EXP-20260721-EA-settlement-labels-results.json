@@ -1,0 +1,199 @@
+{
+  "experiment": "EXP-20260721-EA-settlement-labels",
+  "hypothesis": "H0012",
+  "dataset": {
+    "version": "exp-20260721-ea-labels",
+    "content_hashes": {
+      "market_weather": "c8c0e673341c59c1018fd898dc7877e9b9b0b47c129ebf11a26ced891f7da9c0",
+      "observation_issuances": "ec38d1a66d7d93eeccdd6ca6df34d14d6e5214477a50c903e976a24f5f327ca9",
+      "settlement_labels": "b0d907c051ed2d8b3710717ba4bfbbddc2b66de36cc93239e865b26e95c5b050",
+      "weather_panel": "e59b4cf48fa62128bab42608bbc00a821b6631788a802e6810efa5d015cde028"
+    },
+    "git_commit": "6e89a141869be05575e404af88c22564057a4bd0",
+    "source_db_revision": "0006",
+    "reconstruction_version": "1"
+  },
+  "label_status_counts": [
+    {
+      "settlement_label_status": "missing_source_data",
+      "n": 36
+    },
+    {
+      "settlement_label_status": "resolved",
+      "n": 792
+    }
+  ],
+  "payout_validation": {
+    "markets_with_kalshi_settlement_data": 791,
+    "value_agreement": {
+      "agree": 791,
+      "rate": 1.0
+    },
+    "result_agreement": {
+      "agree": 791,
+      "rate": 1.0
+    },
+    "value_mismatches": [],
+    "result_mismatches": []
+  },
+  "h0012": {
+    "pooled": {
+      "population": "pooled",
+      "n_dates": 132,
+      "claims": [
+        {
+          "metric": "P(value_at_close != latest_final)",
+          "count": 25,
+          "n": 132,
+          "p": 0.1893939393939394,
+          "ci95": [
+            0.13170462447215764,
+            0.2646505036906143
+          ]
+        },
+        {
+          "metric": "P(latest_final != value_at_settlement)  [post-settlement correction]",
+          "count": 0,
+          "n": 132,
+          "p": 0.0,
+          "ci95": [
+            0.0,
+            0.02827898679860847
+          ]
+        },
+        {
+          "metric": "P(value_at_settlement != value_at_close)",
+          "count": 25,
+          "n": 132,
+          "p": 0.1893939393939394,
+          "ci95": [
+            0.13170462447215764,
+            0.2646505036906143
+          ]
+        }
+      ],
+      "mean_abs_delta_close_vs_final": 3.16,
+      "mean_abs_delta_correction": null
+    },
+    "by_variable": [
+      {
+        "population": "tmax_f",
+        "n_dates": 66,
+        "claims": [
+          {
+            "metric": "P(value_at_close != latest_final)",
+            "count": 9,
+            "n": 66,
+            "p": 0.13636363636363635,
+            "ci95": [
+              0.07343320265668934,
+              0.2392959297167952
+            ]
+          },
+          {
+            "metric": "P(latest_final != value_at_settlement)  [post-settlement correction]",
+            "count": 0,
+            "n": 66,
+            "p": 0.0,
+            "ci95": [
+              0.0,
+              0.05500255701354129
+            ]
+          },
+          {
+            "metric": "P(value_at_settlement != value_at_close)",
+            "count": 9,
+            "n": 66,
+            "p": 0.13636363636363635,
+            "ci95": [
+              0.07343320265668934,
+              0.2392959297167952
+            ]
+          }
+        ],
+        "mean_abs_delta_close_vs_final": 1.5555555555555556,
+        "mean_abs_delta_correction": null
+      },
+      {
+        "population": "tmin_f",
+        "n_dates": 66,
+        "claims": [
+          {
+            "metric": "P(value_at_close != latest_final)",
+            "count": 16,
+            "n": 66,
+            "p": 0.24242424242424243,
+            "ci95": [
+              0.15509184941772042,
+              0.35809128601349777
+            ]
+          },
+          {
+            "metric": "P(latest_final != value_at_settlement)  [post-settlement correction]",
+            "count": 0,
+            "n": 66,
+            "p": 0.0,
+            "ci95": [
+              0.0,
+              0.05500255701354129
+            ]
+          },
+          {
+            "metric": "P(value_at_settlement != value_at_close)",
+            "count": 16,
+            "n": 66,
+            "p": 0.24242424242424243,
+            "ci95": [
+              0.15509184941772042,
+              0.35809128601349777
+            ]
+          }
+        ],
+        "mean_abs_delta_close_vs_final": 4.0625,
+        "mean_abs_delta_correction": null
+      }
+    ],
+    "sensitivity_exact_only": {
+      "population": "exact settlement_ts only",
+      "n_dates": 132,
+      "claims": [
+        {
+          "metric": "P(value_at_close != latest_final)",
+          "count": 25,
+          "n": 132,
+          "p": 0.1893939393939394,
+          "ci95": [
+            0.13170462447215764,
+            0.2646505036906143
+          ]
+        },
+        {
+          "metric": "P(latest_final != value_at_settlement)  [post-settlement correction]",
+          "count": 0,
+          "n": 132,
+          "p": 0.0,
+          "ci95": [
+            0.0,
+            0.02827898679860847
+          ]
+        },
+        {
+          "metric": "P(value_at_settlement != value_at_close)",
+          "count": 25,
+          "n": 132,
+          "p": 0.1893939393939394,
+          "ci95": [
+            0.13170462447215764,
+            0.2646505036906143
+          ]
+        }
+      ],
+      "mean_abs_delta_close_vs_final": 3.16,
+      "mean_abs_delta_correction": null
+    },
+    "decision_rule": {
+      "confirmed_if": "A.ci_low > 0.05 AND B.ci_high < 0.02",
+      "outcome": "inconclusive"
+    }
+  }
+}

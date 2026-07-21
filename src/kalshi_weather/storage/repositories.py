@@ -175,6 +175,8 @@ def _market_snapshot_content_hash(
     last_price_cents: int | None,
     volume: int | None,
     open_interest: int | None,
+    result: str | None = None,
+    expiration_value: Decimal | None = None,
 ) -> str:
     """Hash of the fields that matter for "did this market actually change"
     -- deliberately excludes id/observed_at/raw_payload_id/event_ticker/
@@ -193,6 +195,9 @@ def _market_snapshot_content_hash(
             "last_price_cents": last_price_cents,
             "volume": volume,
             "open_interest": open_interest,
+            # settlement transition must produce a (final) snapshot
+            "result": result,
+            "expiration_value": str(expiration_value) if expiration_value is not None else None,
         }
     )
 
@@ -216,6 +221,12 @@ async def save_market_snapshot(
     rules_secondary: str | None,
     raw_payload_id: int | None,
     source_updated_at: datetime | None = None,
+    result: str | None = None,
+    expiration_value: Decimal | None = None,
+    settlement_ts: datetime | None = None,
+    floor_strike: Decimal | None = None,
+    cap_strike: Decimal | None = None,
+    strike_type: str | None = None,
 ) -> SaveResult[MarketSnapshot]:
     """Insert a market snapshot, unless it's identical to the immediately-prior
     snapshot for this ticker (see _market_snapshot_content_hash) -- in which
@@ -231,6 +242,8 @@ async def save_market_snapshot(
         last_price_cents=last_price_cents,
         volume=volume,
         open_interest=open_interest,
+        result=result,
+        expiration_value=expiration_value,
     )
 
     latest = await session.scalar(
@@ -258,6 +271,12 @@ async def save_market_snapshot(
         rules_primary=rules_primary,
         rules_secondary=rules_secondary,
         source_updated_at=source_updated_at,
+        result=result,
+        expiration_value=expiration_value,
+        settlement_ts=settlement_ts,
+        floor_strike=floor_strike,
+        cap_strike=cap_strike,
+        strike_type=strike_type,
         content_hash=hash_value,
         raw_payload_id=raw_payload_id,
         observed_at=utc_now(),

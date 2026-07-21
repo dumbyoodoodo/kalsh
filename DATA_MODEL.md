@@ -68,8 +68,9 @@ Upserted by `event_ticker`, same rationale as `series`.
 - `rules_primary`
 - `rules_secondary`
 - `source_updated_at` — Kalshi's own `updated_time` for this market
+- `result`, `expiration_value`, `settlement_ts`, `floor_strike`, `cap_strike`, `strike_type` — settlement fields (migration `0006`, `docs/adr/0006-settlement-labels.md`): the payout side, the underlying value Kalshi paid on, the exact determination time, and the structured strike definition; populated once a market settles
 - `schema_version`
-- `content_hash` — hash of the fields above (excluding id/observed_at/raw_payload_id); a new snapshot identical to the immediately-prior row for this ticker is skipped rather than inserted (see `docs/adr/0002-ingestion-collector.md`)
+- `content_hash` — hash of the fields above plus `result`/`expiration_value` (so a settlement transition appends one final snapshot); excludes id/observed_at/raw_payload_id and the immutable strike fields (see `docs/adr/0002-ingestion-collector.md`)
 - `raw_payload_id`
 - `observed_at`
 
@@ -289,6 +290,10 @@ Grain: one row per `(station_id, target_date)`.
 - `settlement_issuance_time`, `n_observation_issuances`
 - `residual_high_f` = `final_forecast_high_f - settled_tmax_f`, `residual_low_f` = `final_forecast_low_f - settled_tmin_f` — **label-side** quantities (use the realized value); never use as model features (`RESEARCH.md` feature-leakage rule)
 
+### `settlement_labels.parquet`
+
+Grain: one row per market (E-A, `docs/adr/0006-settlement-labels.md`). The canonical settlement timeline: `value_at_close` (as-of market close — usually the same-day preliminary, since close precedes the final morning report), `value_at_settlement` (as-of Kalshi's `settlement_ts`; the **only valid outcome label for market experiments**), `latest_final_value` (may include post-settlement corrections), Kalshi's own `kalshi_result`/`kalshi_expiration_value`, payout-agreement flags, `settlement_label_status` (`resolved`/`bounded`/`ambiguous`/`unsupported`/`missing_source_data`), `settlement_label_version`, and per-label notes. Derived deterministically; never allows a future issuance into an earlier stage.
+
 ### `market_weather.parquet`
 
 Grain: one row per market snapshot (only for markets present in the settlement
@@ -301,7 +306,8 @@ snapshot's `observed_at` — the latest source row with knowledge timestamp
 - as-of forecast (`forecast_high_f`, `forecast_low_f`, `forecast_issue_time`, `forecast_age_seconds`, `n_forecast_issuances_known`)
 - as-of known observation of the market's variable (`obs_value_known`, `obs_issuance_time_known`)
 - as-of order book (`best_yes_bid_cents`, `best_yes_ask_cents`, `spread_cents`) and trades (`last_trade_price_cents`, `n_trades_known`)
-- `settled_value`, `settlement_issuance_time` — the market's settled outcome (**post-settlement label**, never a pre-decision input)
+- `settled_value`, `settlement_issuance_time` — latest-final semantics (**unchanged since Milestone 4**; may include post-settlement corrections)
+- `value_at_close`, `value_at_settlement`, `latest_final_value`, `settlement_label_status`, `settlement_label_version` — the stage-distinguished settlement labels (E-A); **market experiments must use `value_at_settlement`**, not `settled_value`
 
 Any row traces to raw sources via the source tables' `raw_payload_id` columns;
 the dataset is rebuildable deterministically from the manifest's git commit,

@@ -150,6 +150,18 @@ Acceptance criteria:
 - [x] No migration (read-only over existing tables); `ruff check .`, `mypy src`, `pytest -v` all pass.
 - [x] Verified live against the Postgres DB: `dataset build` produces `weather_panel`/`market_weather` Parquet + manifest/validation/stats; validation reports only expected warnings.
 
+### Milestone 4c — Canonical settlement-time labels (E-A; complete)
+
+Label-validity prerequisite for all market experiments — see `docs/adr/0006-settlement-labels.md` and `docs/runbooks/settlement_labels.md`.
+
+- [x] Settlement-timeline research against live finalized markets: Kalshi exposes exact `settlement_ts`, the paid `expiration_value`, `result`, and structured strikes; close (~00:59 ET) precedes the final CLI report (~2:15am ET) which precedes settlement (~8am ET) — the stages genuinely differ.
+- [x] Typed versioned `SettlementLabel` (`settlement/labels.py`): value at close / at settlement / latest final, strict as-of (no future leakage, tested), `resolved`/`bounded`/`ambiguous`/`unsupported`/`missing_source_data` statuses, conservative close+48h bound when `settlement_ts` is absent.
+- [x] Additive migration `0006`: settlement fields on `market_snapshots`; collector persists them going forward; settlement transitions append one final snapshot (hash includes `result`/`expiration_value`).
+- [x] Settled NYC market history retro-fetched (API retention limits markets to ~2-3 recent months of events — documented; older history unrecoverable).
+- [x] Payout-agreement validation against Kalshi's own `expiration_value`/`result`; every mismatch listed (see the E-A experiment record for rates).
+- [x] Dataset integration without breaking consumers: new `settlement_labels` frame + explicit `value_at_close`/`value_at_settlement`/`latest_final_value`/`settlement_label_status`/`settlement_label_version` columns on `market_weather`; `settled_value` NOT redefined; reconstruction version recorded in manifests.
+- [x] H0012 pre-registered before analysis; H0002 extended, not altered (see HYPOTHESES.md and `EXP-20260721-EA-settlement-labels`).
+
 ### Milestone 4b — Research operations (Phase 6 of the working plan; complete)
 
 Makes the platform run reliably for months with minimal intervention — see `docs/runbooks/operations.md`.

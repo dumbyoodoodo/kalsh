@@ -7,6 +7,7 @@ is explicitly out of scope here -- see TASKS.md Milestone 2b.
 
 import json
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,6 +131,22 @@ async def discover_and_snapshot_weather_markets(
                     rules_primary=market.rules_primary,
                     rules_secondary=market.rules_secondary,
                     source_updated_at=market.updated_time,
+                    result=market.result,
+                    expiration_value=(
+                        Decimal(market.expiration_value)
+                        if market.expiration_value is not None
+                        else None
+                    ),
+                    settlement_ts=market.settlement_ts,
+                    floor_strike=(
+                        Decimal(str(market.floor_strike))
+                        if market.floor_strike is not None
+                        else None
+                    ),
+                    cap_strike=(
+                        Decimal(str(market.cap_strike)) if market.cap_strike is not None else None
+                    ),
+                    strike_type=market.strike_type,
                     raw_payload_id=client.last_raw_payload_id,
                 )
                 if save_result.was_duplicate:

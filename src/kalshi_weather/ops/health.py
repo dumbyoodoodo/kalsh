@@ -14,11 +14,13 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.domain.time import to_naive_utc, utc_now
+from kalshi_weather.ops.price_coverage import PriceRetentionHealth, retention_risk_summary
 from kalshi_weather.ops.quality import QualityReport, run_quality_checks
 from kalshi_weather.settlement.resolver import ParserSettlementResolver
 from kalshi_weather.settlement.spec import SettlementStatus
 from kalshi_weather.storage.models import (
     CollectorRun,
+    MarketCandlestick,
     MarketSnapshot,
     OrderbookSnapshot,
     TradeRecord,
@@ -48,6 +50,7 @@ class HealthReport:
     station_coverage: dict[str, Any]
     settlement_coverage: dict[str, Any]
     dataset_completeness: dict[str, Any]
+    price_retention: dict[str, Any]
     quality_ok: bool
     quality_counts: dict[str, int]
 
@@ -113,6 +116,10 @@ async def build_health_report(
     kalshi_interval_seconds: float,
     weather_interval_seconds: float,
     stale_after_intervals: float,
+    price_sync_interval_seconds: float = 1800.0,
+    price_resolution_minutes: int = 1,
+    price_observed_retention_days: int = 67,
+    price_retention_warning_buffer_days: int = 10,
     quality: QualityReport | None = None,
 ) -> HealthReport:
     collectors = [
@@ -126,6 +133,12 @@ async def build_health_report(
             session,
             "weather",
             interval_seconds=weather_interval_seconds,
+            stale_after_intervals=stale_after_intervals,
+        ),
+        await _collector_health(
+            session,
+            "prices",
+            interval_seconds=price_sync_interval_seconds,
             stale_after_intervals=stale_after_intervals,
         ),
     ]
@@ -142,6 +155,7 @@ async def build_health_report(
         "forecast_issuance": _iso(
             await session.scalar(select(func.max(WeatherForecast.issue_time)))
         ),
+        "candlestick": _iso(await session.scalar(select(func.max(MarketCandlestick.period_end)))),
     }
 
     registry = list_stations()
@@ -196,6 +210,13 @@ async def build_health_report(
             "coverage": round(int(days or 0) / expected, 4) if expected else None,
         }
 
+    price_retention: PriceRetentionHealth = await retention_risk_summary(
+        session,
+        resolution_minutes=price_resolution_minutes,
+        observed_retention_days=price_observed_retention_days,
+        warning_buffer_days=price_retention_warning_buffer_days,
+    )
+
     quality_report = quality if quality is not None else await run_quality_checks(session)
 
     return HealthReport(
@@ -206,6 +227,7 @@ async def build_health_report(
         station_coverage=station_coverage,
         settlement_coverage=settlement_coverage,
         dataset_completeness=completeness,
+        price_retention=price_retention.to_dict(),
         quality_ok=quality_report.ok,
         quality_counts=quality_report.counts(),
     )

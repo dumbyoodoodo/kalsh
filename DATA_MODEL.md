@@ -143,12 +143,29 @@ for when a later phase needs them.)
 
 Append-only and versioned: unique on `(market_ticker, parser_version, rules_hash)`. Re-parsing unchanged rules with an unchanged parser is a detectable no-op; a parser upgrade or rules change appends a new row beside the old — resolution history is never rewritten. The latest row per market (max `id`) is the current resolution.
 
+### `market_candlesticks`
+
+(Implemented in Phase 7A, `docs/adr/0007-price-ingestion.md`. Not in the original sketch — added once historical price preservation had a concrete consumer, H0007.)
+
+- `id` PK (surrogate)
+- `market_ticker`, `series_ticker`
+- `period_interval_seconds` — candle width in seconds (`60` for the 1-minute resolution collected so far; Kalshi also confirmed `3600`/`86400` live)
+- `period_start`, `period_end`
+- `price_open_cents`, `price_high_cents`, `price_low_cents`, `price_close_cents`, `price_mean_cents` — traded price OHLC
+- `price_close_is_carried_forward` — true when the period had no trade and `price_close_cents` was filled from the API's own carry-forward value rather than an executed close; an explicit stored fact, never silent inference
+- `yes_bid_open_cents`, `yes_bid_high_cents`, `yes_bid_low_cents`, `yes_bid_close_cents` — quoted bid OHLC (persists through zero-volume periods)
+- `yes_ask_open_cents`, `yes_ask_high_cents`, `yes_ask_low_cents`, `yes_ask_close_cents` — quoted ask OHLC
+- `volume`, `open_interest`
+- `schema_version`, `raw_payload_id`, `observed_at`
+
+Append-only and idempotent: unique on `(market_ticker, period_interval_seconds, period_end)` — a repeat fetch of an already-stored candle is silently skipped, never overwritten. If Kalshi ever revises a historical candle, the current policy is append-and-flag (a future migration), not overwrite; no revision has been observed to date.
+
 ### `collector_runs`
 
 (Implemented in Milestone 4b, research operations — `docs/runbooks/operations.md`. Not in the original sketch: added when operational metrics gained a historical store.)
 
 - `id` PK (surrogate)
-- `collector` — `"kalshi"` | `"weather"`
+- `collector` — `"kalshi"` | `"weather"` | `"prices"` (Phase 7A)
 - `started_at`, `finished_at`, `duration_seconds`
 - `success`
 - `requests_attempted`, `retries` — from the client/provider instance counters for that cycle
@@ -312,3 +329,20 @@ snapshot's `observed_at` — the latest source row with knowledge timestamp
 Any row traces to raw sources via the source tables' `raw_payload_id` columns;
 the dataset is rebuildable deterministically from the manifest's git commit,
 source DB revision, market map, and generation config.
+
+### `market_prices.parquet`
+
+(Implemented in Phase 7A, `docs/adr/0007-price-ingestion.md`.) Grain: one row
+per stored candle (`market_candlesticks`), covering **every captured market**
+— unlike `market_weather`, not filtered to only markets present in the
+settlement map; settlement-derived columns are simply `null` for a market
+whose spec doesn't resolve, matching how `settlement_labels` already
+represents unsupported markets.
+
+- candle fields (`market_ticker`, `period_interval_seconds`, `period_start`, `period_end`, price/quote OHLC, `price_close_is_carried_forward`, `volume`, `open_interest`, `raw_payload_id`)
+- market metadata reduced to one row per ticker (`event_ticker`, `close_time`, `floor_strike`, `cap_strike`, `strike_type`) — settlement fields only populate on a market's later snapshots once it settles, so the reduction picks the latest non-null value per field rather than the latest row wholesale
+- `data_quality_status` (`"ok"` / `"zero_volume"`) — computed from `volume == 0`, so a quote-only period can never be mistaken for an executed trade downstream
+- the same settlement-label columns as `market_weather` (`station_id`, `variable`, `target_date`, `settlement_time`, `value_at_close`, `value_at_settlement`, `latest_final_value`, `kalshi_result`, `kalshi_expiration_value`, `settlement_label_status`), joined per market — **market experiments must use `value_at_settlement`**, same rule as `market_weather`
+
+`MARKET_PRICES_SCHEMA_VERSION` is recorded in every manifest alongside
+`RECONSTRUCTION_VERSION`, gating comparability across rebuilds the same way.

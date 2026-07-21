@@ -92,6 +92,25 @@ class Settings(BaseSettings):
         default=1800.0, alias="WEATHER_INTERVAL_SECONDS"
     )
 
+    # Price ingestion defaults (see ingestion/price_backfill.py,
+    # docs/runbooks/price_ingestion.md). The observed retention window is a
+    # measured finding (~67 days as of 2026-07-21, docs/research/
+    # investigations/INV-20260721-price-history-recovery.md), not a documented
+    # API guarantee -- kept configurable and re-verifiable, not hardcoded logic.
+    price_candle_resolution_minutes: int = Field(
+        default=1, alias="PRICE_CANDLE_RESOLUTION_MINUTES"
+    )
+    price_sync_limit_per_cycle: int = Field(default=50, alias="PRICE_SYNC_LIMIT_PER_CYCLE")
+    price_sync_interval_seconds: float = Field(
+        default=1800.0, alias="PRICE_SYNC_INTERVAL_SECONDS"
+    )
+    price_observed_retention_days: int = Field(
+        default=67, alias="PRICE_OBSERVED_RETENTION_DAYS"
+    )
+    price_retention_warning_buffer_days: int = Field(
+        default=10, alias="PRICE_RETENTION_WARNING_BUFFER_DAYS"
+    )
+
     # Research dataset export (see dataset/, docs/runbooks/dataset.md). Storage
     # location is configurable and never hardcoded; the directory is created on
     # demand. The market map is the documented stand-in for settlement_specs

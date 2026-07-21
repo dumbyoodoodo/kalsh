@@ -202,3 +202,71 @@ class Trade(KalshiModel):
 class TradeListResponse(KalshiModel):
     trades: list[Trade] = []
     cursor: str | None = None
+
+
+class CandlestickPriceBlock(KalshiModel):
+    """One OHLC(+mean) sub-object as returned for `price`, `yes_bid`, or
+    `yes_ask` within a candlestick (docs/research/investigations/
+    INV-20260721-price-history-recovery.md). All fields are optional: a
+    zero-volume period's `price` block carries only `previous_dollars` (the
+    price carried forward from the prior period) -- confirmed live -- while
+    `yes_bid`/`yes_ask` blocks always carry full OHLC (quotes persist even
+    with no trades)."""
+
+    open_cents: int | None = None
+    high_cents: int | None = None
+    low_cents: int | None = None
+    close_cents: int | None = None
+    mean_cents: int | None = None
+    previous_cents: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wire_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        _apply_dollar_field_map(
+            data,
+            {
+                "open_cents": "open_dollars",
+                "high_cents": "high_dollars",
+                "low_cents": "low_dollars",
+                "close_cents": "close_dollars",
+                "mean_cents": "mean_dollars",
+                "previous_cents": "previous_dollars",
+            },
+        )
+        return data
+
+
+class Candlestick(KalshiModel):
+    """One OHLC candle for a market at a given resolution. `end_period_ts` is
+    the only timestamp the wire format provides; the period's start is
+    derived by the caller from the requested `period_interval`."""
+
+    end_period_ts: int
+    volume: int | None = None
+    open_interest: int | None = None
+    price: CandlestickPriceBlock = CandlestickPriceBlock()
+    yes_bid: CandlestickPriceBlock = CandlestickPriceBlock()
+    yes_ask: CandlestickPriceBlock = CandlestickPriceBlock()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_wire_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        _apply_fp_field_map(data, {"volume": "volume_fp", "open_interest": "open_interest_fp"})
+        return data
+
+
+class CandlestickListResponse(KalshiModel):
+    """Envelope confirmed live: `{"candlesticks": [...], "ticker": "..."}` --
+    no cursor; the endpoint has no pagination mechanism of its own (see the
+    investigation report for the observed 5,000-candle-per-request cap that
+    range-chunking must respect instead)."""
+
+    candlesticks: list[Candlestick] = []
+    ticker: str | None = None

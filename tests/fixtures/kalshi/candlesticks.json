@@ -1,0 +1,50 @@
+{
+  "ticker": "KXHIGHNY-26MAY15-B65.5",
+  "candlesticks": [
+    {
+      "end_period_ts": 1778803200,
+      "open_interest_fp": "2214.11",
+      "volume_fp": "274.10",
+      "price": {
+        "open_dollars": "0.2800",
+        "high_dollars": "0.3000",
+        "low_dollars": "0.2600",
+        "close_dollars": "0.3000",
+        "mean_dollars": "0.2704",
+        "previous_dollars": "0.3000"
+      },
+      "yes_bid": {
+        "open_dollars": "0.2800",
+        "high_dollars": "0.2800",
+        "low_dollars": "0.2500",
+        "close_dollars": "0.2700"
+      },
+      "yes_ask": {
+        "open_dollars": "0.3100",
+        "high_dollars": "0.3100",
+        "low_dollars": "0.2600",
+        "close_dollars": "0.3000"
+      }
+    },
+    {
+      "end_period_ts": 1778806800,
+      "open_interest_fp": "2214.11",
+      "volume_fp": "0.00",
+      "price": {
+        "previous_dollars": "0.3000"
+      },
+      "yes_bid": {
+        "open_dollars": "0.2700",
+        "high_dollars": "0.2700",
+        "low_dollars": "0.2700",
+        "close_dollars": "0.2700"
+      },
+      "yes_ask": {
+        "open_dollars": "0.3000",
+        "high_dollars": "0.3000",
+        "low_dollars": "0.3000",
+        "close_dollars": "0.3000"
+      }
+    }
+  ]
+}

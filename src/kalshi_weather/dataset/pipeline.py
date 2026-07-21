@@ -16,7 +16,11 @@ import polars as pl
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kalshi_weather.dataset.builder import build_datasets, load_source_frames
+from kalshi_weather.dataset.builder import (
+    MARKET_PRICES_SCHEMA_VERSION,
+    build_datasets,
+    load_source_frames,
+)
 from kalshi_weather.dataset.export import ExportFormat, ExportResult, export_dataset
 from kalshi_weather.dataset.manifest import DatasetManifest, build_manifest
 from kalshi_weather.dataset.market_map import MarketMapping
@@ -70,25 +74,48 @@ async def build(
     produced (e.g. settlement parser version) in the manifest config."""
     sources = await load_source_frames(session, start=start, end=end)
     built = build_datasets(sources, mappings, which=which)
-    if "market_weather" in built.frames:
+    if "market_weather" in built.frames or "market_prices" in built.frames:
         labels = await build_labels(session)
         labels_frame = _labels_frame(labels)
         built.frames["settlement_labels"] = labels_frame
         # Explicit stage-labelled columns joined per market. `settled_value`
         # (latest-final semantics) is intentionally NOT redefined -- new
         # columns carry the stage distinction (docs/adr/0006-settlement-labels.md).
-        built.frames["market_weather"] = built.frames["market_weather"].join(
-            labels_frame.select(
-                "market_ticker",
-                "value_at_close",
-                "value_at_settlement",
-                "latest_final_value",
-                "settlement_label_status",
-                "settlement_label_version",
-            ),
-            on="market_ticker",
-            how="left",
-        )
+        if "market_weather" in built.frames:
+            built.frames["market_weather"] = built.frames["market_weather"].join(
+                labels_frame.select(
+                    "market_ticker",
+                    "value_at_close",
+                    "value_at_settlement",
+                    "latest_final_value",
+                    "settlement_label_status",
+                    "settlement_label_version",
+                ),
+                on="market_ticker",
+                how="left",
+            )
+        if "market_prices" in built.frames:
+            # market_prices covers every captured market, not only mapped
+            # ones (dataset/market_map.py) -- settlement columns are simply
+            # null for a market whose spec doesn't resolve, matching how
+            # settlement_labels itself represents an unsupported market.
+            built.frames["market_prices"] = built.frames["market_prices"].join(
+                labels_frame.select(
+                    "market_ticker",
+                    "station_id",
+                    "variable",
+                    "target_date",
+                    "settlement_time",
+                    "value_at_close",
+                    "value_at_settlement",
+                    "latest_final_value",
+                    "kalshi_result",
+                    "kalshi_expiration_value",
+                    "settlement_label_status",
+                ),
+                on="market_ticker",
+                how="left",
+            )
     report = validate(sources, built.frames, mappings)
     stats = compute_stats(sources, built.frames)
     manifest = build_manifest(
@@ -104,6 +131,7 @@ async def build(
             "market_map_hash": _mapping_hash(mappings),
             "market_map_size": len(mappings),
             "settlement_label_reconstruction_version": RECONSTRUCTION_VERSION,
+            "market_prices_schema_version": MARKET_PRICES_SCHEMA_VERSION,
             **({"resolver": resolver_meta} if resolver_meta else {}),
         },
         repo_dir=repo_dir,

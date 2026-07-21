@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -7,7 +8,11 @@ from sqlalchemy.pool import StaticPool
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ops.health import build_health_report
 from kalshi_weather.storage.models import Base
-from kalshi_weather.storage.repositories import record_collector_run
+from kalshi_weather.storage.repositories import (
+    record_collector_run,
+    save_event,
+    save_market_snapshot,
+)
 
 
 @pytest.fixture
@@ -85,3 +90,45 @@ async def test_success_rate_and_duration_summaries(session: AsyncSession) -> Non
     assert kalshi.success_rate_recent == pytest.approx(2 / 3)
     assert kalshi.mean_duration_seconds == pytest.approx(30.0)
     assert kalshi.last_success is True  # newest run succeeded
+
+
+async def test_prices_is_a_recognized_collector(session: AsyncSession) -> None:
+    report = await build_health_report(
+        session,
+        kalshi_interval_seconds=300,
+        weather_interval_seconds=1800,
+        stale_after_intervals=3,
+        price_sync_interval_seconds=1800,
+    )
+    by_name = {c.collector: c for c in report.collectors}
+    assert "prices" in by_name
+    assert by_name["prices"].stale is True  # never run
+
+
+async def test_price_retention_reports_oldest_uncaptured_market(
+    session: AsyncSession,
+) -> None:
+    close_time = datetime(2026, 5, 20, tzinfo=UTC)
+    await save_event(
+        session, event_ticker="E", series_ticker="KXHIGHNY", category="c", title="t",
+        sub_title=None,
+    )
+    await save_market_snapshot(
+        session, market_ticker="KXHIGHNY-26MAY20-T80", event_ticker="E", market_type="binary",
+        title="t", subtitle="s", status="finalized", yes_bid_cents=0, yes_ask_cents=1,
+        last_price_cents=0, volume=1, open_interest=1, close_time=close_time,
+        rules_primary="r", rules_secondary=None, raw_payload_id=None, result="no",
+        expiration_value=Decimal(78),
+    )
+    report = await build_health_report(
+        session,
+        kalshi_interval_seconds=300,
+        weather_interval_seconds=1800,
+        stale_after_intervals=3,
+        price_observed_retention_days=67,
+        price_retention_warning_buffer_days=10,
+    )
+    oldest = report.price_retention["oldest_uncaptured_market"]
+    assert oldest is not None
+    assert oldest["market_ticker"] == "KXHIGHNY-26MAY20-T80"
+    assert report.price_retention["markets_incomplete_coverage"] == 0

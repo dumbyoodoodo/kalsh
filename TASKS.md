@@ -162,6 +162,23 @@ Label-validity prerequisite for all market experiments — see `docs/adr/0006-se
 - [x] Dataset integration without breaking consumers: new `settlement_labels` frame + explicit `value_at_close`/`value_at_settlement`/`latest_final_value`/`settlement_label_status`/`settlement_label_version` columns on `market_weather`; `settled_value` NOT redefined; reconstruction version recorded in manifests.
 - [x] H0012 pre-registered before analysis; H0002 extended, not altered (see HYPOTHESES.md and `EXP-20260721-EA-settlement-labels`).
 
+### Milestone 4d — Historical price ingestion (Phase 7A; complete)
+
+Deterministic, additive, production-quality candlestick backfill —
+`docs/adr/0007-price-ingestion.md` and `docs/runbooks/price_ingestion.md`.
+H0007's price/quote data dependency; does not run H0007 itself.
+
+- [x] `KalshiClient.list_candlesticks` (chunked at the API's ~4900-candle-per-request cap), typed `Candlestick`/`CandlestickPriceBlock` models reusing the existing `*_dollars`/`*_fp` normalization helpers; zero-volume periods (quote-only, no trade) parsed correctly.
+- [x] Additive migration `0007`: `market_candlesticks`, unique on `(market_ticker, period_interval_seconds, period_end)` — idempotent, never overwrites; round-tripped live (`upgrade head` → `downgrade 0006` → `upgrade head`).
+- [x] Repository layer: insert-if-not-exists batch save, query by market/time-range, latest-stored-candle, per-market coverage, covered-ticker set.
+- [x] Resumable backfill job (`prices backfill`): oldest-`close_time`-first (rolling-retention-aware prioritization), per-market commits, dry-run, ticker/event/date filters, `--skip-covered` resume, six per-attempt outcomes (`complete`/`partial`/`no_price_data`/`expired`/`api_failure`/`unsupported` — a market is never silently dropped).
+- [x] Continuous preservation: `run_price_sync_loop` as a third task in the existing `ops run` supervised loop (no new scheduler); `collector="prices"` rows in `collector_runs`; `price_retention` block in `ops health` (oldest uncaptured market, markets nearing the retention cutoff, incomplete-coverage count).
+- [x] `market_prices` dataset frame: covers every captured market (not filtered to the settlement map), `data_quality_status` distinguishing zero-volume quote-only periods from trades, settlement-label columns joined per market, no future/settlement leakage (tested), `MARKET_PRICES_SCHEMA_VERSION` in manifests.
+- [x] Coverage and validation (`prices coverage`): measured markets attempted/captured/complete, candle counts, coverage by event-date/variable, missing-interval detection, age-inferred (never assumed) retention-loss detection, duplicate count (structurally zero), settlement-label overlap.
+- [x] Full test suite (unit: parsing, chunking, dedup, resumability, all six outcomes, repository queries, dataset joins, no-leakage, migration round-trip); 284 passed, 4 skipped; `ruff check .` and `mypy src` clean.
+- [x] **Live-verified, 2026-07-21**: full backfill over all 804 discoverable settled markets — 804/804 `complete`, 0 failures of any kind, 761,475 candles saved, 0 duplicates; coverage report agrees with backfill totals exactly; 12-market stratified live-API sample matched stored counts exactly (12/12).
+- [x] H0007 readiness artifact (report only, H0007 not run): `docs/research/2026-07-21-h0007-readiness.md`.
+
 ### Milestone 4b — Research operations (Phase 6 of the working plan; complete)
 
 Makes the platform run reliably for months with minimal intervention — see `docs/runbooks/operations.md`.

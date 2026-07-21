@@ -25,6 +25,7 @@ def _sources(**overrides: pl.DataFrame) -> B.SourceFrames:
         "trades": _empty(B.TRADES_SCHEMA),
         "forecasts": _empty(B.FORECASTS_SCHEMA),
         "observations": _empty(B.OBSERVATIONS_SCHEMA),
+        "candlesticks": _empty(B.CANDLESTICKS_SCHEMA),
     }
     base.update(overrides)
     return B.SourceFrames(**base)  # type: ignore[arg-type]

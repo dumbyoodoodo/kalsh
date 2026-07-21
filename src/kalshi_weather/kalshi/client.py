@@ -18,6 +18,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from kalshi_weather.config import Environment
 from kalshi_weather.kalshi import auth
 from kalshi_weather.kalshi.models import (
+    Candlestick,
+    CandlestickListResponse,
     Event,
     EventListResponse,
     Market,
@@ -34,6 +36,13 @@ from kalshi_weather.kalshi.pagination import paginate
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE_SECONDS = 0.5
+#: Kalshi's candlestick endpoint rejects a request spanning more than 5,000
+#: candles at the requested resolution (observed live: a 5,760-minute window
+#: at period_interval=1 returned "max candlesticks: 5000" --
+#: docs/research/investigations/INV-20260721-price-history-recovery.md).
+#: Kept below the observed cap for headroom; only bites at period_interval=1
+#: over windows longer than ~3.4 days.
+MAX_CANDLES_PER_REQUEST = 4900
 #: Minimum spacing between consecutive requests on one client, matching the
 #: 100ms threshold in Kalshi's own kalshi-starter-code-python reference
 #: client. Confirmed live that firing requests back-to-back with no spacing
@@ -278,3 +287,42 @@ class KalshiClient:
             return parsed.trades, parsed.cursor
 
         return [item async for item in paginate(fetch_page)]
+
+    async def list_candlesticks(
+        self,
+        *,
+        series_ticker: str,
+        ticker: str,
+        start_ts: int,
+        end_ts: int,
+        period_interval: int,
+    ) -> list[Candlestick]:
+        """Fetch OHLC candlestick history for one market across
+        [start_ts, end_ts] (Unix seconds, inclusive), at `period_interval`
+        minutes (1, 60, and 1440 confirmed live -- see the investigation
+        report). The endpoint has no cursor of its own, so a range wider than
+        `MAX_CANDLES_PER_REQUEST` candles is split into consecutive,
+        non-overlapping sub-requests here -- this is range-chunking, not the
+        cursor-based `paginate()` helper used elsewhere, because Kalshi
+        provides no continuation token for this endpoint."""
+        if start_ts > end_ts:
+            raise ValueError(f"start_ts {start_ts} is after end_ts {end_ts}")
+        max_span_seconds = MAX_CANDLES_PER_REQUEST * period_interval * 60
+
+        candles: list[Candlestick] = []
+        chunk_start = start_ts
+        while chunk_start <= end_ts:
+            chunk_end = min(chunk_start + max_span_seconds, end_ts)
+            payload = await self._request(
+                "GET",
+                f"/series/{series_ticker}/markets/{ticker}/candlesticks",
+                params={
+                    "start_ts": chunk_start,
+                    "end_ts": chunk_end,
+                    "period_interval": period_interval,
+                },
+            )
+            parsed = CandlestickListResponse.model_validate(payload)
+            candles.extend(parsed.candlesticks)
+            chunk_start = chunk_end + 1
+        return candles

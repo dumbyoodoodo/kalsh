@@ -153,6 +153,42 @@ Implemented in `ops/` and `ingestion/backfill.py` (Phase 6, `docs/runbooks/opera
 - **Chunked resumable backfill** (`weather backfill`): per-chunk commits, partial-failure isolation with explicit failed-chunk reporting, covered-chunk skipping for cheap resume.
 - **Research snapshots** (`ops snapshot`): the Milestone 4 versioned dataset export plus `quality.json` and `ops.json` sidecars — a daily, immutable, fully self-describing research artifact.
 
+### Price ingestion
+
+Implemented in `ingestion/price_backfill.py` and `ops/price_coverage.py`
+(Phase 7A, `docs/adr/0007-price-ingestion.md`). Recovers and preserves
+historical Kalshi candlestick data (1-minute OHLC trade prices, OHLC bid/ask
+quotes, volume, open interest) for every settled weather market, independent
+of the live snapshot collector — whose intraday depth is effectively zero,
+since it has only run in short bursts to date.
+
+- **Backfill** (`prices backfill`): resumable, oldest-`close_time`-first over
+  every discoverable settled market; one market per commit; six per-attempt
+  outcomes (`complete`/`partial`/`no_price_data`/`expired`/`api_failure`/
+  `unsupported`) — a market is never silently dropped. `--skip-covered`
+  (default) makes reruns free once complete.
+- **Continuous sync**: a third task in the existing `ops run` supervised
+  loop (`run_price_sync_loop`), recorded under `collector="prices"` — no new
+  scheduler, reusing the same restart-recovery-via-stored-data pattern as the
+  other two collectors.
+- **Coverage and retention monitoring** (`prices coverage`, and a
+  `price_retention` block in `ops health`): measured (never estimated)
+  coverage by market/event-date/variable, missing-interval detection within a
+  market's own observed span, and age-inferred (never assumed) retention-loss
+  detection against Kalshi's rolling ~67-day discoverability window — an
+  empirical finding from this phase, stored as a configurable setting rather
+  than a hardcoded guarantee.
+- `market_candlesticks` is additive (migration `0007`), unique on
+  `(market_ticker, period_interval_seconds, period_end)` so reruns can never
+  overwrite; `data_quality_status` on the derived dataset frame distinguishes
+  a quote-only zero-volume period from an executed trade.
+
+Always targets Kalshi's production environment regardless of
+`settings.kalshi_env` — every weather market this project has ever collected
+came from production's public category, unauthenticated (see the ADR).
+Explicitly out of scope here: individual trade-level ticks, and anything
+downstream of "collect and preserve" (feature engineering, models, strategy).
+
 ### Probability model
 
 Version 1 should be simple and interpretable:

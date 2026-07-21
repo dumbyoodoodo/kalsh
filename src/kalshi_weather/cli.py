@@ -19,19 +19,21 @@ from typing import Any
 
 import typer
 from cryptography.hazmat.primitives.asymmetric import rsa
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kalshi_weather.config import Environment, Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
 from kalshi_weather.ingestion.backfill import run_backfill
 from kalshi_weather.ingestion.collector import run_collector_loop
+from kalshi_weather.ingestion.price_backfill import run_price_backfill, run_price_sync_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.logging import configure_logging, get_logger
 from kalshi_weather.ops.health import build_health_report
+from kalshi_weather.ops.price_coverage import build_price_coverage_report
 from kalshi_weather.ops.quality import run_quality_checks
 from kalshi_weather.ops.snapshot import create_snapshot, default_snapshot_version
 from kalshi_weather.settlement.parser import parse_settlement
@@ -65,6 +67,7 @@ weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
 dataset_app = typer.Typer(help="Build, validate, and export research datasets.")
 settlement_app = typer.Typer(help="Resolve markets to settlement specifications.")
 ops_app = typer.Typer(help="Operations: health, data quality, snapshots, combined runner.")
+prices_app = typer.Typer(help="Historical market price (candlestick) ingestion.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
@@ -73,6 +76,7 @@ app.add_typer(weather_app, name="weather")
 weather_app.add_typer(weather_stations_app, name="stations")
 app.add_typer(dataset_app, name="dataset")
 app.add_typer(settlement_app, name="settlement")
+app.add_typer(prices_app, name="prices")
 app.add_typer(ops_app, name="ops")
 
 
@@ -120,6 +124,47 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
         private_key=private_key,
         min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
         raw_payload_sink=raw_payload_sink,
+    )
+
+
+def _build_price_client(
+    settings: Settings, session_factory: async_sessionmaker[AsyncSession]
+) -> KalshiClient:
+    """Client for price_backfill.run_price_backfill, whose per-market writes
+    use their own short-lived sessions (one commit per market -- see
+    ingestion/price_backfill.py). The raw-payload sink mirrors that: it opens
+    its own mini-transaction per payload rather than sharing one long-lived
+    session, so raw rows are always committed before the normalized candle
+    rows that reference them (same FK-ordering rationale as weather_backfill's
+    sink -- see `weather_backfill` below).
+
+    Always targets **production**, regardless of `settings.kalshi_env`: a
+    market's candlestick/trade history only exists in the environment it was
+    discovered in, and every weather market this project has ever collected
+    -- including the entire settled-market archive price backfill runs
+    against -- has come from production's public "Climate and Weather"
+    category (confirmed live, docs/adr/0002-ingestion-collector.md), never
+    demo. No credentials are needed or used: candlestick data for a public
+    market is unauthenticated, same as every other read in this client."""
+    base_url = settings.base_url_for(Environment.PRODUCTION)
+
+    async def sink(source: str, endpoint: str, request_key: str, status: int, payload: Any) -> int:
+        async with session_scope(session_factory) as sink_session:
+            raw = await save_raw_payload(
+                sink_session,
+                source=source,
+                endpoint_or_channel=endpoint,
+                request_key=request_key,
+                http_status=status,
+                payload_json=payload,
+            )
+            return raw.id
+
+    return KalshiClient(
+        base_url=base_url,
+        environment=Environment.PRODUCTION,
+        min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
+        raw_payload_sink=sink,
     )
 
 
@@ -373,9 +418,7 @@ def weather_collect(
         resolved_backfill_days = (
             backfill_days if backfill_days is not None else settings.weather_backfill_days
         )
-        resolved_interval = (
-            interval if interval is not None else settings.weather_interval_seconds
-        )
+        resolved_interval = interval if interval is not None else settings.weather_interval_seconds
         logger.info(
             "weather_collector.starting",
             once=once,
@@ -442,7 +485,9 @@ def _echo_summary(output: dataset_pipeline.BuildOutput) -> None:
 
 @dataset_app.command("build")
 def dataset_build(
-    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    which: str = typer.Option(
+        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+    ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
     version: str | None = typer.Option(None, help="Dataset version (default: UTC timestamp)."),
@@ -458,7 +503,10 @@ def dataset_build(
         configure_logging(settings.log_level)
         resolved_version = version or default_version()
         output = await _build_dataset(
-            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            settings,
+            which=which,
+            start=_parse_date(start),
+            end=_parse_date(end),
             version=resolved_version,
         )
         _echo_summary(output)
@@ -476,7 +524,9 @@ def dataset_build(
 
 @dataset_app.command("validate")
 def dataset_validate(
-    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    which: str = typer.Option(
+        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+    ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
 ) -> None:
@@ -486,7 +536,10 @@ def dataset_validate(
     async def run() -> None:
         settings = get_settings()
         output = await _build_dataset(
-            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            settings,
+            which=which,
+            start=_parse_date(start),
+            end=_parse_date(end),
             version="validate",
         )
         typer.echo(json.dumps(output.validation.to_dict(), indent=2, default=str))
@@ -498,7 +551,9 @@ def dataset_validate(
 
 @dataset_app.command("stats")
 def dataset_stats(
-    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    which: str = typer.Option(
+        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+    ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
 ) -> None:
@@ -507,7 +562,10 @@ def dataset_stats(
     async def run() -> None:
         settings = get_settings()
         output = await _build_dataset(
-            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            settings,
+            which=which,
+            start=_parse_date(start),
+            end=_parse_date(end),
             version="stats",
         )
         typer.echo(json.dumps(output.stats, indent=2, default=str))
@@ -517,7 +575,9 @@ def dataset_stats(
 
 @dataset_app.command("export")
 def dataset_export(
-    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    which: str = typer.Option(
+        "all", help="Dataset to build: all|weather_panel|market_weather|market_prices."
+    ),
     start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
     end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
     version: str | None = typer.Option(None, help="Dataset version (default: UTC timestamp)."),
@@ -530,7 +590,10 @@ def dataset_export(
         settings = get_settings()
         resolved_version = version or default_version()
         output = await _build_dataset(
-            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            settings,
+            which=which,
+            start=_parse_date(start),
+            end=_parse_date(end),
             version=resolved_version,
         )
         root = Path(output_root) if output_root else settings.dataset_root
@@ -682,6 +745,7 @@ def weather_backfill(
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop_event.set)
+
         # The raw-payload sink commits each payload in its own small
         # transaction, so per-chunk observation commits (run_backfill uses
         # separate sessions) always reference already-committed raw rows --
@@ -729,6 +793,93 @@ def weather_backfill(
     asyncio.run(run())
 
 
+@prices_app.command("backfill")
+def prices_backfill(
+    ticker: str | None = typer.Option(
+        None, "--ticker", help="Backfill only these market ticker(s), comma-separated."
+    ),
+    event: str | None = typer.Option(None, "--event", help="Backfill only this event_ticker."),
+    start: str | None = typer.Option(
+        None, "--start", help="Inclusive close-date lower bound (YYYY-MM-DD)."
+    ),
+    end: str | None = typer.Option(
+        None, "--end", help="Inclusive close-date upper bound (YYYY-MM-DD)."
+    ),
+    resolution: int | None = typer.Option(
+        None, "--resolution", help="Candle resolution in minutes (default: settings/env)."
+    ),
+    limit: int | None = typer.Option(None, "--limit", help="Cap the number of markets attempted."),
+    skip_covered: bool = typer.Option(
+        True,
+        "--skip-covered/--no-skip-covered",
+        help="Skip markets whose candle coverage already reaches close (resume).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Classify without writing to the database."
+    ),
+) -> None:
+    """Historical price (candlestick) backfill over settled markets, oldest
+    close_time first (the rolling retention window makes the oldest markets
+    the highest risk). See docs/runbooks/price_ingestion.md."""
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        resolved_resolution = resolution or settings.price_candle_resolution_minutes
+        try:
+            client = _build_price_client(settings, session_factory)
+            async with client:
+                report = await run_price_backfill(
+                    session_factory=session_factory,
+                    client=client,
+                    tickers=[t.strip() for t in ticker.split(",")] if ticker else None,
+                    event_ticker=event,
+                    start_date=date.fromisoformat(start) if start else None,
+                    end_date=date.fromisoformat(end) if end else None,
+                    resolution_minutes=resolved_resolution,
+                    limit=limit,
+                    skip_covered=skip_covered,
+                    dry_run=dry_run,
+                )
+        finally:
+            await engine.dispose()
+
+        typer.echo(json.dumps(report.totals(), indent=2))
+        for r in report.failed:
+            typer.echo(f"FAILED {r.market_ticker}: {r.error}", err=True)
+        if not report.ok:
+            typer.echo("re-run the same command to retry failed markets", err=True)
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@prices_app.command("coverage")
+def prices_coverage(
+    resolution: int | None = typer.Option(
+        None, "--resolution", help="Candle resolution in minutes (default: settings/env)."
+    ),
+) -> None:
+    """Measured price-coverage report: markets attempted/captured, candle
+    counts, coverage by event date/variable, missing intervals, markets
+    likely lost to retention, and duplicate/settlement-label checks. Every
+    number is a real query result -- see docs/runbooks/price_ingestion.md."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            report = await build_price_coverage_report(
+                session,
+                resolution_minutes=resolution or settings.price_candle_resolution_minutes,
+                observed_retention_days=settings.price_observed_retention_days,
+            )
+        typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+
+    asyncio.run(run())
+
+
 @ops_app.command("quality")
 def ops_quality() -> None:
     """Run data-quality checks against the store; exit non-zero on errors."""
@@ -758,6 +909,10 @@ def ops_health(
                 kalshi_interval_seconds=settings.collector_interval_seconds,
                 weather_interval_seconds=settings.weather_interval_seconds,
                 stale_after_intervals=settings.ops_stale_after_intervals,
+                price_sync_interval_seconds=settings.price_sync_interval_seconds,
+                price_resolution_minutes=settings.price_candle_resolution_minutes,
+                price_observed_retention_days=settings.price_observed_retention_days,
+                price_retention_warning_buffer_days=settings.price_retention_warning_buffer_days,
             )
         if as_json:
             typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
@@ -786,6 +941,14 @@ def ops_health(
                 f"completeness {sid}: {info['observation_days']} days, "
                 f"range {info['range'] or '-'}, coverage {info['coverage']}"
             )
+        pr = report.price_retention
+        oldest = pr["oldest_uncaptured_market"]
+        typer.echo(
+            "price retention: oldest_uncaptured="
+            + (f"{oldest['market_ticker']} ({oldest['age_days']}d)" if oldest else "-")
+            + f" nearing_expiry={pr['markets_nearing_expiry']}"
+            f" incomplete_coverage={pr['markets_incomplete_coverage']}"
+        )
         typer.echo(
             f"quality: {'OK' if report.quality_ok else 'ERRORS'} "
             + json.dumps(report.quality_counts)
@@ -830,9 +993,16 @@ def ops_snapshot(
 def ops_run(
     kalshi_interval: float | None = typer.Option(None, help="Kalshi cycle interval seconds."),
     weather_interval: float | None = typer.Option(None, help="Weather cycle interval seconds."),
+    price_sync_interval: float | None = typer.Option(
+        None, help="Price sync cycle interval seconds."
+    ),
 ) -> None:
-    """Run both collectors concurrently in one supervised process (the
-    recommended long-running deployment; see docs/runbooks/operations.md)."""
+    """Run the Kalshi, weather, and price-sync collectors concurrently in one
+    supervised process (the recommended long-running deployment; see
+    docs/runbooks/operations.md). Price sync is a bounded, oldest-first pass
+    over newly-settled markets each cycle -- this is what keeps candlestick
+    history from aging out of the rolling retention window uncaptured (see
+    docs/research/investigations/INV-20260721-price-history-recovery.md)."""
 
     async def run() -> None:
         settings = get_settings()
@@ -848,6 +1018,7 @@ def ops_run(
             "ops.run.starting",
             kalshi_interval=kalshi_interval or settings.collector_interval_seconds,
             weather_interval=weather_interval or settings.weather_interval_seconds,
+            price_sync_interval=price_sync_interval or settings.price_sync_interval_seconds,
         )
         try:
             await asyncio.gather(
@@ -865,6 +1036,14 @@ def ops_run(
                     stations=None,
                     backfill_days=settings.weather_backfill_days,
                     interval_seconds=weather_interval or settings.weather_interval_seconds,
+                    stop_event=stop_event,
+                ),
+                run_price_sync_loop(
+                    session_factory=session_factory,
+                    client_factory=lambda: _build_price_client(settings, session_factory),
+                    resolution_minutes=settings.price_candle_resolution_minutes,
+                    limit_per_cycle=settings.price_sync_limit_per_cycle,
+                    interval_seconds=price_sync_interval or settings.price_sync_interval_seconds,
                     stop_event=stop_event,
                 ),
             )

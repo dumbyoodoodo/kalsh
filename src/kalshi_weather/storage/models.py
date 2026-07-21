@@ -357,3 +357,72 @@ class CollectorRun(Base):
     stats_json: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
     error: Mapped[str | None] = mapped_column(Text)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+
+
+class MarketCandlestick(Base):
+    """One OHLC candle for a market at a given resolution (Phase 7A price
+    ingestion, docs/adr/0007-price-ingestion.md).
+
+    Append-only and immutable once the period has elapsed: unlike weather CLI
+    reports, Kalshi's candlestick endpoint does not revise past candles (an
+    already-elapsed period is a closed historical fact) -- confirmed by the
+    absence of any revision/versioning field in the wire format. Natural key
+    is (market_ticker, period_interval_seconds, period_end); a re-fetch of an
+    already-stored candle is a no-op skip, never an overwrite.
+
+    Prices are stored as integer cents (CLAUDE.md: never binary floats for
+    money), converted from Kalshi's decimal-dollar wire strings the same way
+    `Market`/`Trade` already do. `price_*` reflects the last TRADED price for
+    the period; `yes_bid_*`/`yes_ask_*` reflect quoted OHLC and remain
+    populated even when the period had zero trading volume -- `volume == 0`
+    is the authoritative "no trade occurred" signal; `price_close_cents`
+    alone must never be read as evidence a trade happened (see
+    `price_close_is_carried_forward`).
+    """
+
+    __tablename__ = "market_candlesticks"
+    __table_args__ = (
+        Index(
+            "ix_market_candlesticks_dedup",
+            "market_ticker",
+            "period_interval_seconds",
+            "period_end",
+            unique=True,
+        ),
+        Index(
+            "ix_market_candlesticks_lookup",
+            "market_ticker",
+            "period_interval_seconds",
+            "period_end",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    period_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    period_start: Mapped[datetime] = mapped_column(nullable=False)
+    period_end: Mapped[datetime] = mapped_column(nullable=False)
+    price_open_cents: Mapped[int | None] = mapped_column(Integer)
+    price_high_cents: Mapped[int | None] = mapped_column(Integer)
+    price_low_cents: Mapped[int | None] = mapped_column(Integer)
+    price_close_cents: Mapped[int | None] = mapped_column(Integer)
+    price_mean_cents: Mapped[int | None] = mapped_column(Integer)
+    # True when the API's own price.close_dollars was absent (zero-volume
+    # period) and price_close_cents was filled from price.previous_dollars
+    # instead -- a backward-looking carry-forward already known at this
+    # period's own timestamp, never a future value. See ingestion/price_backfill.py.
+    price_close_is_carried_forward: Mapped[bool] = mapped_column(nullable=False, default=False)
+    yes_bid_open_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_bid_high_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_bid_low_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_bid_close_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_open_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_high_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_low_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_close_cents: Mapped[int | None] = mapped_column(Integer)
+    volume: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    open_interest: Mapped[int | None] = mapped_column(Integer)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)

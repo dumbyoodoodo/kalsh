@@ -30,6 +30,7 @@ from kalshi_weather.dataset.market_map import MarketMapping
 from kalshi_weather.dataset.pit import local_date
 from kalshi_weather.domain.time import to_utc
 from kalshi_weather.storage.models import (
+    MarketCandlestick,
     MarketSnapshot,
     OrderbookSnapshot,
     TradeRecord,
@@ -44,6 +45,11 @@ from kalshi_weather.storage.models import (
 
 _DT = pl.Datetime("us")
 
+#: Bumped whenever build_market_prices's column layout or join logic changes
+#: meaning -- recorded in the dataset manifest (dataset/pipeline.py) so a
+#: consumer can tell which version of the frame's semantics produced it.
+MARKET_PRICES_SCHEMA_VERSION = "1"
+
 STATIONS_SCHEMA: dict[str, Any] = {"station_id": pl.Utf8, "timezone": pl.Utf8}
 MARKETS_SCHEMA: dict[str, Any] = {
     "market_ticker": pl.Utf8,
@@ -56,6 +62,41 @@ MARKETS_SCHEMA: dict[str, Any] = {
     "open_interest": pl.Int64,
     "rules_primary": pl.Utf8,
     "observed_at": _DT,
+    "raw_payload_id": pl.Int64,
+    # Settlement fields (migration 0006, docs/adr/0006-settlement-labels.md)
+    # -- collected since Milestone E-A but not previously surfaced to the
+    # Polars layer. Only populated on a market's later snapshots once it
+    # settles; `build_market_prices` reduces the many snapshot rows per
+    # ticker down to one static row before using these.
+    "close_time": _DT,
+    "result": pl.Utf8,
+    "expiration_value": pl.Float64,
+    "settlement_ts": _DT,
+    "floor_strike": pl.Float64,
+    "cap_strike": pl.Float64,
+    "strike_type": pl.Utf8,
+}
+CANDLESTICKS_SCHEMA: dict[str, Any] = {
+    "market_ticker": pl.Utf8,
+    "period_interval_seconds": pl.Int64,
+    "period_start": _DT,
+    "period_end": _DT,
+    "price_open_cents": pl.Int64,
+    "price_high_cents": pl.Int64,
+    "price_low_cents": pl.Int64,
+    "price_close_cents": pl.Int64,
+    "price_mean_cents": pl.Int64,
+    "price_close_is_carried_forward": pl.Boolean,
+    "yes_bid_open_cents": pl.Int64,
+    "yes_bid_high_cents": pl.Int64,
+    "yes_bid_low_cents": pl.Int64,
+    "yes_bid_close_cents": pl.Int64,
+    "yes_ask_open_cents": pl.Int64,
+    "yes_ask_high_cents": pl.Int64,
+    "yes_ask_low_cents": pl.Int64,
+    "yes_ask_close_cents": pl.Int64,
+    "volume": pl.Int64,
+    "open_interest": pl.Int64,
     "raw_payload_id": pl.Int64,
 }
 ORDERBOOKS_SCHEMA: dict[str, Any] = {
@@ -97,6 +138,7 @@ class SourceFrames:
     trades: pl.DataFrame
     forecasts: pl.DataFrame
     observations: pl.DataFrame
+    candlesticks: pl.DataFrame
 
 
 def _ensure_aware_utc(value: datetime) -> datetime:
@@ -155,6 +197,15 @@ async def load_source_frames(
                 "rules_primary": m.rules_primary,
                 "observed_at": observed,
                 "raw_payload_id": m.raw_payload_id,
+                "close_time": _naive_utc(m.close_time),
+                "result": m.result,
+                "expiration_value": float(m.expiration_value)
+                if m.expiration_value is not None
+                else None,
+                "settlement_ts": _naive_utc(m.settlement_ts),
+                "floor_strike": float(m.floor_strike) if m.floor_strike is not None else None,
+                "cap_strike": float(m.cap_strike) if m.cap_strike is not None else None,
+                "strike_type": m.strike_type,
             }
         )
     markets_frame = pl.DataFrame(market_rows, schema=MARKETS_SCHEMA, orient="row")
@@ -225,6 +276,35 @@ async def load_source_frames(
         )
     observations_frame = pl.DataFrame(observation_rows, schema=OBSERVATIONS_SCHEMA, orient="row")
 
+    candlestick_rows = [
+        {
+            "market_ticker": c.market_ticker,
+            "period_interval_seconds": c.period_interval_seconds,
+            "period_start": _naive_utc(c.period_start),
+            "period_end": _naive_utc(c.period_end),
+            "price_open_cents": c.price_open_cents,
+            "price_high_cents": c.price_high_cents,
+            "price_low_cents": c.price_low_cents,
+            "price_close_cents": c.price_close_cents,
+            "price_mean_cents": c.price_mean_cents,
+            "price_close_is_carried_forward": c.price_close_is_carried_forward,
+            "yes_bid_open_cents": c.yes_bid_open_cents,
+            "yes_bid_high_cents": c.yes_bid_high_cents,
+            "yes_bid_low_cents": c.yes_bid_low_cents,
+            "yes_bid_close_cents": c.yes_bid_close_cents,
+            "yes_ask_open_cents": c.yes_ask_open_cents,
+            "yes_ask_high_cents": c.yes_ask_high_cents,
+            "yes_ask_low_cents": c.yes_ask_low_cents,
+            "yes_ask_close_cents": c.yes_ask_close_cents,
+            "volume": c.volume,
+            "open_interest": c.open_interest,
+            "raw_payload_id": c.raw_payload_id,
+        }
+        for c in (await session.scalars(select(MarketCandlestick))).all()
+        if c.market_ticker in known_tickers
+    ]
+    candlesticks_frame = pl.DataFrame(candlestick_rows, schema=CANDLESTICKS_SCHEMA, orient="row")
+
     return SourceFrames(
         stations=stations_frame,
         markets=markets_frame,
@@ -232,6 +312,7 @@ async def load_source_frames(
         trades=trades_frame,
         forecasts=forecasts_frame,
         observations=observations_frame,
+        candlesticks=candlesticks_frame,
     )
 
 
@@ -538,6 +619,55 @@ def build_observation_issuances(sources: SourceFrames) -> pl.DataFrame:
     )
 
 
+def _market_metadata(sources: SourceFrames) -> pl.DataFrame:
+    """One row per market ticker: the static context (event, close time,
+    strike structure) reduced from the many append-only snapshot rows per
+    ticker. Settlement fields only appear on a market's *later* snapshots
+    (once it settles) and are null before that, so `drop_nulls().last()`
+    (chronological) picks the most recent known value per field rather than
+    assuming the very last snapshot row has everything populated."""
+    if sources.markets.height == 0:
+        return sources.markets.select(
+            "market_ticker", "event_ticker", "close_time",
+            "floor_strike", "cap_strike", "strike_type",
+        )
+    return (
+        sources.markets.sort("observed_at")
+        .group_by("market_ticker")
+        .agg(
+            event_ticker=pl.col("event_ticker").drop_nulls().last(),
+            close_time=pl.col("close_time").drop_nulls().last(),
+            floor_strike=pl.col("floor_strike").drop_nulls().last(),
+            cap_strike=pl.col("cap_strike").drop_nulls().last(),
+            strike_type=pl.col("strike_type").drop_nulls().last(),
+        )
+    )
+
+
+def build_market_prices(sources: SourceFrames) -> pl.DataFrame:
+    """Per candle: OHLC/volume/open-interest plus static per-market context
+    (event, strike structure). One row per stored candle -- no as-of join is
+    needed here (unlike market_weather) since each candle already carries
+    its own timestamp; point-in-time filtering (e.g. "candles at or before
+    decision time T") is the consumer's job, not this frame's. Settlement
+    labels (station_id/variable/target_date/value_at_close/
+    value_at_settlement/...) are joined on separately in pipeline.py, reusing
+    the same labels frame market_weather already builds -- see
+    docs/adr/0007-price-ingestion.md."""
+    if sources.candlesticks.height == 0:
+        return sources.candlesticks.join(
+            _market_metadata(sources), on="market_ticker", how="left"
+        )
+    result = sources.candlesticks.join(
+        _market_metadata(sources), on="market_ticker", how="left"
+    )
+    return result.with_columns(
+        data_quality_status=pl.when(pl.col("volume") == 0)
+        .then(pl.lit("zero_volume"))
+        .otherwise(pl.lit("ok"))
+    ).sort(["market_ticker", "period_end"])
+
+
 def build_datasets(
     sources: SourceFrames,
     mappings: list[MarketMapping],
@@ -545,7 +675,7 @@ def build_datasets(
     which: str = "all",
 ) -> BuiltDataset:
     """Build the requested dataset(s). ``which`` is 'all', 'weather_panel',
-    'market_weather', or 'observation_issuances'."""
+    'market_weather', 'observation_issuances', or 'market_prices'."""
     frames: dict[str, pl.DataFrame] = {}
     if which in ("all", "weather_panel"):
         frames["weather_panel"] = build_weather_panel(sources)
@@ -553,6 +683,8 @@ def build_datasets(
         frames["market_weather"] = build_market_weather(sources, mappings)
     if which in ("all", "observation_issuances"):
         frames["observation_issuances"] = build_observation_issuances(sources)
+    if which in ("all", "market_prices"):
+        frames["market_prices"] = build_market_prices(sources)
     if not frames:
         raise ValueError(f"unknown dataset selection {which!r}")
     return BuiltDataset(frames=frames)

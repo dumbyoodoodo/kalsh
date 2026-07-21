@@ -88,6 +88,7 @@ def _sources(**overrides: pl.DataFrame) -> B.SourceFrames:
         "trades": _empty(B.TRADES_SCHEMA),
         "forecasts": _forecasts(),
         "observations": _observations(),
+        "candlesticks": _empty(B.CANDLESTICKS_SCHEMA),
     }
     base.update(overrides)
     return B.SourceFrames(**base)  # type: ignore[arg-type]
@@ -174,16 +175,20 @@ def test_empty_sources_build_without_error() -> None:
         _empty(B.TRADES_SCHEMA),
         _empty(B.FORECASTS_SCHEMA),
         _empty(B.OBSERVATIONS_SCHEMA),
+        _empty(B.CANDLESTICKS_SCHEMA),
     )
     assert B.build_weather_panel(empty).height == 0
     assert B.build_market_weather(empty, []).height == 0
+    assert B.build_market_prices(empty).height == 0
 
 
 def test_build_datasets_selection() -> None:
     built = B.build_datasets(_sources(), [], which="weather_panel")
     assert set(built.frames) == {"weather_panel"}
     built_all = B.build_datasets(_sources(markets=_markets()), [], which="all")
-    assert set(built_all.frames) == {"weather_panel", "market_weather", "observation_issuances"}
+    assert set(built_all.frames) == {
+        "weather_panel", "market_weather", "observation_issuances", "market_prices",
+    }
 
 
 def test_observation_issuances_frame_is_verbatim_passthrough() -> None:

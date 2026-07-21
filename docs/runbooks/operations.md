@@ -3,23 +3,27 @@
 How to run, monitor, back-fill, and recover the research data platform for
 months of unattended operation. Phase 6 of `TASKS.md`; complements the
 per-component runbooks (`collector.md`, `weather_collector.md`,
-`settlement.md`, `dataset.md`).
+`settlement.md`, `dataset.md`, `price_ingestion.md`).
 
 ## Starting collectors
 
-The recommended long-running deployment is the combined runner -- both
-collectors (Kalshi markets + weather) concurrently in one supervised process:
+The recommended long-running deployment is the combined runner -- three
+collectors (Kalshi markets, weather, and historical prices) concurrently in
+one supervised process:
 
 ```bash
 uv run kalshi-weather ops run
 ```
 
 Intervals come from `.env` (`COLLECTOR_INTERVAL_SECONDS`,
-`WEATHER_INTERVAL_SECONDS`) or `--kalshi-interval`/`--weather-interval`.
-Request pacing is configurable (`KALSHI_MIN_REQUEST_INTERVAL_SECONDS`,
+`WEATHER_INTERVAL_SECONDS`, `PRICE_SYNC_INTERVAL_SECONDS`, default 1800s) or
+`--kalshi-interval`/`--weather-interval`/`--price-sync-interval`. Request
+pacing is configurable (`KALSHI_MIN_REQUEST_INTERVAL_SECONDS`,
 `WEATHER_MIN_REQUEST_INTERVAL_SECONDS`). The individual collectors
-(`collector run`, `weather collect`) remain available for running components
-separately.
+(`collector run`, `weather collect`, `prices backfill`) remain available for
+running components separately — see `docs/runbooks/price_ingestion.md` for
+the price collector specifically (initial backfill, retention monitoring,
+coverage verification).
 
 Under systemd (recommended for months-long operation):
 
@@ -78,9 +82,12 @@ uv run kalshi-weather ops quality         # data-quality checks; exit 1 on error
 ```
 
 `ops health` shows: collector liveness (STALE = last run older than
-`OPS_STALE_AFTER_INTERVALS` x its interval, or never run), newest data
-timestamps per table, database size, station/settlement coverage,
-per-station observation completeness, and the quality summary.
+`OPS_STALE_AFTER_INTERVALS` x its interval, or never run) for all three
+collectors (`kalshi`, `weather`, `prices`), newest data timestamps per table,
+database size, station/settlement coverage, per-station observation
+completeness, price retention risk (oldest uncaptured market, markets
+nearing the ~67-day discoverability cutoff, incomplete-coverage count — see
+`docs/runbooks/price_ingestion.md`), and the quality summary.
 
 `ops quality` checks: schema revision vs code expectation (error),
 natural-key duplicates (error -- should be impossible), future timestamps

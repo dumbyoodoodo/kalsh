@@ -20,6 +20,7 @@ from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.storage.models import (
     CollectorRun,
     EventRecord,
+    MarketCandlestick,
     MarketSnapshot,
     OrderbookSnapshot,
     RawApiPayload,
@@ -645,3 +646,153 @@ async def get_recent_collector_runs(
         stmt = stmt.where(CollectorRun.collector == collector)
     rows = await session.scalars(stmt)
     return list(rows.all())
+
+
+async def save_market_candlestick(
+    session: AsyncSession,
+    *,
+    market_ticker: str,
+    series_ticker: str,
+    period_interval_seconds: int,
+    period_start: datetime,
+    period_end: datetime,
+    price_open_cents: int | None,
+    price_high_cents: int | None,
+    price_low_cents: int | None,
+    price_close_cents: int | None,
+    price_mean_cents: int | None,
+    price_close_is_carried_forward: bool,
+    yes_bid_open_cents: int | None,
+    yes_bid_high_cents: int | None,
+    yes_bid_low_cents: int | None,
+    yes_bid_close_cents: int | None,
+    yes_ask_open_cents: int | None,
+    yes_ask_high_cents: int | None,
+    yes_ask_low_cents: int | None,
+    yes_ask_close_cents: int | None,
+    volume: int,
+    open_interest: int | None,
+    raw_payload_id: int | None,
+) -> SaveResult[MarketCandlestick]:
+    """Insert a candle, unless this exact (market, resolution, period_end)
+    is already stored -- candles are immutable once elapsed (Kalshi's
+    endpoint never revises a past period), so a repeat fetch is a duplicate,
+    never an overwrite."""
+    existing = await session.scalar(
+        select(MarketCandlestick).where(
+            MarketCandlestick.market_ticker == market_ticker,
+            MarketCandlestick.period_interval_seconds == period_interval_seconds,
+            MarketCandlestick.period_end == period_end,
+        )
+    )
+    if existing is not None:
+        return SaveResult(record=existing, was_duplicate=True)
+
+    record = MarketCandlestick(
+        market_ticker=market_ticker,
+        series_ticker=series_ticker,
+        period_interval_seconds=period_interval_seconds,
+        period_start=period_start,
+        period_end=period_end,
+        price_open_cents=price_open_cents,
+        price_high_cents=price_high_cents,
+        price_low_cents=price_low_cents,
+        price_close_cents=price_close_cents,
+        price_mean_cents=price_mean_cents,
+        price_close_is_carried_forward=price_close_is_carried_forward,
+        yes_bid_open_cents=yes_bid_open_cents,
+        yes_bid_high_cents=yes_bid_high_cents,
+        yes_bid_low_cents=yes_bid_low_cents,
+        yes_bid_close_cents=yes_bid_close_cents,
+        yes_ask_open_cents=yes_ask_open_cents,
+        yes_ask_high_cents=yes_ask_high_cents,
+        yes_ask_low_cents=yes_ask_low_cents,
+        yes_ask_close_cents=yes_ask_close_cents,
+        volume=volume,
+        open_interest=open_interest,
+        raw_payload_id=raw_payload_id,
+        observed_at=utc_now(),
+    )
+    session.add(record)
+    await session.flush()
+    return SaveResult(record=record, was_duplicate=False)
+
+
+async def get_latest_candlestick_period_end(
+    session: AsyncSession, market_ticker: str, period_interval_seconds: int
+) -> datetime | None:
+    """Latest stored candle's period_end for a market/resolution -- used to
+    decide whether a market's coverage already reaches its settlement close
+    (skip-covered resume logic in ingestion/price_backfill.py)."""
+    result: datetime | None = await session.scalar(
+        select(MarketCandlestick.period_end)
+        .where(
+            MarketCandlestick.market_ticker == market_ticker,
+            MarketCandlestick.period_interval_seconds == period_interval_seconds,
+        )
+        .order_by(MarketCandlestick.period_end.desc())
+        .limit(1)
+    )
+    return result
+
+
+async def get_candlestick_coverage(
+    session: AsyncSession, market_ticker: str, period_interval_seconds: int
+) -> dict[str, Any]:
+    """Count plus earliest/latest stored candle for a market/resolution --
+    the building block for coverage reports (ops/price_coverage.py)."""
+    row = (
+        await session.execute(
+            select(
+                func.count(MarketCandlestick.id),
+                func.min(MarketCandlestick.period_start),
+                func.max(MarketCandlestick.period_end),
+            ).where(
+                MarketCandlestick.market_ticker == market_ticker,
+                MarketCandlestick.period_interval_seconds == period_interval_seconds,
+            )
+        )
+    ).one()
+    count, earliest, latest = row
+    return {"candle_count": int(count or 0), "earliest": earliest, "latest": latest}
+
+
+async def list_candlesticks_for_market(
+    session: AsyncSession,
+    market_ticker: str,
+    period_interval_seconds: int,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> list[MarketCandlestick]:
+    """Stored candles for one market/resolution, optionally bounded by
+    period_end, oldest first -- used by the research dataset layer."""
+    stmt = (
+        select(MarketCandlestick)
+        .where(
+            MarketCandlestick.market_ticker == market_ticker,
+            MarketCandlestick.period_interval_seconds == period_interval_seconds,
+        )
+        .order_by(MarketCandlestick.period_end)
+    )
+    if start is not None:
+        stmt = stmt.where(MarketCandlestick.period_end >= start)
+    if end is not None:
+        stmt = stmt.where(MarketCandlestick.period_end <= end)
+    rows = await session.scalars(stmt)
+    return list(rows.all())
+
+
+async def get_candlestick_covered_tickers(
+    session: AsyncSession, period_interval_seconds: int
+) -> set[str]:
+    """Market tickers that have at least one stored candle at this
+    resolution -- the cheap 'already attempted' set the backfill job uses
+    for its default skip-covered pass (a stronger per-market completeness
+    check, comparing against market close_time, still runs per-market)."""
+    rows = await session.scalars(
+        select(MarketCandlestick.market_ticker)
+        .where(MarketCandlestick.period_interval_seconds == period_interval_seconds)
+        .distinct()
+    )
+    return set(rows.all())

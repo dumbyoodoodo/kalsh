@@ -42,7 +42,7 @@ Every experiment (a specific model, feature set, or strategy configuration evalu
 - the metrics defined in that hypothesis's experiment design, computed exactly as specified
 - date the experiment was run
 
-Where this is logged (a `docs/research/` directory, a lightweight local tracking tool, or something else) is an implementation decision for Phase 3/4, not fixed by this document — but whatever is chosen, an experiment result without these fields attached is not usable as evidence for or against a hypothesis.
+**Where this is logged (convention established 2026-07-21):** experiments live in `docs/research/experiments/`, one markdown file per experiment run, named `EXP-<YYYYMMDD>-<hypothesis-id>-<slug>.md` (e.g. `EXP-20260901-H0002-cli-revisions.md`). Each record contains, in order: hypothesis ID; dataset version(s) — meaning the Milestone 4 export's `manifest.json` `version` **and** its per-frame `content_hashes` (the version label alone is not sufficient; the hashes are what make a rebuild verifiable); the exact configuration (copied inline, not referenced); the git commit; the pre-registered metrics computed exactly as the hypothesis specified; and the date run. The corresponding `HYPOTHESES.md` entry's Results section links to the record. Research plans (what to test and in what order) are separate dated documents in `docs/research/` (e.g. `2026-07-21-research-plan.md`) — a plan is superseded by writing a new dated plan, never by rewriting an old one after results are known. An experiment result without these fields attached is not usable as evidence for or against a hypothesis.
 
 ## Evaluation methodology
 
@@ -96,6 +96,20 @@ Leakage is broader than look-ahead bias — it includes any channel by which inf
 - **Survivorship**: only including markets/series that existed for their full lifecycle, silently dropping markets that were delisted or never resolved.
 
 Milestone 4 ("Research dataset") includes explicit leakage tests; a new feature or join added later should extend those tests, not skip them.
+
+## Standard experiment protocol
+
+Every experiment, regardless of hypothesis, follows the same sequence. Steps 1-4 happen **before** any result is computed; this ordering is the p-hacking defense, not bureaucracy.
+
+1. **Pre-register.** The `HYPOTHESES.md` entry is complete through Metrics/Statistical tests/Failure modes, including the numeric confirm/reject decision rule, *before* the experiment code runs against real data. The entry is the registration — evaluation cells, event filters, horizon bands, and comparison counts named there are the only ones that can support a "confirmed."
+2. **Pin the dataset.** Build (or reuse) a versioned Milestone 4 export; record its manifest version + content hashes in the experiment record. If the experiment needs data the datasets don't carry, that's a platform gap to raise, not an excuse for an ad hoc query whose provenance can't be pinned.
+3. **Separate train from test temporally, always.** Random shuffles/splits are prohibited on this data. Fitting uses only data strictly before the evaluation window (walk-forward, expanding or rolling, per the section above), with a one-day embargo between fit and evaluation windows to keep same-day information (a forecast and its own outcome; overlapping market snapshots) from straddling the boundary.
+4. **State the baseline.** Every model-flavored claim is relative: to climatology (H0003), to the unconditioned model (H0004), to the market itself (H0006). An experiment without a named baseline measures nothing.
+5. **Run once, per the design.** Exploratory analysis is fine and encouraged — in a scratch notebook, labelled exploratory, and *its findings become a new hypothesis entry*, never a silent edit to the current one's decision rule.
+6. **Report uncertainty, not points.** Every headline metric carries a 95% CI — bootstrap by default, **clustered at the event-day level** for anything involving market snapshots (snapshots of one market-day are one observation's worth of independence, not fifty). Sample sizes (N days, N events, N markets — not N rows) appear next to every number.
+7. **Multiple comparisons are declared and paid for.** Scanning cells (stations × horizons × buckets) requires either pre-registering the one primary cell (others labelled exploratory), a family-wise correction (Bonferroni over the declared family), or both. Additionally, any "confirmed" that emerged from a family of comparisons must replicate on a temporally held-out later slice before the status changes — replication is the correction that actually matters.
+8. **Record and conclude.** Write the experiment record (convention above), update the hypothesis's Results/Conclusion against the pre-registered rule verbatim, and set Status. Inconclusive-for-sample-size states the sample it was short of and the date to retry — it is not a soft "confirmed."
+9. **Date every conclusion.** Market-behavior conclusions decay; a confirmed market hypothesis (H0005-H0010 family) carries a re-run date (default: +2 accumulation months). Weather-physics conclusions (H0002-H0004 family) are more durable but still name the data window they cover.
 
 ## Relationship to other documents
 

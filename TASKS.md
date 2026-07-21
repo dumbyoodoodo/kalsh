@@ -161,17 +161,30 @@ Establishes how research is conducted and recorded for every phase from here on.
       statistical significance, walk-forward validation, and leakage avoidance.
 - [x] Add `HYPOTHESES.md` with the hypothesis template and process.
 - [x] Add `ROADMAP.md` with the long-term version-numbered roadmap.
-- [ ] Establish the experiment-tracking convention in practice (where results
-      get logged, what "dataset version" means concretely, given the Parquet
-      manifests from Milestone 4).
-- [ ] Record the first hypothesis (or several) in `HYPOTHESES.md` for the
-      daily-temperature thesis in `STRATEGY_SPEC.md`, before any Phase 4/5 code
-      is written against it.
+- [x] Establish the experiment-tracking convention in practice (`RESEARCH.md`
+      "Experiment tracking": records in `docs/research/experiments/` named
+      `EXP-<date>-<hypothesis-id>-<slug>.md`; "dataset version" concretely means
+      the Milestone 4 manifest version **plus** its per-frame content hashes).
+- [x] Record the first hypothesis (or several) in `HYPOTHESES.md` for the
+      daily-temperature thesis (H0001 decomposed into H0003/H0005/H0006; H0002
+      and H0004-H0010 added — ten fully specified entries with pre-registered
+      decision rules, statistical tests, failure modes, and dependencies).
+- [x] Produce the research plan: data-platform review, prioritized research
+      questions, feature planning, and the recommended experiment sequence —
+      `docs/research/2026-07-21-research-plan.md`. First experiment: **H0002**
+      (CLI settlement-revision risk — the only hypothesis runnable today, with
+      a years-deep sample available via config-only observation backfill).
+- [x] Extend `RESEARCH.md` with the standard experiment protocol
+      (pre-registration, temporal separation with embargo, named baselines,
+      clustered bootstrap CIs, multiple-comparison policy with temporal
+      replication, dated conclusions).
 
 Acceptance criteria:
 
 - Every experiment from Phase 4 onward references a hypothesis ID (from
   `HYPOTHESES.md`) and a dataset version (from the Milestone 4 manifest).
+- No hypothesis reaches "Confirmed" without satisfying its own pre-registered
+  decision rule under the `RESEARCH.md` protocol.
 
 ---
 

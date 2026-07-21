@@ -8,10 +8,13 @@ command exists here or anywhere else in this milestone.
 """
 
 import asyncio
+import json
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -19,6 +22,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.config import Environment, Settings, get_settings
+from kalshi_weather.dataset import pipeline as dataset_pipeline
+from kalshi_weather.dataset.export import ExportFormat, default_version
+from kalshi_weather.dataset.market_map import load_market_map
 from kalshi_weather.ingestion.collector import run_collector_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
@@ -44,12 +50,14 @@ orderbook_app = typer.Typer(help="Inspect Kalshi order books.")
 collector_app = typer.Typer(help="Run the historical market-data collector.")
 weather_app = typer.Typer(help="Weather station data and collector.")
 weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
+dataset_app = typer.Typer(help="Build, validate, and export research datasets.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
 app.add_typer(collector_app, name="collector")
 app.add_typer(weather_app, name="weather")
 weather_app.add_typer(weather_stations_app, name="stations")
+app.add_typer(dataset_app, name="dataset")
 
 
 @asynccontextmanager
@@ -367,6 +375,139 @@ def weather_collect(
         finally:
             await engine.dispose()
         logger.info("weather_collector.stopped")
+
+    asyncio.run(run())
+
+
+def _parse_date(value: str | None) -> date | None:
+    return date.fromisoformat(value) if value else None
+
+
+async def _build_dataset(
+    settings: Settings, *, which: str, start: date | None, end: date | None, version: str
+) -> dataset_pipeline.BuildOutput:
+    mappings = load_market_map(settings.dataset_market_map_path)
+    async with _open_session(settings) as session:
+        return await dataset_pipeline.build(
+            session,
+            database_url=settings.database_url,
+            mappings=mappings,
+            which=which,
+            start=start,
+            end=end,
+            version=version,
+        )
+
+
+def _echo_summary(output: dataset_pipeline.BuildOutput) -> None:
+    for name, frame in output.frames.items():
+        typer.echo(f"{name}: {frame.height} rows, {len(frame.columns)} columns")
+    report = output.validation
+    typer.echo(f"validation: {'OK' if report.ok else 'ERRORS'} ({report.error_count} errors)")
+    for finding in report.findings:
+        if finding.count:
+            typer.echo(f"  [{finding.severity}] {finding.check}: {finding.count}")
+
+
+@dataset_app.command("build")
+def dataset_build(
+    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
+    end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
+    version: str | None = typer.Option(None, help="Dataset version (default: UTC timestamp)."),
+    output_root: str | None = typer.Option(None, help="Export root (default: settings/env)."),
+    export: bool = typer.Option(True, help="Write Parquet + manifest to disk."),
+) -> None:
+    """Build the research dataset(s): point-in-time join, validate, compute
+    stats, and (by default) export a versioned Parquet directory. See
+    docs/runbooks/dataset.md."""
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        resolved_version = version or default_version()
+        output = await _build_dataset(
+            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            version=resolved_version,
+        )
+        _echo_summary(output)
+        if export:
+            root = Path(output_root) if output_root else settings.dataset_root
+            result = dataset_pipeline.export(
+                output, root=root, version=resolved_version, fmt=ExportFormat.PARQUET
+            )
+            typer.echo(f"exported to {result.output_dir}")
+        if not output.validation.ok:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@dataset_app.command("validate")
+def dataset_validate(
+    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
+    end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
+) -> None:
+    """Build in memory and print the validation report. Exits non-zero if any
+    error-severity finding fired."""
+
+    async def run() -> None:
+        settings = get_settings()
+        output = await _build_dataset(
+            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            version="validate",
+        )
+        typer.echo(json.dumps(output.validation.to_dict(), indent=2, default=str))
+        if not output.validation.ok:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@dataset_app.command("stats")
+def dataset_stats(
+    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
+    end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
+) -> None:
+    """Build in memory and print summary statistics."""
+
+    async def run() -> None:
+        settings = get_settings()
+        output = await _build_dataset(
+            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            version="stats",
+        )
+        typer.echo(json.dumps(output.stats, indent=2, default=str))
+
+    asyncio.run(run())
+
+
+@dataset_app.command("export")
+def dataset_export(
+    which: str = typer.Option("all", help="Dataset to build: all|weather_panel|market_weather."),
+    start: str | None = typer.Option(None, help="Inclusive start target date (YYYY-MM-DD)."),
+    end: str | None = typer.Option(None, help="Inclusive end target date (YYYY-MM-DD)."),
+    version: str | None = typer.Option(None, help="Dataset version (default: UTC timestamp)."),
+    output_root: str | None = typer.Option(None, help="Export root (default: settings/env)."),
+    export_format: str = typer.Option("parquet", "--format", help="parquet (duckdb is future)."),
+) -> None:
+    """Build and write a versioned dataset directory in the chosen format."""
+
+    async def run() -> None:
+        settings = get_settings()
+        resolved_version = version or default_version()
+        output = await _build_dataset(
+            settings, which=which, start=_parse_date(start), end=_parse_date(end),
+            version=resolved_version,
+        )
+        root = Path(output_root) if output_root else settings.dataset_root
+        result = dataset_pipeline.export(
+            output, root=root, version=resolved_version, fmt=ExportFormat(export_format)
+        )
+        _echo_summary(output)
+        typer.echo(f"exported to {result.output_dir}")
 
     asyncio.run(run())
 

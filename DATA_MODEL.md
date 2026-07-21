@@ -247,3 +247,41 @@ Implemented as of Milestone 2 (`ingestion/validation.py`,
   for that ticker are skipped (content-hash comparison), not re-inserted
 - trades are deduplicated by Kalshi's own `trade_id`, skipped rather than
   overwritten if already stored
+
+## Research datasets (derived, Milestone 4)
+
+These are **not database tables**. They are versioned Parquet files produced by
+a read-only join over the tables above (`dataset/`, `docs/adr/0004-research-dataset.md`),
+written under `DATASET_ROOT/<version>/` alongside a `manifest.json` (git commit,
+source DB Alembic revision, credential-free DB URL, per-frame content hashes,
+generation config), a `validation.json`, and a `stats.json`. A published version
+is immutable; a change in join logic or source data is a new version.
+
+### `weather_panel.parquet`
+
+Grain: one row per `(station_id, target_date)`.
+
+- `station_id`, `target_date`
+- `n_forecast_issuances`, `first_forecast_issue_time`, `last_forecast_issue_time`
+- `final_forecast_high_f`, `final_forecast_low_f` — from the latest forecast issuance for the day (max/min period point-estimate touching that local date; an approximation, see the ADR)
+- `settled_tmax_f`, `settled_tmin_f` — the value from the **latest** observation issuance for the day (later CLI reports supersede earlier provisional ones)
+- `settlement_issuance_time`, `n_observation_issuances`
+- `residual_high_f` = `final_forecast_high_f - settled_tmax_f`, `residual_low_f` = `final_forecast_low_f - settled_tmin_f` — **label-side** quantities (use the realized value); never use as model features (`RESEARCH.md` feature-leakage rule)
+
+### `market_weather.parquet`
+
+Grain: one row per market snapshot (only for markets present in the settlement
+mapping). All weather/order-book/trade columns are joined **as-of** the
+snapshot's `observed_at` — the latest source row with knowledge timestamp
+`<= observed_at`, so nothing from the future leaks in.
+
+- market snapshot fields (`market_ticker`, `event_ticker`, `status`, `yes_bid_cents`, `yes_ask_cents`, `last_price_cents`, `volume`, `open_interest`, `rules_primary`, `observed_at`, `raw_payload_id`)
+- settlement target (`station_id`, `variable`, `target_date`) — from the market map
+- as-of forecast (`forecast_high_f`, `forecast_low_f`, `forecast_issue_time`, `forecast_age_seconds`, `n_forecast_issuances_known`)
+- as-of known observation of the market's variable (`obs_value_known`, `obs_issuance_time_known`)
+- as-of order book (`best_yes_bid_cents`, `best_yes_ask_cents`, `spread_cents`) and trades (`last_trade_price_cents`, `n_trades_known`)
+- `settled_value`, `settlement_issuance_time` — the market's settled outcome (**post-settlement label**, never a pre-decision input)
+
+Any row traces to raw sources via the source tables' `raw_payload_id` columns;
+the dataset is rebuildable deterministically from the manifest's git commit,
+source DB revision, market map, and generation config.

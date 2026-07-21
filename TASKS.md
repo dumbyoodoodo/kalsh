@@ -131,17 +131,21 @@ Acceptance criteria:
 
 ### Milestone 4 — Research dataset
 
-- [ ] Join market, settlement, forecast, and observation data without leakage.
-- [ ] Create point-in-time snapshots.
-- [ ] Calculate forecast residuals.
-- [ ] Export versioned Parquet datasets.
-- [ ] Add dataset manifest with date range, row count, hashes, and schema version.
-- [ ] Add leakage tests.
+- [x] Join market, settlement, forecast, and observation data without leakage (`dataset/builder.py`; as-of joins via Polars `join_asof`). Settlement association uses an explicit market→station config map as a documented stand-in for `settlement_specs` until Milestone 2b (`dataset/market_map.py`).
+- [x] Create point-in-time snapshots (`market_weather`: each market snapshot enriched with only the forecast/observation/order-book/trade facts knowable as of its timestamp).
+- [x] Calculate forecast residuals (`weather_panel`: `residual_high_f`/`residual_low_f` vs the settled tmax/tmin; label-side, documented).
+- [x] Export versioned Parquet datasets (`dataset/export.py`; `<DATASET_ROOT>/<version>/`, immutable, DuckDB left as a documented future seam).
+- [x] Add dataset manifest with date range, row count, hashes, and schema version (`dataset/manifest.py`; also git commit + source DB Alembic revision + credential-free DB URL + per-frame content hashes + generation config).
+- [x] Add leakage tests (`tests/unit/test_dataset_builder.py` as-of leakage tests; validation `impossible_timestamps`/`settlement_mismatches`/`duplicate_join_*`).
+- [x] CLI: `dataset build|validate|stats|export`, and a validation report + summary statistics per build.
+- [x] Documentation: `ARCHITECTURE.md`, `DATA_MODEL.md`, `docs/runbooks/dataset.md`, `docs/adr/0004-research-dataset.md`.
 
 Acceptance criteria:
 
-- Any row can be traced to raw sources.
-- Dataset can be rebuilt deterministically.
+- [x] Any row can be traced to raw sources (source tables' `raw_payload_id` carried through; manifest pins git commit + source DB revision + market-map hash).
+- [x] Dataset can be rebuilt deterministically (order-independent content hashes; verified by `tests/unit/test_dataset_pipeline.py::test_pipeline_build_is_reproducible`).
+- [x] No migration (read-only over existing tables); `ruff check .`, `mypy src`, `pytest -v` all pass.
+- [x] Verified live against the Postgres DB: `dataset build` produces `weather_panel`/`market_weather` Parquet + manifest/validation/stats; validation reports only expected warnings.
 
 ---
 

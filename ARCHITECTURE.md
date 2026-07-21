@@ -133,6 +133,24 @@ Output:
 
 No strategy may trade a market whose settlement mapping is unresolved or ambiguous.
 
+### Research dataset
+
+Implemented in `dataset/` (Milestone 4, `docs/adr/0004-research-dataset.md`). A **read-only** layer over the collected source tables that produces versioned, point-in-time-correct research datasets --- the join surface Phases 4+ consume. No feature/model/trading logic lives here.
+
+Two datasets are built (pure Polars functions over frames read from the DB):
+
+- `weather_panel` --- per (station, target_date): settled tmax/tmin (latest observation issuance), forecast summary, and forecast residuals.
+- `market_weather` --- per market snapshot: forecast/observation/order-book/trade facts joined **as-of** the snapshot's timestamp (backward `join_asof`, so a later revision can never leak into an earlier row --- the concrete enforcement of `RESEARCH.md`'s look-ahead rule), plus the post-settlement outcome as a labelled target column.
+
+Responsibilities:
+
+- point-in-time (as-of) joins with no look-ahead leakage; forecast local `target_date` derived in the station timezone
+- the market->settlement association via an explicit versioned config map (`dataset/market_map.py`) --- a stand-in for `settlement_specs` until Milestone 2b; unmapped markets are reported as orphans, not guessed
+- a reproducibility manifest per build (git commit, source DB Alembic revision, credential-free DB URL, per-frame content hashes, generation config) and immutable versioned Parquet export under the configurable `DATASET_ROOT`
+- validation (missing/duplicate/impossible/mismatch/orphan checks) and summary statistics emitted alongside each build
+
+Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+).
+
 ### Probability model
 
 Version 1 should be simple and interpretable:

@@ -8,6 +8,7 @@ yet in this milestone.
 """
 
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,6 +78,15 @@ class Settings(BaseSettings):
     weather_backfill_days: int = Field(default=30, alias="WEATHER_BACKFILL_DAYS")
     weather_interval_seconds: float = Field(
         default=1800.0, alias="WEATHER_INTERVAL_SECONDS"
+    )
+
+    # Research dataset export (see dataset/, docs/runbooks/dataset.md). Storage
+    # location is configurable and never hardcoded; the directory is created on
+    # demand. The market map is the documented stand-in for settlement_specs
+    # until Milestone 2b (dataset/market_map.py).
+    dataset_root: Path = Field(default=Path("data/datasets"), alias="DATASET_ROOT")
+    dataset_market_map_path: Path | None = Field(
+        default=None, alias="DATASET_MARKET_MAP_PATH"
     )
 
     @model_validator(mode="after")

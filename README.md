@@ -86,8 +86,8 @@ Exact commands may evolve as the repository is implemented.
 
 ## Project status
 
-Phase 1 (Infrastructure) is complete: a read-only Kalshi market-data gateway with raw-payload capture and normalized storage. Within Phase 2 (Historical Data Platform), the Kalshi market-data collector (Milestone 2) and the weather forecast/observation collector (Milestone 3) are both complete — see `docs/runbooks/collector.md` and `docs/runbooks/weather_collector.md`. Settlement-rule mapping (Milestone 2b) and the joined research dataset (Milestone 4) remain. No order-submission code exists anywhere in the repository.
+Phase 1 (Infrastructure) is complete: a read-only Kalshi market-data gateway with raw-payload capture and normalized storage. Within Phase 2 (Historical Data Platform), the Kalshi market-data collector (Milestone 2), the weather forecast/observation collector (Milestone 3), and the point-in-time research dataset builder (Milestone 4) are complete — see `docs/runbooks/collector.md`, `docs/runbooks/weather_collector.md`, and `docs/runbooks/dataset.md`. Settlement-rule mapping (Milestone 2b) remains; until it lands, the dataset builder uses an explicit market→station config map as a documented stand-in. No order-submission code exists anywhere in the repository.
 
 ## Initial deliverable
 
-The first release collected and normalized Kalshi weather-market data. The second collected and normalized NWS weather forecasts and observations (the confirmed settlement source, `docs/adr/0003-weather-data-source.md`) for later joining with the Kalshi data. Neither places orders. See `ROADMAP.md` for what comes after.
+The first release collected and normalized Kalshi weather-market data. The second collected and normalized NWS weather forecasts and observations (the confirmed settlement source, `docs/adr/0003-weather-data-source.md`). The third joins them into versioned, point-in-time-correct research datasets (Parquet + reproducibility manifest, `docs/adr/0004-research-dataset.md`). None place orders. See `ROADMAP.md` for what comes after.

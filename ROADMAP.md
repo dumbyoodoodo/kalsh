@@ -30,6 +30,8 @@ Kalshi market discovery and the historical snapshot/trade collector (`TASKS.md` 
 
 Point-in-time research datasets joining market, settlement, forecast, and observation data without leakage, exported as versioned Parquet with a manifest. This version also stands up the research framework itself (`RESEARCH.md`, `HYPOTHESES.md`, dataset versioning and experiment-tracking conventions) — the historical database and the framework for using it rigorously ship together.
 
+The dataset builder (`TASKS.md` Milestone 4) is complete — see `docs/runbooks/dataset.md` and `docs/adr/0004-research-dataset.md`. It produces versioned, point-in-time-correct Parquet datasets (`weather_panel`, `market_weather`) with a reproducibility manifest, validation report, and statistics. The market↔weather settlement association uses an explicit config map as a documented stand-in until Milestone 2b produces `settlement_specs`; the remaining research-framework conventions (experiment tracking, first recorded hypotheses) are still open.
+
 ## 0.4 — Feature Engineering
 
 Point-in-time feature snapshots (forecast error, ensemble spread, order-book imbalance, and similar — see `TASKS.md` Phase 4 for the full candidate list) built only for features an active hypothesis actually needs, versioned alongside datasets.

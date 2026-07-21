@@ -1,0 +1,25 @@
+# Example Kalshi-market -> weather-settlement mapping.
+#
+# This is a MANUAL, DOCUMENTED STAND-IN for the settlement_specs table that
+# Milestone 2b (settlement-rule parsing) will eventually generate. Until then,
+# the research dataset layer has no reliable way to know which station/variable/
+# date a Kalshi market settles against, so it reads that association from here.
+#
+# Copy this file, fill in real (verified) mappings, and point
+# DATASET_MARKET_MAP_PATH at your copy. Every dataset build records this file's
+# content hash in its manifest, so a build stays reproducible against the exact
+# mapping used.
+#
+# variable: tmax_f for a daily-HIGH market, tmin_f for a daily-LOW market.
+# target_date: the settlement (event) date the market resolves on.
+# station_id: must exist in weather/stations.py (e.g. "NYC").
+
+markets:
+  - market_ticker: KXHIGHNY-26JUL20-T85
+    station_id: NYC
+    variable: tmax_f
+    target_date: 2026-07-20
+  - market_ticker: KXLOWNY-26JUL20-T68
+    station_id: NYC
+    variable: tmin_f
+    target_date: 2026-07-20

@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     collector_interval_seconds: float = Field(
         default=300.0, alias="COLLECTOR_INTERVAL_SECONDS"
     )
+    # Proactive client-side request spacing (seconds). Kalshi's default matches
+    # its reference client (see kalshi/client.py); the weather value paces
+    # NWS/IEM requests as a courtesy to free public APIs.
+    kalshi_min_request_interval_seconds: float = Field(
+        default=0.1, alias="KALSHI_MIN_REQUEST_INTERVAL_SECONDS"
+    )
+    weather_min_request_interval_seconds: float = Field(
+        default=0.1, alias="WEATHER_MIN_REQUEST_INTERVAL_SECONDS"
+    )
+    # A collector whose most recent recorded run is older than this many
+    # multiples of its interval is reported stale by `ops health`.
+    ops_stale_after_intervals: float = Field(default=3.0, alias="OPS_STALE_AFTER_INTERVALS")
 
     # Weather collector defaults (see ingestion/weather_collector.py,
     # weather/provider.py). NWS asks API consumers to identify themselves in

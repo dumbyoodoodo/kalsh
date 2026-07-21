@@ -140,6 +140,17 @@ Responsibilities:
 
 Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+).
 
+### Research operations
+
+Implemented in `ops/` and `ingestion/backfill.py` (Phase 6, `docs/runbooks/operations.md`). Makes the platform run unattended for months:
+
+- **Combined runner** (`ops run`): both collectors concurrently in one supervised process; graceful shutdown; restart recovery is inherent because every checkpoint is derived from stored data (trade `min_ts`, latest observation date, content-hash dedup), never from process state.
+- **Operational metrics**: every cycle appends a `collector_runs` row (duration, success, request/retry counts, full stats) — written best-effort so a metrics failure can never break collection. Client and provider carry request/retry counters; request pacing is env-configurable for both APIs.
+- **Data-quality monitoring** (`ops quality`): store-level checks — schema-revision drift, natural-key duplicates, future timestamps (errors); observation gaps, forecast/market staleness, settlement-resolution failures (warnings) — as a machine-readable report, exit-code gated for cron.
+- **Health report** (`ops health`): collector liveness/staleness, data freshness, DB size, station/settlement coverage, completeness, quality summary.
+- **Chunked resumable backfill** (`weather backfill`): per-chunk commits, partial-failure isolation with explicit failed-chunk reporting, covered-chunk skipping for cheap resume.
+- **Research snapshots** (`ops snapshot`): the Milestone 4 versioned dataset export plus `quality.json` and `ops.json` sidecars — a daily, immutable, fully self-describing research artifact.
+
 ### Probability model
 
 Version 1 should be simple and interpretable:

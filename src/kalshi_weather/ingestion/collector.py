@@ -7,9 +7,11 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.discovery import discover_and_snapshot_weather_markets
 from kalshi_weather.ingestion.validation import MalformedPayloadError, validate_price_cents
 from kalshi_weather.kalshi.client import KalshiClient
@@ -17,6 +19,7 @@ from kalshi_weather.logging import get_logger
 from kalshi_weather.storage.database import session_scope
 from kalshi_weather.storage.repositories import (
     get_latest_trade_timestamp,
+    record_collector_run,
     save_orderbook_snapshot,
     save_trade,
 )
@@ -141,6 +144,10 @@ async def run_collector_loop(
     cycle_number = 0
     while not stop_event.is_set():
         cycle_number += 1
+        started_at = utc_now()
+        run_stats: dict[str, Any] = {}
+        run_requests = run_retries = 0
+        run_error: str | None = None
         try:
             async with session_scope(session_factory) as session:
                 client = client_factory(session)
@@ -148,9 +155,31 @@ async def run_collector_loop(
                     stats = await run_collection_cycle(
                         client, session, category=category, market_status=market_status
                     )
+                    run_stats = stats.as_dict()
+                    run_requests, run_retries = client.requests_attempted, client.retries
             logger.info("collector.cycle_complete", cycle=cycle_number, **stats.as_dict())
-        except Exception:
+        except Exception as exc:
+            run_error = f"{type(exc).__name__}: {exc}"
             logger.exception("collector.cycle_failed", cycle=cycle_number)
+
+        # Operational record (ops metrics) -- best-effort by design: a
+        # metrics write failing (e.g. DB briefly down) must never break or
+        # abort collection itself.
+        try:
+            async with session_scope(session_factory) as session:
+                await record_collector_run(
+                    session,
+                    collector="kalshi",
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                    success=run_error is None,
+                    requests_attempted=run_requests,
+                    retries=run_retries,
+                    stats=run_stats,
+                    error=run_error,
+                )
+        except Exception:
+            logger.exception("collector.run_record_failed", cycle=cycle_number)
 
         if max_cycles is not None and cycle_number >= max_cycles:
             return

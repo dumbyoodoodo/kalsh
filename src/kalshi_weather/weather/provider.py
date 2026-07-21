@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from decimal import Decimal
@@ -89,11 +90,19 @@ class NwsProvider:
         user_agent: str,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        min_request_interval_seconds: float = 0.1,
         raw_payload_sink: RawPayloadSink | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._max_retries = max_retries
+        # Proactive courtesy spacing for NWS/IEM (free public APIs with no
+        # published hard limit) -- same pattern as kalshi/client.py.
+        self._min_request_interval_seconds = min_request_interval_seconds
+        self._last_request_at: float | None = None
         self._raw_payload_sink = raw_payload_sink
+        #: Operational counters for this provider instance's lifetime.
+        self.requests_attempted: int = 0
+        self.retries: int = 0
         #: id of the raw_api_payloads row for the most recently completed
         #: request -- same pattern as kalshi.client.KalshiClient, read
         #: immediately after a call, not safe across concurrent calls.
@@ -115,6 +124,18 @@ class NwsProvider:
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    async def _throttle(self) -> None:
+        """Proactively space out requests by at least min_request_interval_seconds."""
+        if self._min_request_interval_seconds <= 0:
+            return
+        if self._last_request_at is not None:
+            remaining = self._min_request_interval_seconds - (
+                time.monotonic() - self._last_request_at
+            )
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+        self._last_request_at = time.monotonic()
+
     async def _request(
         self,
         source: str,
@@ -125,6 +146,10 @@ class NwsProvider:
     ) -> Any:
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
+            await self._throttle()
+            self.requests_attempted += 1
+            if attempt > 0:
+                self.retries += 1
             try:
                 response = await self._http.get(url, params=params)
             except httpx.TransportError as exc:

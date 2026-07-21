@@ -240,3 +240,38 @@ async def test_run_collector_loop_honors_already_set_stop_event() -> None:
     await engine.dispose()
 
     assert call_count == 0
+
+
+async def test_run_collector_loop_records_run_metrics() -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    await run_collector_loop(
+        session_factory=session_factory,
+        client_factory=lambda _s: _client(make_handler([])),
+        category="Climate and Weather",
+        market_status="open",
+        interval_seconds=0,
+        stop_event=asyncio.Event(),
+        max_cycles=2,
+    )
+
+    from sqlalchemy import select
+
+    from kalshi_weather.storage.models import CollectorRun
+
+    async with session_factory() as session:
+        runs = (await session.scalars(select(CollectorRun))).all()
+    await engine.dispose()
+
+    assert len(runs) == 2
+    assert all(r.collector == "kalshi" for r in runs)
+    assert all(r.success for r in runs)
+    assert all(r.requests_attempted > 0 for r in runs)
+    assert runs[0].stats_json["markets_discovered"] == 2

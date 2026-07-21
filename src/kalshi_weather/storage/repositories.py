@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.storage.models import (
+    CollectorRun,
     EventRecord,
     MarketSnapshot,
     OrderbookSnapshot,
@@ -584,4 +585,44 @@ async def get_latest_settlement_specs(
     rows = await session.scalars(
         select(SettlementSpecRecord).where(SettlementSpecRecord.id.in_(latest_ids))
     )
+    return list(rows.all())
+
+
+async def record_collector_run(
+    session: AsyncSession,
+    *,
+    collector: str,
+    started_at: datetime,
+    finished_at: datetime,
+    success: bool,
+    requests_attempted: int,
+    retries: int,
+    stats: dict[str, Any],
+    error: str | None = None,
+) -> CollectorRun:
+    """Append one collection cycle's operational record (never updated)."""
+    record = CollectorRun(
+        collector=collector,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_seconds=(finished_at - started_at).total_seconds(),
+        success=success,
+        requests_attempted=requests_attempted,
+        retries=retries,
+        stats_json=stats,
+        error=error,
+    )
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def get_recent_collector_runs(
+    session: AsyncSession, *, collector: str | None = None, limit: int = 100
+) -> list[CollectorRun]:
+    """Most recent run records, newest first, optionally for one collector."""
+    stmt = select(CollectorRun).order_by(CollectorRun.started_at.desc()).limit(limit)
+    if collector is not None:
+        stmt = stmt.where(CollectorRun.collector == collector)
+    rows = await session.scalars(stmt)
     return list(rows.all())

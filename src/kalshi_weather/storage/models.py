@@ -320,3 +320,30 @@ class SettlementSpecRecord(Base):
     rules_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class CollectorRun(Base):
+    """One collection cycle's operational record (ops metrics, Phase 6).
+
+    Append-only history of every cycle each collector executes: what it
+    saved, how long it took, how many requests/retries it cost, and whether
+    it succeeded. `ops health` derives collector liveness/staleness from the
+    most recent row per collector; longer windows give success rates and
+    throughput trends. A metrics write failing must never break collection --
+    writers treat this table as best-effort (see run_collector_loop).
+    """
+
+    __tablename__ = "collector_runs"
+    __table_args__ = (Index("ix_collector_runs_collector", "collector", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    collector: Mapped[str] = mapped_column(String(32), nullable=False)  # "kalshi" | "weather"
+    started_at: Mapped[datetime] = mapped_column(nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(nullable=False)
+    success: Mapped[bool] = mapped_column(nullable=False)
+    requests_attempted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retries: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stats_json: Mapped[Any] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")

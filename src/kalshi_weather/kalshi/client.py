@@ -102,6 +102,10 @@ class KalshiClient:
         #: the next request on this client, so it is not safe to read after
         #: later concurrent/overlapping calls.
         self.last_raw_payload_id: int | None = None
+        #: Operational counters for this client instance's lifetime --
+        #: read by the collector loop when recording per-cycle metrics.
+        self.requests_attempted: int = 0
+        self.retries: int = 0
 
     async def __aenter__(self) -> "KalshiClient":
         return self
@@ -161,6 +165,9 @@ class KalshiClient:
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             await self._throttle()
+            self.requests_attempted += 1
+            if attempt > 0:
+                self.retries += 1
             try:
                 response = await self._http.request(method, path, params=params, headers=headers)
             except httpx.TransportError as exc:

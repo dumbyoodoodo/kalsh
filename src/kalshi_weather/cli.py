@@ -24,12 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kalshi_weather.config import Environment, Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
+from kalshi_weather.ingestion.backfill import run_backfill
 from kalshi_weather.ingestion.collector import run_collector_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.logging import configure_logging, get_logger
+from kalshi_weather.ops.health import build_health_report
+from kalshi_weather.ops.quality import run_quality_checks
+from kalshi_weather.ops.snapshot import create_snapshot, default_snapshot_version
 from kalshi_weather.settlement.parser import parse_settlement
 from kalshi_weather.settlement.resolver import (
     CompositeSettlementResolver,
@@ -60,6 +64,7 @@ weather_app = typer.Typer(help="Weather station data and collector.")
 weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
 dataset_app = typer.Typer(help="Build, validate, and export research datasets.")
 settlement_app = typer.Typer(help="Resolve markets to settlement specifications.")
+ops_app = typer.Typer(help="Operations: health, data quality, snapshots, combined runner.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
@@ -68,6 +73,7 @@ app.add_typer(weather_app, name="weather")
 weather_app.add_typer(weather_stations_app, name="stations")
 app.add_typer(dataset_app, name="dataset")
 app.add_typer(settlement_app, name="settlement")
+app.add_typer(ops_app, name="ops")
 
 
 @asynccontextmanager
@@ -112,6 +118,7 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
         environment=settings.kalshi_env,
         key_id=key_id,
         private_key=private_key,
+        min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
         raw_payload_sink=raw_payload_sink,
     )
 
@@ -307,7 +314,11 @@ def _build_weather_provider(settings: Settings, session: AsyncSession | None = N
 
         raw_payload_sink = sink
 
-    return NwsProvider(user_agent=settings.weather_user_agent, raw_payload_sink=raw_payload_sink)
+    return NwsProvider(
+        user_agent=settings.weather_user_agent,
+        min_request_interval_seconds=settings.weather_min_request_interval_seconds,
+        raw_payload_sink=raw_payload_sink,
+    )
 
 
 @weather_stations_app.command("list")
@@ -638,6 +649,228 @@ def settlement_report() -> None:
         async with _open_session(settings) as session:
             _, report = await resolver.resolve_report(session)
         typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+
+    asyncio.run(run())
+
+
+@weather_app.command("backfill")
+def weather_backfill(
+    station: str = typer.Option(..., "--station", help="station_id from the registry."),
+    start: str = typer.Option(..., "--start", help="Inclusive start date (YYYY-MM-DD)."),
+    end: str = typer.Option(..., "--end", help="Inclusive end date (YYYY-MM-DD)."),
+    chunk_days: int = typer.Option(30, "--chunk-days", help="Days per committed chunk."),
+    skip_covered: bool = typer.Option(
+        True,
+        "--skip-covered/--no-skip-covered",
+        help="Skip chunks whose every day already has stored observations (resume).",
+    ),
+) -> None:
+    """Deep historical observation backfill: chunked, resumable, partial-failure
+    tolerant. See docs/runbooks/operations.md for runtime expectations."""
+    try:
+        target_station = get_station(station)
+    except UnknownStationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+        # The raw-payload sink commits each payload in its own small
+        # transaction, so per-chunk observation commits (run_backfill uses
+        # separate sessions) always reference already-committed raw rows --
+        # a single long-lived sink session would break that FK ordering.
+        async def sink(
+            source: str, endpoint: str, request_key: str, status: int, payload: Any
+        ) -> int:
+            async with session_scope(session_factory) as sink_session:
+                raw = await save_raw_payload(
+                    sink_session,
+                    source=source,
+                    endpoint_or_channel=endpoint,
+                    request_key=request_key,
+                    http_status=status,
+                    payload_json=payload,
+                )
+                return raw.id
+
+        try:
+            provider = NwsProvider(
+                user_agent=settings.weather_user_agent,
+                min_request_interval_seconds=settings.weather_min_request_interval_seconds,
+                raw_payload_sink=sink,
+            )
+            async with provider:
+                report = await run_backfill(
+                    session_factory=session_factory,
+                    provider=provider,
+                    station=target_station,
+                    start=date.fromisoformat(start),
+                    end=date.fromisoformat(end),
+                    chunk_days=chunk_days,
+                    skip_covered=skip_covered,
+                    stop_event=stop_event,
+                )
+        finally:
+            await engine.dispose()
+        typer.echo(json.dumps(report.totals(), indent=2))
+        for chunk in report.failed_chunks:
+            typer.echo(f"FAILED {chunk.start}..{chunk.end}: {chunk.error}", err=True)
+        if not report.ok:
+            typer.echo("re-run the same command to retry failed chunks", err=True)
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@ops_app.command("quality")
+def ops_quality() -> None:
+    """Run data-quality checks against the store; exit non-zero on errors."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            report = await run_quality_checks(session)
+        typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+        if not report.ok:
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@ops_app.command("health")
+def ops_health(
+    as_json: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),
+) -> None:
+    """Summarize platform health: collectors, freshness, coverage, quality."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            report = await build_health_report(
+                session,
+                kalshi_interval_seconds=settings.collector_interval_seconds,
+                weather_interval_seconds=settings.weather_interval_seconds,
+                stale_after_intervals=settings.ops_stale_after_intervals,
+            )
+        if as_json:
+            typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+            return
+        typer.echo(f"generated: {report.generated_at}")
+        for c in report.collectors:
+            status = "STALE" if c.stale else "ok"
+            rate = f"{c.success_rate_recent:.0%}" if c.success_rate_recent is not None else "-"
+            typer.echo(
+                f"collector {c.collector:8s} [{status}] last={c.last_run_at or 'never'} "
+                f"runs={c.runs_recorded} success_rate={rate}"
+            )
+        for name, ts in report.newest_data.items():
+            typer.echo(f"newest {name:22s} {ts or '-'}")
+        size = report.database_size_bytes
+        typer.echo(f"database size: {size / 1_048_576:.1f} MiB" if size else "database size: n/a")
+        sc = report.station_coverage
+        typer.echo(f"stations with data: {sc['with_observations']}/{sc['registry']}")
+        st = report.settlement_coverage
+        typer.echo(
+            f"settlement: {st['resolved']}/{st['markets']} resolved "
+            f"(backlog {st['unresolved_backlog']}, confidence {st['confidence']})"
+        )
+        for sid, info in report.dataset_completeness.items():
+            typer.echo(
+                f"completeness {sid}: {info['observation_days']} days, "
+                f"range {info['range'] or '-'}, coverage {info['coverage']}"
+            )
+        typer.echo(
+            f"quality: {'OK' if report.quality_ok else 'ERRORS'} "
+            + json.dumps(report.quality_counts)
+        )
+
+    asyncio.run(run())
+
+
+@ops_app.command("snapshot")
+def ops_snapshot(
+    version: str | None = typer.Option(None, help="Snapshot version (default: snapshot-YYYYMMDD)."),
+    output_root: str | None = typer.Option(None, help="Export root (default: settings/env)."),
+) -> None:
+    """Cut a versioned daily research snapshot: dataset export + manifest +
+    validation + stats + quality + ops sidecars."""
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        resolved_version = version or default_snapshot_version()
+        root = Path(output_root) if output_root else settings.dataset_root
+        async with _open_session(settings) as session:
+            result = await create_snapshot(
+                session,
+                database_url=settings.database_url,
+                overrides_path=settings.dataset_market_map_path,
+                root=root,
+                version=resolved_version,
+                kalshi_interval_seconds=settings.collector_interval_seconds,
+                weather_interval_seconds=settings.weather_interval_seconds,
+                stale_after_intervals=settings.ops_stale_after_intervals,
+            )
+        typer.echo(f"snapshot {result.version} -> {result.output_dir}")
+        typer.echo(f"dataset_ok={result.dataset_ok} quality_ok={result.quality_ok}")
+        if not (result.dataset_ok and result.quality_ok):
+            raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@ops_app.command("run")
+def ops_run(
+    kalshi_interval: float | None = typer.Option(None, help="Kalshi cycle interval seconds."),
+    weather_interval: float | None = typer.Option(None, help="Weather cycle interval seconds."),
+) -> None:
+    """Run both collectors concurrently in one supervised process (the
+    recommended long-running deployment; see docs/runbooks/operations.md)."""
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop_event.set)
+
+        logger.info(
+            "ops.run.starting",
+            kalshi_interval=kalshi_interval or settings.collector_interval_seconds,
+            weather_interval=weather_interval or settings.weather_interval_seconds,
+        )
+        try:
+            await asyncio.gather(
+                run_collector_loop(
+                    session_factory=session_factory,
+                    client_factory=lambda session: _build_client(settings, session),
+                    category=settings.collector_category,
+                    market_status=settings.collector_market_status,
+                    interval_seconds=kalshi_interval or settings.collector_interval_seconds,
+                    stop_event=stop_event,
+                ),
+                run_weather_collector_loop(
+                    session_factory=session_factory,
+                    provider_factory=lambda session: _build_weather_provider(settings, session),
+                    stations=None,
+                    backfill_days=settings.weather_backfill_days,
+                    interval_seconds=weather_interval or settings.weather_interval_seconds,
+                    stop_event=stop_event,
+                ),
+            )
+        finally:
+            await engine.dispose()
+        logger.info("ops.run.stopped")
 
     asyncio.run(run())
 

@@ -10,6 +10,7 @@ import contextlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -24,6 +25,7 @@ from kalshi_weather.logging import get_logger
 from kalshi_weather.storage.database import session_scope
 from kalshi_weather.storage.repositories import (
     get_latest_observation_date,
+    record_collector_run,
     save_weather_forecast,
     save_weather_observation,
     save_weather_station,
@@ -186,6 +188,10 @@ async def run_weather_collector_loop(
     cycle_number = 0
     while not stop_event.is_set():
         cycle_number += 1
+        started_at = utc_now()
+        run_stats: dict[str, Any] = {}
+        run_requests = run_retries = 0
+        run_error: str | None = None
         try:
             async with session_scope(session_factory) as session:
                 provider = provider_factory(session)
@@ -193,9 +199,30 @@ async def run_weather_collector_loop(
                     stats = await run_weather_collection_cycle(
                         provider, session, stations=stations, backfill_days=backfill_days
                     )
+                    run_stats = stats.as_dict()
+                    run_requests = getattr(provider, "requests_attempted", 0)
+                    run_retries = getattr(provider, "retries", 0)
             logger.info("weather_collector.cycle_complete", cycle=cycle_number, **stats.as_dict())
-        except Exception:
+        except Exception as exc:
+            run_error = f"{type(exc).__name__}: {exc}"
             logger.exception("weather_collector.cycle_failed", cycle=cycle_number)
+
+        # Best-effort ops metrics record; must never break collection.
+        try:
+            async with session_scope(session_factory) as session:
+                await record_collector_run(
+                    session,
+                    collector="weather",
+                    started_at=started_at,
+                    finished_at=utc_now(),
+                    success=run_error is None,
+                    requests_attempted=run_requests,
+                    retries=run_retries,
+                    stats=run_stats,
+                    error=run_error,
+                )
+        except Exception:
+            logger.exception("weather_collector.run_record_failed", cycle=cycle_number)
 
         if max_cycles is not None and cycle_number >= max_cycles:
             return

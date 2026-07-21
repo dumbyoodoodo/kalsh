@@ -225,3 +225,22 @@ async def test_zero_min_interval_disables_throttling() -> None:
         elapsed = time.monotonic() - started
 
     assert elapsed < 0.1  # no artificial spacing introduced
+
+
+async def test_request_and_retry_counters() -> None:
+    """Operational counters (Phase 6 metrics): every attempt counts, retries
+    count attempts beyond the first per request."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(200, json=_load("series_list.json"))
+
+    async with _client(httpx.MockTransport(handler), min_request_interval_seconds=0) as client:
+        client._sleep = _no_sleep  # type: ignore[attr-defined]
+        await client.list_series()
+        assert client.requests_attempted == 2
+        assert client.retries == 1

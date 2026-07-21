@@ -142,6 +142,21 @@ for when a later phase needs them.)
 
 Append-only and versioned: unique on `(market_ticker, parser_version, rules_hash)`. Re-parsing unchanged rules with an unchanged parser is a detectable no-op; a parser upgrade or rules change appends a new row beside the old — resolution history is never rewritten. The latest row per market (max `id`) is the current resolution.
 
+### `collector_runs`
+
+(Implemented in Milestone 4b, research operations — `docs/runbooks/operations.md`. Not in the original sketch: added when operational metrics gained a historical store.)
+
+- `id` PK (surrogate)
+- `collector` — `"kalshi"` | `"weather"`
+- `started_at`, `finished_at`, `duration_seconds`
+- `success`
+- `requests_attempted`, `retries` — from the client/provider instance counters for that cycle
+- `stats_json` — the full cycle stats (`markets_discovered`, `*_saved`, `*_duplicate`, `errors`, ...)
+- `error` — `"ExceptionType: message"` for failed cycles
+- `schema_version`
+
+Append-only: one row per collection cycle, never updated. Written **best-effort** by the collector loops — a metrics write failing must never break collection itself. `ops health` derives collector liveness/staleness from the newest row per collector.
+
 ### `weather_stations`
 
 (Implemented in Milestone 3, `docs/adr/0003-weather-data-source.md`. Not in the original sketch above — added because station identity/metadata needed its own table once a real provider existed.)

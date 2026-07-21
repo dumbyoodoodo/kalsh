@@ -150,6 +150,25 @@ Acceptance criteria:
 - [x] No migration (read-only over existing tables); `ruff check .`, `mypy src`, `pytest -v` all pass.
 - [x] Verified live against the Postgres DB: `dataset build` produces `weather_panel`/`market_weather` Parquet + manifest/validation/stats; validation reports only expected warnings.
 
+### Milestone 4b — Research operations (Phase 6 of the working plan; complete)
+
+Makes the platform run reliably for months with minimal intervention — see `docs/runbooks/operations.md`.
+
+- [x] Combined supervised runner (`ops run`: both collectors concurrently, one process, shared graceful shutdown); restart recovery inherent via data-derived checkpoints (no process state).
+- [x] Configurable request pacing for both APIs (`KALSHI_MIN_REQUEST_INTERVAL_SECONDS`, `WEATHER_MIN_REQUEST_INTERVAL_SECONDS`; NWS provider gained a proactive throttle).
+- [x] Operational metrics stored historically (`collector_runs` table, migration `0005`, additive; per-cycle duration/success/request/retry counts written best-effort so metrics can never break collection).
+- [x] Data-quality monitoring (`ops quality`): schema-revision drift, natural-key duplicates, future timestamps (errors); observation gaps, forecast/market staleness, settlement-resolution failures (warnings) — machine-readable, exit-code gated.
+- [x] Health report (`ops health [--json]`): collector liveness/staleness, data freshness, DB size, station/settlement coverage, completeness, quality summary.
+- [x] Chunked resumable backfill (`weather backfill`): per-chunk commits, partial-failure isolation with explicit failed-chunk reporting, covered-chunk skip for resume, incremental coverage verification; runtime/storage documented.
+- [x] Versioned research snapshots (`ops snapshot`): Milestone 4 dataset export + `quality.json` + `ops.json` (health, resolution report, recent runs) in one immutable directory.
+- [x] Station-expansion workflow documented as data-only (`docs/runbooks/station_expansion.md`).
+
+Acceptance criteria:
+
+- [x] Existing collector behavior unchanged (all prior tests pass untouched); metrics/quality layers are additive.
+- [x] `ruff check .`, `mypy src`, `pytest -v` all pass; migration `0005` round-trips.
+- [x] Verified live: `weather backfill` extended NYC history with per-chunk commits and correct resume; `ops health`/`ops quality`/`ops snapshot` all produce correct reports against the real database (a live-only cross-transaction FK bug in the backfill sink was caught by this verification and fixed).
+
 ---
 
 ## Phase 3 — Research Framework

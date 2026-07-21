@@ -25,3 +25,13 @@ def parse_iso8601_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise NaiveDatetimeError(f"naive timestamp string not allowed: {value!r}")
     return parsed.astimezone(UTC)
+
+
+def to_naive_utc(value: datetime) -> datetime:
+    """Normalize a datetime read back from storage to naive-UTC for
+    arithmetic. Aware values (Postgres `timestamptz` columns) are converted to
+    UTC and stripped; naive values (SQLite, `timestamp` columns) are assumed
+    to already be UTC -- every writer in this codebase stores UTC."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)

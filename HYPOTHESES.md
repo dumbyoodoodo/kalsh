@@ -235,9 +235,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0007 — Preliminary-observation bound violations near settlement
 
-- **Status:** Proposed
+- **Status:** Rejected
 - **Opened:** 2026-07-21
-- **Closed:**
+- **Closed:** 2026-07-21
 - **Related:** H0002, docs/adr/0003-weather-data-source.md (same-day preliminary CLI reports)
 - **Pre-registration package:** `docs/research/experiments/PREREG-20260721-H0007-bound-violations.md` (frozen 2026-07-21, before any price inspection — elaborates this entry's terse fields to full mechanical precision: exact information set, entry conditions, outcome definition, statistical plan, execution assumptions, bias review, reproducibility manifest template; supersedes nothing below, this entry remains the canonical hypothesis record).
 - **Pre-execution amendment:** `docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md` (2026-07-21, before execution — resolves an independent audit's episode-definition/denominator/persistence/adjacency ambiguities; fee-schedule verification is **BLOCKED** — Kalshi's primary fee schedule was unreachable from this environment, see the amendment's attempt log — **H0007 must not execute until it is resolved**).
@@ -264,9 +264,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** H0002 (the bound's hardness); market accumulation with intraday cadence through settlement windows.
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-21 — [EXP-20260721-H0007-bound-violations](docs/research/experiments/EXP-20260721-H0007-bound-violations.md), dataset version `exp-20260721-h0007`. N = 66 valid-coverage settlement days (tmax_f, NYC, 2026-05-14→2026-07-21; 1 day excluded for missing settlement source data), clearing the pre-registered minimum of 60. 8,356 candles satisfied the mechanical entry conditions (a logically bounded strike, unlocked, coherent non-crossed quote, pre-close) across 99 markets. **0 of those 8,356 candles showed any raw residual mass** — the bounded/near-impossible side was priced at the exchange's own minimum tick (bid 0¢/ask 1¢) in every single case, before the fee-net threshold was even applied. 0 episodes, 0 opportunity days. Opportunity-day frequency **0.0%**, Wilson 95% CI [0.0%, 5.50%] (upper bound narrowly above the 5% threshold on that one criterion alone). Aggregate hypothetical P&L **$0.00**, bootstrap 95% CI [$0.00, $0.00] (zero qualifying episodes). The tmin_f exploratory cell (mirrored mechanism, 8,350 candidate candles) shows the identical pattern.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Rejected**, per the pre-registered decision rule — the aggregate-P&L criterion (CI upper bound ≤ $0.00) independently and unambiguously triggers rejection, regardless of the frequency criterion's marginal Wilson bound. This is a clean rejection, not a narrow miss: the *raw*, cost-free version of the effect is absent from the data at 1-minute candle resolution, not merely unprofitable after fees. Kalshi's own weather-market order book already collapses a logically bounded strike's price to the platform's minimum tradeable tick essentially instantaneously (faster than this project's finest available candle resolution can distinguish), leaving no measurable window for H0002's revision-adjusted bound to expose a tradeable gap. Per `AMENDMENT-20260721-H0007-pre-execution.md` Finding 6, this conclusion is scoped to quote-level pricing behavior only — no claim of realized profit, fill probability, or capturable alpha is made or would be supportable. Re-run trigger: none pre-registered (a market-behavior null this clean, at 1-minute resolution, is not expected to reverse on more data alone); a finer candle resolution or a different settlement mechanism would be a new hypothesis, not a re-run of this one.
 
 ### H0008 — Market reaction to forecast revisions is measurably lagged
 

@@ -1,0 +1,189 @@
+{
+  "experiment": "EXP-20260721-H0007-bound-violations",
+  "hypothesis": "H0007",
+  "preregistration": {
+    "document": "docs/research/experiments/PREREG-20260721-H0007-bound-violations.md",
+    "amendments": [
+      "docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md",
+      "docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md",
+      "docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260721-h0007",
+    "content_hashes": {
+      "market_price_weather": "d88e6ccb5ace784f22d251c6c43ab2d733cc23ec592c51abf0c40816a1814da1",
+      "settlement_labels": "b0d907c051ed2d8b3710717ba4bfbbddc2b66de36cc93239e865b26e95c5b050"
+    },
+    "market_price_weather_schema_version": "1",
+    "settlement_label_reconstruction_version": "1",
+    "source_db_revision": "0007",
+    "dataset_git_commit": "5eadfb3e3328d9bb62225745ef283d97e90e50d9"
+  },
+  "config": {
+    "primary_cell": {
+      "variable": "tmax_f"
+    },
+    "secondary_exploratory_cells": [
+      "tmin_f"
+    ],
+    "p_bound": "0.0007824726134585289514866979656",
+    "fee_config": {
+      "multiplier": "0.07",
+      "verified": true
+    },
+    "random_seed": 20260721,
+    "bootstrap_resamples": 10000,
+    "confidence_level": 0.95,
+    "min_settlement_days_required": 60,
+    "frequency_threshold": 0.05
+  },
+  "coverage": {
+    "settlement_days_available": 66,
+    "settlement_days_excluded_missing_data": 1,
+    "excluded_days": [
+      "2026-07-02"
+    ]
+  },
+  "primary_results": {
+    "candidate_candles": 8356,
+    "candles_with_raw_residual_mass": 0,
+    "candles_fee_net_qualifying": 0,
+    "episodes_total": 0,
+    "episodes_counting_ge2_candles": 0,
+    "opportunity_day_frequency": {
+      "days_with_opportunity": 0,
+      "days_total": 66,
+      "frequency": 0.0,
+      "wilson_ci95": [
+        0.0,
+        0.05500255701354129
+      ]
+    },
+    "aggregate_hypothetical_pnl": {
+      "n_episodes_with_label": 0,
+      "n_episodes_excluded_no_label": 0,
+      "total_pnl_cents": 0,
+      "total_pnl_dollars": 0.0,
+      "bootstrap_ci95_cents": [
+        0.0,
+        0.0
+      ],
+      "bootstrap_ci95_dollars": [
+        0.0,
+        0.0
+      ]
+    },
+    "decision_rule": {
+      "confirmed_if": "frequency_ci95_lower > 0.05 AND aggregate_pnl_ci95_lower > 0",
+      "rejected_if": "frequency_ci95_upper <= 0.05 OR aggregate_pnl_ci95_upper <= 0",
+      "inconclusive_if": "neither confirmed nor rejected criteria met, OR settlement_days_available < 60",
+      "outcome": "rejected",
+      "reason": "aggregate P&L CI upper bound <= 0"
+    },
+    "failure_mode_1_transparency": {
+      "note": "opportunity-days driven by exactly one episode (Sec 9 failure mode 1)",
+      "days_driven_by_single_episode": 0,
+      "days_with_opportunity": 0
+    }
+  },
+  "secondary_results": {
+    "edge_size_cents": {
+      "n": 0,
+      "mean": null,
+      "median": null,
+      "iqr": null,
+      "mean_bootstrap_ci95": [
+        null,
+        null
+      ],
+      "median_bootstrap_ci95": [
+        null,
+        null
+      ]
+    },
+    "persistence_minutes": {
+      "n": 0,
+      "mean": null,
+      "median": null,
+      "iqr": null,
+      "mean_bootstrap_ci95": [
+        null,
+        null
+      ],
+      "median_bootstrap_ci95": [
+        null,
+        null
+      ]
+    },
+    "time_to_correction_minutes": {
+      "n_closed_before_settlement": 0,
+      "mean": null,
+      "median": null,
+      "iqr": null,
+      "mean_bootstrap_ci95": [
+        null,
+        null
+      ],
+      "median_bootstrap_ci95": [
+        null,
+        null
+      ]
+    }
+  },
+  "exploratory_results": {
+    "tmin_f_cell": {
+      "note": "same mechanism, mirrored (see build_candidate_frame docstring); NOT used for the primary decision",
+      "candidate_candles": 8350,
+      "candles_fee_net_qualifying": 0,
+      "episodes_counting_ge2_candles": 0,
+      "opportunity_day_frequency": {
+        "days_with_opportunity": 0,
+        "days_total": 66,
+        "frequency": 0.0,
+        "wilson_ci95": [
+          0.0,
+          0.05500255701354129
+        ]
+      }
+    },
+    "by_strike_type": [
+      {
+        "strike_type": "between",
+        "n_candidate_candles": 3518,
+        "n_with_raw_residual_mass": 0,
+        "n_with_fee_net_qualify": 0
+      },
+      {
+        "strike_type": "greater",
+        "n_candidate_candles": 897,
+        "n_with_raw_residual_mass": 0,
+        "n_with_fee_net_qualify": 0
+      },
+      {
+        "strike_type": "less",
+        "n_candidate_candles": 3941,
+        "n_with_raw_residual_mass": 0,
+        "n_with_fee_net_qualify": 0
+      }
+    ],
+    "by_month_descriptive": [
+      {
+        "month": "2026-05",
+        "n_candidate_candles": 2661,
+        "n_with_fee_net_qualify": 0
+      },
+      {
+        "month": "2026-06",
+        "n_candidate_candles": 3726,
+        "n_with_fee_net_qualify": 0
+      },
+      {
+        "month": "2026-07",
+        "n_candidate_candles": 1969,
+        "n_with_fee_net_qualify": 0
+      }
+    ]
+  },
+  "date_run": "2026-07-21"
+}

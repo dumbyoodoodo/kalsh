@@ -44,6 +44,15 @@ itself remains `Status: Proposed`.
 > fee coefficient remains unverified — the one document that states it was
 > unreachable (HTTP 429) from every method attempted. **H0007 remains
 > BLOCKED.**
+>
+> **Third amendment (2026-07-21, same day, before execution).**
+> `docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md`
+> resolves the remaining gap: the user supplied Kalshi's official fee
+> schedule PDF directly (effective 2026-07-07), which was cross-verified
+> against its own 42 published worked examples with zero discrepancies and
+> is now frozen as `KALSHI_WEATHER_TAKER_FEE_CONFIG` in
+> `scripts/h0007_fees.py`. **No pre-registration blocker remains.** H0007
+> execution itself is still a separate, explicit, not-yet-taken step.
 
 ---
 

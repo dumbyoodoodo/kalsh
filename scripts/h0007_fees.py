@@ -1,26 +1,29 @@
 """Kalshi trading-fee calculation for H0007
 (docs/research/experiments/AMENDMENT-20260721-H0007-pre-execution.md,
-Finding 5; verification attempt continued in
-docs/research/experiments/AMENDMENT-20260721-H0007-fee-verification.md).
+Finding 5; verified in
+docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md).
 
 The formula's mathematical STRUCTURE below (ceil(multiplier * P * (1-P) *
 contracts) cents, rounded up) matches Kalshi's own documented `fee_type:
-"quadratic"` shape -- confirmed applicable, uniformly, to every weather
-series (including KXHIGHNY and KXLOWTNYC) via live Kalshi API data
-(`fee_multiplier: 1`, no series/event overrides -- see the fee-verification
-amendment). The CONSTANT (the actual coefficient inside that formula) is
-deliberately **not** hardcoded as a verified production value: the one
-document that states it, kalshi.com/docs/kalshi-fee-schedule.pdf, returned
-HTTP 429 on every attempt across two verification sessions -- the same class
-of failure this project already documented for docs.kalshi.com in
-docs/API_VERIFICATION.md -- and its most recent successfully-archived
-snapshot predates a confirmed subsequent revision, so it was not used as a
-stand-in for the current schedule either. See the fee-verification amendment
-for the full attempt log and everything that *is* now verified.
+"quadratic"` shape. As of 2026-07-21 the CONSTANT is verified: Kalshi's
+official fee schedule PDF ("Last updated and effective: July 7, 2026"; sha256
+815e2d5127d02d2fb90773d1a3844dc15a987696171eddc4e58de87b59c6124c, archived at
+docs/research/experiments/kalshi-fee-schedule-2026-07-07.pdf) states, verbatim
+(General Trading Fees Table): ``fees = round_up(M x 0.07 x C x P x (1-P))``
+for general (taker) fills, with default per-series multiplier M=1 unless the
+series appears in the document's "Non-Standard Fees" table -- neither
+KXHIGHNY nor KXLOWTNYC (nor any weather/climate series) appears there, and
+the live `GET /series` `fee_multiplier: 1` field independently confirms the
+same default applies. `KALSHI_WEATHER_TAKER_FEE_CONFIG` below is that
+verified, frozen configuration -- see the amendment for the full
+cross-verification (every row of the PDF's own worked-example table,
+21 price points x 2 contract counts = 42 values, matches this formula
+exactly).
 
 `contract_fee_cents` refuses to run against an unverified `FeeConfig` --
-this is the enforcement mechanism that keeps H0007 BLOCKED on this step
-rather than silently proceeding on a guessed number.
+kept as a structural safeguard even though a verified config now exists, so
+a caller can never accidentally compute against a config that was never
+checked.
 """
 
 from dataclasses import dataclass
@@ -40,6 +43,33 @@ class FeeConfig:
     retrieved_at: str | None = None
 
 
+#: Frozen, verified configuration for H0007's design: a taker fill (buying
+#: the favored side at its ask -- AMENDMENT-20260721-H0007-pre-execution.md
+#: Sec 8) on a weather-category market, where the general (non-maker)
+#: formula and the default per-series multiplier M=1 both apply -- see the
+#: module docstring and AMENDMENT-20260721-H0007-fee-verified.md for the
+#: full verification. Maker fees (a separate 0.0175 formula, default
+#: multiplier M=0 for weather markets per the same PDF) are not relevant to
+#: this design, which never rests as a maker order.
+KALSHI_WEATHER_TAKER_FEE_CONFIG = FeeConfig(
+    multiplier=Decimal("0.07"),
+    source=(
+        "Kalshi official fee schedule PDF, 'Last updated and effective: "
+        "July 7, 2026', General Trading Fees Table (page 2: formula; "
+        "pages 4-5: worked-example table, cross-verified exactly): "
+        "fees = round_up(M x 0.07 x C x P x (1-P)), M=1 default "
+        "(KXHIGHNY/KXLOWTNYC absent from the Non-Standard Fees table, "
+        "pages 6-11) -- corroborated by live GET /series fee_multiplier=1 "
+        "for both series. sha256 "
+        "815e2d5127d02d2fb90773d1a3844dc15a987696171eddc4e58de87b59c6124c "
+        "(docs/research/experiments/kalshi-fee-schedule-2026-07-07.pdf). "
+        "See docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md."
+    ),
+    verified=True,
+    retrieved_at="2026-07-21",
+)
+
+
 def contract_fee_cents(price_cents: int, *, contracts: int, config: FeeConfig) -> int:
     """Kalshi's documented per-contract fee shape: ceil(multiplier * P *
     (1-P) * contracts) cents, where P = price_cents/100. Rounds UP to the
@@ -48,8 +78,10 @@ def contract_fee_cents(price_cents: int, *, contracts: int, config: FeeConfig) -
     if not config.verified:
         raise ValueError(
             "fee config is not verified against Kalshi's official schedule -- "
-            "see AMENDMENT-20260721-H0007-pre-execution.md Finding 5. "
-            "H0007 must not execute against an unverified fee config."
+            "use KALSHI_WEATHER_TAKER_FEE_CONFIG (see "
+            "AMENDMENT-20260721-H0007-fee-verified.md) or verify a new one "
+            "the same way. H0007 must not execute against an unverified "
+            "fee config."
         )
     if not (1 <= price_cents <= 99):
         raise ValueError(f"price_cents must be 1-99 (Kalshi's tradeable range), got {price_cents}")

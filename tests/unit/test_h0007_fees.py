@@ -1,9 +1,10 @@
-"""Tests for scripts/h0007_fees.py (AMENDMENT-20260721-H0007-pre-execution
-Finding 5). These test the FEE FUNCTION's mathematical correctness and its
-safety gate against an unverified config -- they do NOT assert anything
-about Kalshi's actual current fee constant, which remains unverified/blocked
-(see the amendment). The `_TEST_MULTIPLIER` below is an illustrative value
-for exercising the formula's arithmetic only."""
+"""Tests for scripts/h0007_fees.py. `_VERIFIED_TEST_CONFIG` below shares its
+multiplier (0.07) with the now-verified `KALSHI_WEATHER_TAKER_FEE_CONFIG`
+(AMENDMENT-20260721-H0007-fee-verified.md) -- these first tests exercise the
+function's general arithmetic/rounding behavior in isolation;
+`test_matches_official_general_trading_fees_table` below is the actual
+verification, checked directly against every row of Kalshi's own published
+worked-example table."""
 
 import sys
 from decimal import Decimal
@@ -12,14 +13,12 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from h0007_fees import FeeConfig, contract_fee_cents
+from h0007_fees import KALSHI_WEATHER_TAKER_FEE_CONFIG, FeeConfig, contract_fee_cents
 
-# Illustrative only -- NOT a verified Kalshi constant. Used solely to
-# exercise contract_fee_cents' rounding/edge-case behavior deterministically.
 _TEST_MULTIPLIER = Decimal("0.07")
 _VERIFIED_TEST_CONFIG = FeeConfig(
     multiplier=_TEST_MULTIPLIER,
-    source="test fixture, not Kalshi's official schedule",
+    source="test fixture matching KALSHI_WEATHER_TAKER_FEE_CONFIG's multiplier",
     verified=True,
 )
 _UNVERIFIED_CONFIG = FeeConfig(
@@ -87,3 +86,39 @@ def test_price_out_of_tradeable_range_rejected() -> None:
 def test_zero_or_negative_contracts_rejected() -> None:
     with pytest.raises(ValueError, match="contracts"):
         contract_fee_cents(50, contracts=0, config=_VERIFIED_TEST_CONFIG)
+
+
+def test_kalshi_weather_taker_fee_config_is_marked_verified() -> None:
+    assert KALSHI_WEATHER_TAKER_FEE_CONFIG.verified is True
+    assert KALSHI_WEATHER_TAKER_FEE_CONFIG.multiplier == Decimal("0.07")
+
+
+# Every (price, fee) pair below is transcribed verbatim from Kalshi's own
+# "General Trading Fees Table" (kalshi-fee-schedule-2026-07-07.pdf, pages
+# 4-5, "Last updated and effective: July 7, 2026") -- the ground truth this
+# task exists to verify against, not a derived or assumed value.
+_OFFICIAL_TABLE_1_CONTRACT = [
+    (1, 1), (5, 1), (10, 1), (15, 1), (20, 2), (25, 2), (30, 2), (35, 2),
+    (40, 2), (45, 2), (50, 2), (55, 2), (60, 2), (65, 2), (70, 2), (75, 2),
+    (80, 2), (85, 1), (90, 1), (95, 1), (99, 1),
+]
+_OFFICIAL_TABLE_100_CONTRACTS = [
+    (1, 7), (5, 34), (10, 63), (15, 90), (20, 112), (25, 132), (30, 147),
+    (35, 160), (40, 168), (45, 174), (50, 175), (55, 174), (60, 168),
+    (65, 160), (70, 147), (75, 132), (80, 112), (85, 90), (90, 63),
+    (95, 34), (99, 7),
+]
+
+
+def test_matches_official_general_trading_fees_table_1_contract() -> None:
+    for price_cents, expected_fee_cents in _OFFICIAL_TABLE_1_CONTRACT:
+        got = contract_fee_cents(price_cents, contracts=1, config=KALSHI_WEATHER_TAKER_FEE_CONFIG)
+        msg = f"price={price_cents}c: expected {expected_fee_cents}, got {got}"
+        assert got == expected_fee_cents, msg
+
+
+def test_matches_official_general_trading_fees_table_100_contracts() -> None:
+    for price_cents, expected_fee_cents in _OFFICIAL_TABLE_100_CONTRACTS:
+        got = contract_fee_cents(price_cents, contracts=100, config=KALSHI_WEATHER_TAKER_FEE_CONFIG)
+        msg = f"price={price_cents}c: expected {expected_fee_cents}, got {got}"
+        assert got == expected_fee_cents, msg

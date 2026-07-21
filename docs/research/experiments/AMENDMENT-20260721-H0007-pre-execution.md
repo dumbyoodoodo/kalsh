@@ -200,6 +200,12 @@ supplied.
 > *applicability* half of this finding. The numeric coefficient itself
 > remains unverified for the reasons above; **this finding remains
 > BLOCKED.**
+>
+> **Resolved (2026-07-21, same day, before execution).**
+> `docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md` — the
+> user supplied Kalshi's official fee schedule PDF directly; the coefficient
+> (0.07) is verified against 42 of the document's own published worked
+> examples with zero discrepancies. **Finding 5 is now fully resolved.**
 
 ## Finding 6 — Permissible conclusion scope (resolves F6)
 

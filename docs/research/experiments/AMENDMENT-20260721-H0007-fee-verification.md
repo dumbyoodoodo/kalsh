@@ -204,3 +204,10 @@ e.g. a live order-preview response that discloses the actual fee charged,
 which this project has not attempted here since it was out of this task's
 scope) from an environment or method that is not rate-limited by Kalshi's
 bot protection on that specific host.
+
+> **Resolved (2026-07-21, same day, before execution).** The user supplied
+> that exact document directly —
+> `docs/research/experiments/AMENDMENT-20260721-H0007-fee-verified.md`
+> verifies it against its own 42 published worked examples (zero
+> discrepancies) and freezes the coefficient. **No pre-registration blocker
+> remains.**

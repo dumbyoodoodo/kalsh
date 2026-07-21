@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_weather.domain.time import utc_now
@@ -23,6 +23,7 @@ from kalshi_weather.storage.models import (
     OrderbookSnapshot,
     RawApiPayload,
     SeriesRecord,
+    SettlementSpecRecord,
     TradeRecord,
     WeatherForecast,
     WeatherObservation,
@@ -83,16 +84,25 @@ async def save_series(
     category: str | None,
     title: str | None,
     frequency: str | None,
+    settlement_source: str | None = None,
     source_updated_at: datetime | None = None,
     raw_payload_id: int | None = None,
 ) -> SeriesRecord:
     """Upsert a series row; unlike market/orderbook snapshots, series is not
-    append-only (DATA_MODEL.md keys it by series_ticker as a single row)."""
+    append-only (DATA_MODEL.md keys it by series_ticker as a single row).
+
+    ``settlement_source`` is the JSON-serialized ``settlement_sources`` list
+    from Kalshi's series payload -- the structured settlement citation the
+    settlement parser reads (settlement/parser.py). ``None`` leaves any
+    previously stored value in place rather than erasing it (a caller that
+    doesn't know the sources must not destroy them)."""
     existing = await session.get(SeriesRecord, series_ticker)
     if existing is not None:
         existing.category = category
         existing.title = title
         existing.frequency = frequency
+        if settlement_source is not None:
+            existing.settlement_source = settlement_source
         existing.source_updated_at = source_updated_at
         existing.raw_payload_id = raw_payload_id
         existing.observed_at = utc_now()
@@ -104,6 +114,7 @@ async def save_series(
         category=category,
         title=title,
         frequency=frequency,
+        settlement_source=settlement_source,
         source_updated_at=source_updated_at,
         raw_payload_id=raw_payload_id,
         observed_at=utc_now(),
@@ -492,3 +503,85 @@ async def get_latest_observation_date(
         .limit(1)
     )
     return result
+
+
+async def save_settlement_spec(
+    session: AsyncSession,
+    *,
+    market_ticker: str,
+    series_ticker: str,
+    event_ticker: str | None,
+    status: str,
+    confidence: str,
+    city: str | None,
+    station_id: str | None,
+    variable: str | None,
+    target_date: date | None,
+    settlement_source: str | None,
+    source_url: str | None,
+    wfo_site: str | None,
+    source_location_code: str | None,
+    unit: str | None,
+    observation_window: str | None,
+    rounding_rule: str | None,
+    market_close_time: datetime | None,
+    notes: list[str],
+    parser_version: str,
+    rules_hash: str,
+) -> SaveResult[SettlementSpecRecord]:
+    """Insert a settlement resolution, unless this exact (market,
+    parser_version, rules_hash) is already stored -- re-parsing unchanged
+    rules with an unchanged parser is a no-op; a parser upgrade or a rules
+    change appends a new row (never overwrites history)."""
+    existing = await session.scalar(
+        select(SettlementSpecRecord).where(
+            SettlementSpecRecord.market_ticker == market_ticker,
+            SettlementSpecRecord.parser_version == parser_version,
+            SettlementSpecRecord.rules_hash == rules_hash,
+        )
+    )
+    if existing is not None:
+        return SaveResult(record=existing, was_duplicate=True)
+
+    record = SettlementSpecRecord(
+        market_ticker=market_ticker,
+        series_ticker=series_ticker,
+        event_ticker=event_ticker,
+        status=status,
+        confidence=confidence,
+        city=city,
+        station_id=station_id,
+        variable=variable,
+        target_date=target_date,
+        settlement_source=settlement_source,
+        source_url=source_url,
+        wfo_site=wfo_site,
+        source_location_code=source_location_code,
+        unit=unit,
+        observation_window=observation_window,
+        rounding_rule=rounding_rule,
+        market_close_time=market_close_time,
+        notes_json=notes,
+        parser_version=parser_version,
+        rules_hash=rules_hash,
+        observed_at=utc_now(),
+    )
+    session.add(record)
+    await session.flush()
+    return SaveResult(record=record, was_duplicate=False)
+
+
+async def get_latest_settlement_specs(
+    session: AsyncSession,
+) -> list[SettlementSpecRecord]:
+    """The most recent stored resolution per market (max id -- rows are
+    append-only, so the highest id is the newest)."""
+    latest_ids = (
+        select(func.max(SettlementSpecRecord.id))
+        .group_by(SettlementSpecRecord.market_ticker)
+        .scalar_subquery()
+    )
+    rows = await session.scalars(
+        select(SettlementSpecRecord).where(SettlementSpecRecord.id.in_(latest_ids))
+    )
+    return list(rows.all())

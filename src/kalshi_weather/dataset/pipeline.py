@@ -62,9 +62,11 @@ async def build(
     end: date | None = None,
     version: str = "unversioned",
     repo_dir: Path | None = None,
+    resolver_meta: dict[str, Any] | None = None,
 ) -> BuildOutput:
     """Load, build, validate, and describe the dataset(s) -- everything except
-    writing to disk."""
+    writing to disk. ``resolver_meta`` (optional) records how the mappings were
+    produced (e.g. settlement parser version) in the manifest config."""
     sources = await load_source_frames(session, start=start, end=end)
     built = build_datasets(sources, mappings, which=which)
     report = validate(sources, built.frames, mappings)
@@ -81,6 +83,7 @@ async def build(
             "end": end.isoformat() if end else None,
             "market_map_hash": _mapping_hash(mappings),
             "market_map_size": len(mappings),
+            **({"resolver": resolver_meta} if resolver_meta else {}),
         },
         repo_dir=repo_dir,
     )

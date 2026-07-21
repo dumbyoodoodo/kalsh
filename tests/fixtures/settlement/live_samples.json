@@ -1,0 +1,61 @@
+{
+  "_comment": "Real Kalshi production data fetched read-only on 2026-07-21 for parser tests (see docs/adr/0005-settlement-resolution.md). Verbatim except formatting.",
+  "series": {
+    "KXHIGHNY": {
+      "ticker": "KXHIGHNY",
+      "title": "Highest temperature in NYC",
+      "frequency": "daily",
+      "settlement_sources": [
+        {"name": "NWS Climatological Report", "url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"}
+      ]
+    },
+    "KXLOWTNYC": {
+      "ticker": "KXLOWTNYC",
+      "title": "Lowest temperature in NYC",
+      "frequency": "daily",
+      "settlement_sources": [
+        {"name": "NWS Climatological Report NY", "url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"}
+      ]
+    },
+    "KXHIGHCHI": {
+      "ticker": "KXHIGHCHI",
+      "title": "Highest temperature in Chicago",
+      "frequency": "daily",
+      "settlement_sources": [
+        {"name": "NWS Climatological Report Chicago Midway", "url": "https://forecast.weather.gov/product.php?site=LOT&product=CLI&issuedby=MDW"}
+      ]
+    },
+    "KXNYCSNOWM": {
+      "ticker": "KXNYCSNOWM",
+      "title": "NYC Snowfall monthly",
+      "frequency": "monthly",
+      "settlement_sources": [
+        {"name": "the National Weather Service", "url": "https://www.weather.gov"}
+      ]
+    },
+    "KXTEMPBOSH": {
+      "ticker": "KXTEMPBOSH",
+      "title": "Hourly Directional Boston Temperature",
+      "frequency": "one_off",
+      "settlement_sources": [
+        {"name": "The Weather Company", "url": "https://weather.com/kalshi"}
+      ]
+    }
+  },
+  "markets": {
+    "KXHIGHNY-26JUL21-T79": {
+      "ticker": "KXHIGHNY-26JUL21-T79",
+      "event_ticker": "KXHIGHNY-26JUL21",
+      "title": "Will the **high temp in NYC** be <79° on Jul 21, 2026?",
+      "close_time": "2026-07-22T04:59:00+00:00",
+      "rules_primary": "If the highest temperature recorded in Central Park, New York for July 21, 2026 as reported by the National Weather Service's Climatological Report (Daily), is less than 79°, then the market resolves to Yes."
+    },
+    "KXLOWTNYC-26JUL20-T67": {
+      "ticker": "KXLOWTNYC-26JUL20-T67",
+      "event_ticker": "KXLOWTNYC-26JUL20",
+      "title": "Will the minimum temperature be >67° on Jul 20, 2026?",
+      "close_time": "2026-07-21T05:00:00+00:00",
+      "rules_primary": "If the minimum temperature recorded at New York City for Jul 20, 2026, is greater than 67° fahrenheit according to the National Weather Service's Climatological Report (Daily), then the market resolves to Yes."
+    }
+  }
+}

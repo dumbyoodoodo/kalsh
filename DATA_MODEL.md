@@ -117,24 +117,30 @@ Kalshi's live wire format represents price/count as decimal-dollar-string (`yes_
 
 ### `settlement_specs`
 
-- `id`
-- `market_ticker`
-- `station_id`
-- `source_name`
-- `weather_variable`
-- `event_start`
-- `event_end`
-- `timezone`
-- `lower_bound`
-- `upper_bound`
-- `lower_inclusive`
-- `upper_inclusive`
-- `unit`
-- `rounding_rule`
-- `parser_version`
-- `resolution_status`
-- `resolution_notes`
-- `created_at`
+(Implemented in Milestone 2b, `docs/adr/0005-settlement-resolution.md`; the
+implemented schema differs from the original sketch — thresholds/inclusivity
+are deliberately out of scope, being payoff structure rather than
+settlement-source identification, and Kalshi exposes structured strike fields
+for when a later phase needs them.)
+
+- `id` PK (surrogate)
+- `market_ticker`, `series_ticker`, `event_ticker`
+- `status` — `resolved` | `ambiguous` | `unresolved` | `unsupported`; only `resolved` rows ever become dataset mappings
+- `confidence` — `high` (every cross-check agreed) | `medium` (a secondary signal was missing, noted) | `none`
+- `city`
+- `station_id` — deliberately **not** a foreign key: an `unsupported` spec legitimately references a station absent from `weather_stations` (that absence is the finding)
+- `variable` — `tmax_f` / `tmin_f`
+- `target_date`
+- `settlement_source` — e.g. `"NWS Climatological Report (Daily)"`
+- `source_url`, `wfo_site`, `source_location_code` — the structured Kalshi settlement citation preserved verbatim (`site=`/`issuedby=` query params)
+- `unit` (`F`), `observation_window` (`local_calendar_day`), `rounding_rule` (`integer_f`)
+- `market_close_time`
+- `notes_json` — machine-readable reasons for every non-resolved outcome
+- `parser_version`, `rules_hash` — reproducibility: which parser saw which exact inputs
+- `schema_version`
+- `observed_at`
+
+Append-only and versioned: unique on `(market_ticker, parser_version, rules_hash)`. Re-parsing unchanged rules with an unchanged parser is a detectable no-op; a parser upgrade or rules change appends a new row beside the old — resolution history is never rewritten. The latest row per market (max `id`) is the current resolution.
 
 ### `weather_stations`
 

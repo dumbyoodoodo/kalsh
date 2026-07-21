@@ -5,6 +5,7 @@ Settlement-rule parsing (mapping a market to its station/variable/threshold)
 is explicitly out of scope here -- see TASKS.md Milestone 2b.
 """
 
+import json
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,13 @@ async def discover_and_snapshot_weather_markets(
             category=series.category,
             title=series.title,
             frequency=series.frequency,
+            # The structured settlement citation (list of {name, url}) the
+            # settlement parser reads -- persisted verbatim as JSON.
+            settlement_source=(
+                json.dumps(series.settlement_sources)
+                if series.settlement_sources is not None
+                else None
+            ),
             source_updated_at=series.last_updated_ts,
             raw_payload_id=client.last_raw_payload_id,
         )

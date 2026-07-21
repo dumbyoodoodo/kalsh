@@ -24,19 +24,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kalshi_weather.config import Environment, Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
-from kalshi_weather.dataset.market_map import load_market_map
 from kalshi_weather.ingestion.collector import run_collector_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.logging import configure_logging, get_logger
+from kalshi_weather.settlement.parser import parse_settlement
+from kalshi_weather.settlement.resolver import (
+    CompositeSettlementResolver,
+    ParserSettlementResolver,
+    ResolutionReport,
+    load_parser_inputs,
+)
+from kalshi_weather.settlement.spec import PARSER_VERSION
 from kalshi_weather.storage.database import create_engine, create_session_factory, session_scope
 from kalshi_weather.storage.repositories import (
     save_market_snapshot,
     save_orderbook_snapshot,
     save_raw_payload,
     save_series,
+    save_settlement_spec,
 )
 from kalshi_weather.weather.provider import NwsProvider
 from kalshi_weather.weather.stations import UnknownStationError, get_station, list_stations
@@ -51,6 +59,7 @@ collector_app = typer.Typer(help="Run the historical market-data collector.")
 weather_app = typer.Typer(help="Weather station data and collector.")
 weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
 dataset_app = typer.Typer(help="Build, validate, and export research datasets.")
+settlement_app = typer.Typer(help="Resolve markets to settlement specifications.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
@@ -58,6 +67,7 @@ app.add_typer(collector_app, name="collector")
 app.add_typer(weather_app, name="weather")
 weather_app.add_typer(weather_stations_app, name="stations")
 app.add_typer(dataset_app, name="dataset")
+app.add_typer(settlement_app, name="settlement")
 
 
 @asynccontextmanager
@@ -386,8 +396,12 @@ def _parse_date(value: str | None) -> date | None:
 async def _build_dataset(
     settings: Settings, *, which: str, start: date | None, end: date | None, version: str
 ) -> dataset_pipeline.BuildOutput:
-    mappings = load_market_map(settings.dataset_market_map_path)
+    # Mappings come from the automated settlement parser (Milestone 2b), with
+    # the config file retained as a manual override layer on top -- see
+    # settlement/resolver.py and docs/adr/0005-settlement-resolution.md.
+    resolver = CompositeSettlementResolver(settings.dataset_market_map_path)
     async with _open_session(settings) as session:
+        mappings, report = await resolver.resolve_report(session)
         return await dataset_pipeline.build(
             session,
             database_url=settings.database_url,
@@ -396,6 +410,12 @@ async def _build_dataset(
             start=start,
             end=end,
             version=version,
+            resolver_meta={
+                "resolver": "parser+overrides",
+                "parser_version": PARSER_VERSION,
+                "resolution_counts": report.counts(),
+                "overridden_markets": sorted(report.overridden),
+            },
         )
 
 
@@ -508,6 +528,116 @@ def dataset_export(
         )
         _echo_summary(output)
         typer.echo(f"exported to {result.output_dir}")
+
+    asyncio.run(run())
+
+
+def _echo_spec(spec: Any) -> None:
+    typer.echo(f"market:       {spec.market_ticker}")
+    typer.echo(f"series:       {spec.series_ticker}")
+    typer.echo(f"status:       {spec.status.value} (confidence: {spec.confidence.value})")
+    typer.echo(f"station:      {spec.station_id or '-'} ({spec.city or '-'})")
+    typer.echo(f"variable:     {spec.variable or '-'}")
+    typer.echo(f"target_date:  {spec.target_date.isoformat() if spec.target_date else '-'}")
+    typer.echo(f"source:       {spec.settlement_source or '-'}")
+    typer.echo(f"source_url:   {spec.source_url or '-'}")
+    typer.echo(f"window/unit:  {spec.observation_window or '-'} / {spec.unit or '-'}")
+    typer.echo(f"rounding:     {spec.rounding_rule or '-'}")
+    typer.echo(f"parser:       v{spec.parser_version}  rules_hash={spec.rules_hash[:12]}...")
+    for note in spec.notes:
+        typer.echo(f"note:         {note}")
+
+
+async def _persist_specs(session: AsyncSession, specs: list[Any]) -> tuple[int, int]:
+    saved = duplicate = 0
+    for s in specs:
+        result = await save_settlement_spec(
+            session,
+            market_ticker=s.market_ticker,
+            series_ticker=s.series_ticker,
+            event_ticker=s.event_ticker,
+            status=s.status.value,
+            confidence=s.confidence.value,
+            city=s.city,
+            station_id=s.station_id,
+            variable=s.variable,
+            target_date=s.target_date,
+            settlement_source=s.settlement_source,
+            source_url=s.source_url,
+            wfo_site=s.wfo_site,
+            source_location_code=s.source_location_code,
+            unit=s.unit,
+            observation_window=s.observation_window,
+            rounding_rule=s.rounding_rule,
+            market_close_time=s.market_close_time,
+            notes=list(s.notes),
+            parser_version=s.parser_version,
+            rules_hash=s.rules_hash,
+        )
+        if result.was_duplicate:
+            duplicate += 1
+        else:
+            saved += 1
+    return saved, duplicate
+
+
+@settlement_app.command("resolve")
+def settlement_resolve(
+    ticker: str,
+    persist: bool = typer.Option(False, "--persist", help="Store the spec in settlement_specs."),
+) -> None:
+    """Resolve one market (by ticker) from its stored snapshot and print the
+    resulting settlement specification."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            inputs = await load_parser_inputs(session)
+            match = [(s, m) for s, m in inputs if m.ticker == ticker]
+            if not match:
+                typer.echo(f"no stored market snapshot for ticker {ticker!r}", err=True)
+                raise typer.Exit(code=1)
+            spec = parse_settlement(*match[0])
+            _echo_spec(spec)
+            if persist:
+                saved, duplicate = await _persist_specs(session, [spec])
+                typer.echo(f"persisted: {saved} new, {duplicate} already stored")
+            if not spec.is_resolved:
+                raise typer.Exit(code=1)
+
+    asyncio.run(run())
+
+
+@settlement_app.command("resolve-all")
+def settlement_resolve_all(
+    persist: bool = typer.Option(False, "--persist", help="Store specs in settlement_specs."),
+) -> None:
+    """Resolve every market with a stored snapshot; print a per-status summary."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            specs = await ParserSettlementResolver().resolve_specs(session)
+            report = ResolutionReport(specs=specs, overridden=[])
+            typer.echo(json.dumps(report.counts(), indent=2))
+            if persist:
+                saved, duplicate = await _persist_specs(session, specs)
+                typer.echo(f"persisted: {saved} new, {duplicate} already stored")
+
+    asyncio.run(run())
+
+
+@settlement_app.command("report")
+def settlement_report() -> None:
+    """Full resolution report (parser + overrides): resolved, ambiguous,
+    unresolved, and unsupported markets, with reasons."""
+
+    async def run() -> None:
+        settings = get_settings()
+        resolver = CompositeSettlementResolver(settings.dataset_market_map_path)
+        async with _open_session(settings) as session:
+            _, report = await resolver.resolve_report(session)
+        typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
 
     asyncio.run(run())
 

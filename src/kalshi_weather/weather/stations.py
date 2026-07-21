@@ -24,6 +24,11 @@ class Station:
     latitude: Decimal
     longitude: Decimal
     timezone: str  # IANA tz name, used to interpret CLI reports' local times
+    city: str  # human city name, used by settlement specs
+    #: Issuing WFO office for this station's CLI product, verified live (see
+    #: docs/adr/0003-weather-data-source.md). Used by the settlement parser to
+    #: cross-check Kalshi's settlement-source URL (`site=` query param).
+    wfo_site: str
 
 
 #: Confirmed live (docs/adr/0003-weather-data-source.md): /points/{lat,lon}
@@ -37,8 +42,18 @@ STATIONS: dict[str, Station] = {
         latitude=Decimal("40.7829"),
         longitude=Decimal("-73.9654"),
         timezone="America/New_York",
+        city="New York",
+        wfo_site="OKX",
     ),
 }
+
+
+def station_for_location_code(code: str) -> Station | None:
+    """Registry station whose NWS CLI location code matches ``code``, if any."""
+    for station in STATIONS.values():
+        if station.source_location_code == code:
+            return station
+    return None
 
 
 class UnknownStationError(KeyError):

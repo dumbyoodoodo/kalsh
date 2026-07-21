@@ -86,7 +86,7 @@ Exact commands may evolve as the repository is implemented.
 
 ## Project status
 
-Phase 1 (Infrastructure) is complete: a read-only Kalshi market-data gateway with raw-payload capture and normalized storage. Within Phase 2 (Historical Data Platform), the Kalshi market-data collector (Milestone 2), the weather forecast/observation collector (Milestone 3), and the point-in-time research dataset builder (Milestone 4) are complete — see `docs/runbooks/collector.md`, `docs/runbooks/weather_collector.md`, and `docs/runbooks/dataset.md`. Settlement-rule mapping (Milestone 2b) remains; until it lands, the dataset builder uses an explicit market→station config map as a documented stand-in. No order-submission code exists anywhere in the repository.
+Phase 1 (Infrastructure) and Phase 2 (Historical Data Platform) are complete: the Kalshi market-data collector (Milestone 2), automated settlement resolution (Milestone 2b), the weather forecast/observation collector (Milestone 3), and the point-in-time research dataset builder (Milestone 4) — see `docs/runbooks/collector.md`, `docs/runbooks/settlement.md`, `docs/runbooks/weather_collector.md`, and `docs/runbooks/dataset.md`. The dataset builder's market→weather mappings are now derived automatically by a deterministic settlement parser (`docs/adr/0005-settlement-resolution.md`), with the config map retained as a manual override layer. No order-submission code exists anywhere in the repository.
 
 ## Initial deliverable
 

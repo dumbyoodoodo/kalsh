@@ -1,17 +1,17 @@
-# Example Kalshi-market -> weather-settlement mapping.
+# Manual settlement-mapping OVERRIDES (Milestone 2b).
 #
-# This is a MANUAL, DOCUMENTED STAND-IN for the settlement_specs table that
-# Milestone 2b (settlement-rule parsing) will eventually generate. Until then,
-# the research dataset layer has no reliable way to know which station/variable/
-# date a Kalshi market settles against, so it reads that association from here.
+# Since Milestone 2b, market -> station/variable/date mappings are derived
+# automatically by the settlement parser (settlement/parser.py,
+# docs/adr/0005-settlement-resolution.md). This file is the manual override
+# layer on top: entries here REPLACE the parsed mapping for the same market,
+# and may add markets the parser could not resolve.
 #
-# Copy this file, fill in real (verified) mappings, and point
-# DATASET_MARKET_MAP_PATH at your copy. Every dataset build records this file's
-# content hash in its manifest, so a build stays reproducible against the exact
-# mapping used.
+# Copy this file, point DATASET_MARKET_MAP_PATH at your copy, and record the
+# audit trail (reason/author/added_on) for every override -- overridden
+# markets are listed in the resolution report and the dataset manifest, and
+# the file's content hash is recorded in every build manifest.
 #
 # variable: tmax_f for a daily-HIGH market, tmin_f for a daily-LOW market.
-# target_date: the settlement (event) date the market resolves on.
 # station_id: must exist in weather/stations.py (e.g. "NYC").
 
 markets:
@@ -19,7 +19,6 @@ markets:
     station_id: NYC
     variable: tmax_f
     target_date: 2026-07-20
-  - market_ticker: KXLOWNY-26JUL20-T68
-    station_id: NYC
-    variable: tmin_f
-    target_date: 2026-07-20
+    reason: example override -- replace with a real investigated case
+    author: example-researcher
+    added_on: 2026-07-21

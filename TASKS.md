@@ -96,20 +96,23 @@ Acceptance criteria:
 
 ### Milestone 2b — Settlement mapping
 
-(The settlement-rule-parsing half of the original Milestone 2; not started.)
+(The settlement-rule-parsing half of the original Milestone 2; complete — `docs/adr/0005-settlement-resolution.md`.)
 
-- [ ] Retrieve complete rules for target markets.
-- [ ] Define typed settlement specification.
-- [ ] Implement a conservative parser.
-- [ ] Mark ambiguous mappings unresolved.
-- [ ] Create manual override file with audit fields.
-- [ ] Add CLI command `settlement resolve TICKER`.
-- [ ] Build a validation report comparing parsed results with raw rules.
+- [x] Retrieve complete rules for target markets (already collected via Milestone 2 snapshots; the series' structured `settlement_sources` citation is now also persisted at collection time).
+- [x] Define typed settlement specification (`settlement/spec.py`: `SettlementSpec` with status, confidence, parser version, and a rules hash over the exact parsed inputs).
+- [x] Implement a conservative parser (`settlement/parser.py`: structured settlement-source URL first — `product=CLI`, `issuedby`, `site` — prose only for variable/date, each cross-validated against a second source; pure and deterministic).
+- [x] Mark ambiguous mappings unresolved (explicit `ambiguous`/`unresolved`/`unsupported` statuses with machine-readable notes; only `resolved` specs become dataset mappings).
+- [x] Create manual override file with audit fields (the Milestone 4 market-map YAML, now with optional `reason`/`author`/`added_on`; overrides take precedence and are recorded in report + manifest).
+- [x] Add CLI command `settlement resolve TICKER` (plus `settlement resolve-all [--persist]` and `settlement report`).
+- [x] Build a validation report comparing parsed results with raw rules (`settlement report`; live production validation: 270 markets across 50 open CLI-source series — 12/12 registry-station markets resolved at high confidence, 0 ambiguous, 0 guesses, 255 unsupported each with an actionable note).
+- [x] Database: append-only versioned `settlement_specs` table (migration `0004`, additive only).
 
 Acceptance criteria:
 
-- At least one chosen daily-temperature series is mapped correctly.
-- No unresolved contract can reach a strategy.
+- [x] At least one chosen daily-temperature series is mapped correctly (KXHIGHNY and KXLOWTNYC both verified against live production markets: correct station/variable/date, high confidence).
+- [x] No unresolved contract can reach a strategy (enforced by construction in `specs_to_mappings`; tested).
+- [x] Dataset builder unchanged (`market_weather` now populates automatically from parsed specs; verified end-to-end in `tests/unit/test_settlement_resolver.py`).
+- [x] `ruff check .`, `mypy src`, `pytest -v` all pass; Alembic `0004` round-trips.
 
 ### Milestone 3 — Weather data ingestion
 

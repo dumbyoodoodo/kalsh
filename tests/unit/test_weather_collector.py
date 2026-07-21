@@ -21,6 +21,8 @@ STATION = Station(
     latitude=Decimal("40.7829"),
     longitude=Decimal("-73.9654"),
     timezone="America/New_York",
+    city="New York",
+    wfo_site="OKX",
 )
 
 OTHER_STATION = Station(
@@ -30,6 +32,8 @@ OTHER_STATION = Station(
     latitude=Decimal("0"),
     longitude=Decimal("0"),
     timezone="UTC",
+    city="Nowhere",
+    wfo_site="XXX",
 )
 
 

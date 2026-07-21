@@ -106,32 +106,21 @@ Responsibilities:
 
 ### Settlement resolver
 
-This is a critical control.
+This is a critical control. Implemented in `settlement/` (Milestone 2b, `docs/adr/0005-settlement-resolution.md`): a deterministic, versioned parser (`parser.py`) derives a typed `SettlementSpec` (`spec.py`) for every collected market, and resolver implementations (`resolver.py`) turn resolved specs into the `list[MarketMapping]` contract the dataset builder has consumed since Milestone 4 — swapping the config file for the parser required no dataset-builder changes.
 
-Input:
+Input (all from collected data; nothing re-fetched):
 
-- market ticker
-- event metadata
-- complete rules text
-- selected market subtitle/strike information
+- the series' structured `settlement_sources` URL — the primary signal (`product=CLI`, `issuedby` = station location code, `site` = WFO office, all cross-checked against the station registry)
+- complete rules text (variable and target date — the only facts that live in prose, each cross-validated: date against the event ticker's date segment, variable against the series/market title)
+- market/event metadata (tickers, close time)
 
-Output:
+Output: a `SettlementSpec` with status (`resolved`/`ambiguous`/`unresolved`/`unsupported`), confidence (`high`/`medium`), canonical station, source, variable, target date, observation window, units, rounding, parser version, rules hash, and machine-readable notes for every non-resolved outcome. Specs are persisted append-only in `settlement_specs`, versioned by `(market_ticker, parser_version, rules_hash)`.
 
-- canonical station identifier
-- source
-- variable
-- event date
-- observation window
-- timezone
-- threshold or bucket
-- inclusivity (`>`, `>=`, `<`, `<=`)
-- units
-- precision/rounding
-- resolution deadline
-- parser version
-- confidence status
+Deliberately not parsed here: thresholds/strike structure (payoff, not settlement-source identity — Kalshi exposes structured strike fields for when a later phase needs them).
 
-No strategy may trade a market whose settlement mapping is unresolved or ambiguous.
+The config market-map file survives as the manual override layer (audit fields: `reason`/`author`/`added_on`), taking precedence over parsed output and recorded in the resolution report and dataset manifest.
+
+No strategy may trade a market whose settlement mapping is unresolved or ambiguous — enforced by construction: only `resolved` specs ever become mappings.
 
 ### Research dataset
 

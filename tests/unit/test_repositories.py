@@ -372,3 +372,19 @@ async def test_get_latest_observation_date_returns_max(session: AsyncSession) ->
 
     latest = await get_latest_observation_date(session, "NYC", "tmax_f")
     assert latest == date(2026, 7, 20)
+
+
+async def test_save_series_preserves_settlement_source_when_none(session: AsyncSession) -> None:
+    """A later series upsert that doesn't know the settlement sources must not
+    erase a previously stored citation (the settlement parser depends on it)."""
+    common = {"series_ticker": "KXHIGHNY", "category": "Climate and Weather", "frequency": "daily"}
+    first = await save_series(
+        session, title="t", settlement_source='[{"url": "https://x"}]', **common  # type: ignore[arg-type]
+    )
+    assert first.settlement_source is not None
+    second = await save_series(session, title="t2", **common)  # type: ignore[arg-type]
+    assert second.settlement_source == '[{"url": "https://x"}]'
+    third = await save_series(
+        session, title="t3", settlement_source='[{"url": "https://y"}]', **common  # type: ignore[arg-type]
+    )
+    assert third.settlement_source == '[{"url": "https://y"}]'

@@ -271,3 +271,52 @@ class WeatherForecast(Base):
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class SettlementSpecRecord(Base):
+    """A stored settlement resolution for one market (settlement/spec.py).
+
+    Append-only and versioned: unique on (market_ticker, parser_version,
+    rules_hash), so re-running the same parser over unchanged rules is a
+    detectable no-op, while a parser upgrade or a rules change produces a new
+    row alongside the old one -- the resolution history is never rewritten.
+    The latest row per market (max id) is the current resolution.
+    """
+
+    __tablename__ = "settlement_specs"
+    __table_args__ = (
+        Index(
+            "ix_settlement_specs_dedup",
+            "market_ticker",
+            "parser_version",
+            "rules_hash",
+            unique=True,
+        ),
+        Index("ix_settlement_specs_market", "market_ticker"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_ticker: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False)
+    city: Mapped[str | None] = mapped_column(String(64))
+    # Not a ForeignKey: unsupported markets legitimately reference stations
+    # absent from weather_stations (that absence is the finding).
+    station_id: Mapped[str | None] = mapped_column(String(32))
+    variable: Mapped[str | None] = mapped_column(String(32))
+    target_date: Mapped[date | None] = mapped_column(nullable=True)
+    settlement_source: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    wfo_site: Mapped[str | None] = mapped_column(String(8))
+    source_location_code: Mapped[str | None] = mapped_column(String(16))
+    unit: Mapped[str | None] = mapped_column(String(8))
+    observation_window: Mapped[str | None] = mapped_column(String(32))
+    rounding_rule: Mapped[str | None] = mapped_column(String(32))
+    market_close_time: Mapped[datetime | None] = mapped_column(nullable=True)
+    notes_json: Mapped[Any] = mapped_column(JSON, nullable=False, default=list)
+    parser_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    rules_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)

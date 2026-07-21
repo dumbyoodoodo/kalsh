@@ -22,6 +22,8 @@ import random
 import sys
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -693,14 +695,176 @@ def test_cost_band_cents_invokes_contract_fee_cents_with_frozen_arguments() -> N
     assert calls[0]["config"] is h0005.KALSHI_WEATHER_TAKER_FEE_CONFIG
 
 
-def test_cost_band_cents_adds_rounded_half_spread_to_fee() -> None:
+def test_cost_band_cents_adds_exact_half_spread_to_fee() -> None:
     fee = h0005.contract_fee_cents(
         h0005.round_half_up_cents(50.0), contracts=1, config=h0005.KALSHI_WEATHER_TAKER_FEE_CONFIG
     )
     band = h0005.cost_band_cents(
         mid_price_cents=50.0, yes_bid_close_cents=45, yes_ask_close_cents=55
     )
-    assert band == fee + 5  # half_spread = (55-45)/2 = 5
+    assert band == fee + 5  # half_spread = (55-45)/2 = 5, an exact integer here
+    assert isinstance(band, Fraction)
+
+
+def test_cost_band_cents_at_100_cent_boundary_uses_zero_fee_not_a_crash() -> None:
+    """Execution-time defect fix #1: bid=99/ask=100 -> mid=99.5 ->
+    round_half_up -> 100, outside contract_fee_cents's documented 1-99
+    domain. The fee at that boundary is the frozen formula's own
+    well-defined limit (ceil(multiplier * 1 * (1-1) * contracts) == 0),
+    not a crash and not a clamp to a different price. The half-spread here
+    (1 cent, per fix #2 below) is exact, never rounded."""
+    band = h0005.cost_band_cents(
+        mid_price_cents=99.5, yes_bid_close_cents=99, yes_ask_close_cents=100
+    )
+    assert band == Fraction(1, 2)  # fee=0, half_spread=(100-99)/2=1/2 exactly
+
+
+def test_cost_band_cents_at_0_cent_boundary_uses_zero_fee_not_a_crash() -> None:
+    """Symmetric boundary: bid=0/ask=1 -> mid=0.5 -> round_half_up -> 1,
+    which IS in contract_fee_cents's domain, so this exercises the exact
+    P=0 case: bid=0/ask=0 -> mid=0.0 -> round_half_up -> 0."""
+    band = h0005.cost_band_cents(mid_price_cents=0.0, yes_bid_close_cents=0, yes_ask_close_cents=0)
+    assert band == 0
+
+
+def test_cost_band_cents_normal_range_still_delegates_to_contract_fee_cents() -> None:
+    """The 1-99 fix path must not change behavior anywhere inside
+    contract_fee_cents's own documented domain -- exercised across the
+    full 1-99 range, comparing against a direct contract_fee_cents call."""
+    for price in (1, 2, 25, 49, 50, 51, 75, 98, 99):
+        expected_fee = h0005.contract_fee_cents(
+            price, contracts=1, config=h0005.KALSHI_WEATHER_TAKER_FEE_CONFIG
+        )
+        band = h0005.cost_band_cents(
+            mid_price_cents=float(price), yes_bid_close_cents=price, yes_ask_close_cents=price
+        )
+        assert band == expected_fee  # zero spread at bid==ask
+
+
+# === Execution-integrity remediation: exact half-spread / exact comparison ==
+#
+# The first H0005 execution attempt (superseded -- see
+# IMPLEMENTATION-NOTE-20260721-H0005-exact-cost-band.md) computed
+# `fee + round(half_spread)` (Python banker's rounding), which the frozen
+# protocol never specifies, and compared the result against a bootstrap CI
+# bound using raw binary float `>`. Both defects are corrected below:
+# half_spread_cents is now an exact Fraction, never rounded, and the
+# discovery/hold-out screen comparison is decided in controlled-precision
+# Decimal arithmetic so an exact tie is never resolved by which side's
+# float representation happens to round up.
+
+
+def test_one_cent_spread_yields_exact_half_cent_half_spread() -> None:
+    """The case that silently broke the superseded execution: a 1-cent
+    spread's true half-spread is 0.5 cents, not round(0.5) == 0."""
+    band = h0005.cost_band_cents(
+        mid_price_cents=50.0, yes_bid_close_cents=50, yes_ask_close_cents=51
+    )
+    fee = h0005.contract_fee_cents(50, contracts=1, config=h0005.KALSHI_WEATHER_TAKER_FEE_CONFIG)
+    assert band == fee + Fraction(1, 2)
+    assert band != fee  # the superseded, rounded implementation would assert this
+
+
+def test_three_cent_spread_yields_exact_one_and_a_half_cent_half_spread() -> None:
+    """A second odd-cent spread, at a different rounding parity
+    (round(1.5) == 2 under banker's rounding) -- exact arithmetic must not
+    round either direction."""
+    band = h0005.cost_band_cents(
+        mid_price_cents=50.0, yes_bid_close_cents=49, yes_ask_close_cents=52
+    )
+    fee = h0005.contract_fee_cents(50, contracts=1, config=h0005.KALSHI_WEATHER_TAKER_FEE_CONFIG)
+    assert band == fee + Fraction(3, 2)
+
+
+def test_cell_cost_band_averages_exactly_across_observations() -> None:
+    """_cell_point_estimates averages cost_band_cents as Fraction, so a
+    cell mixing exact fractional per-observation bands (e.g. two
+    observations with a 1-cent spread each) produces an exact mean, never
+    a float-rounded one."""
+    obs = [
+        _obs("A", 2, decile=9, mid_price_cents=99.5, outcome=1, cost_band_cents=Fraction(1, 2)),
+        _obs("B", 2, decile=9, mid_price_cents=99.5, outcome=1, cost_band_cents=Fraction(1, 2)),
+    ]
+    point = h0005._cell_point_estimates(obs)
+    assert point["cost_band_cents"] == Fraction(1, 2)
+
+
+def test_exceeds_cost_band_exact_tie_is_false() -> None:
+    """AMENDMENT/PREREG's strict '>' comparison: a mathematically exact
+    tie (1/200 vs 1/200) must evaluate to False, not True-by-float-noise.
+    lower_abs is passed as the actual IEEE-754 float
+    abs(99.5/100 - 1) produces, which carries ~4e-18 of representation
+    error above the true value 1/200 -- exactly the situation that made
+    the superseded execution's sole clearing cell pass its discovery
+    screen on floating-point noise."""
+    lower_abs = abs(99.5 / 100 - 1)
+    assert lower_abs != 0.005  # the float is NOT bit-identical to 1/200
+    # Fraction(1, 200) is already probability-scale (cost_band_cents=1/2 ->
+    # _cost_band_probability divides by 100 -> 1/200), matching lower_abs.
+    cost_band_probability = Fraction(1, 200)
+    assert h0005._exceeds_cost_band(lower_abs, cost_band_probability) is False
+
+
+def test_exceeds_cost_band_strictly_greater_passes() -> None:
+    """A genuine, non-tie excess must still pass -- the exact-arithmetic
+    fix must not make the screen impossible to clear."""
+    assert h0005._exceeds_cost_band(0.10, Fraction(1, 200)) is True
+
+
+def test_exceeds_cost_band_strictly_less_fails() -> None:
+    assert h0005._exceeds_cost_band(0.001, Fraction(1, 200)) is False
+
+
+def test_exceeds_cost_band_none_inputs_are_false_not_a_crash() -> None:
+    assert h0005._exceeds_cost_band(None, Fraction(1, 200)) is False
+    assert h0005._exceeds_cost_band(0.5, None) is False
+
+
+def test_to_comparison_decimal_strips_float_representation_noise() -> None:
+    """Direct test of the Decimal-quantization helper: two values that
+    differ only in IEEE-754 representation error (~1e-16) at the 9th
+    decimal place and beyond must quantize to the identical Decimal."""
+    exact = h0005._to_comparison_decimal(Fraction(1, 200))
+    noisy_float = h0005._to_comparison_decimal(0.005000000000000004)
+    assert exact == noisy_float == Decimal("0.005000000")
+
+
+def test_to_comparison_decimal_does_not_erase_a_real_difference() -> None:
+    """The controlled precision (1e-9) must not be so coarse that it
+    erases a genuine, data-driven difference far above float noise."""
+    a = h0005._to_comparison_decimal(Fraction(1, 200))  # 0.005
+    b = h0005._to_comparison_decimal(Fraction(1, 100))  # 0.01
+    assert a != b
+    assert b > a
+
+
+def test_regression_rounded_half_spread_would_have_zeroed_the_one_cent_case() -> None:
+    """Reconstructs the superseded implementation's exact arithmetic
+    (`fee + round(half_spread)`) and shows it silently zeroes a 1-cent
+    spread's cost, unlike the corrected exact-Fraction implementation."""
+    fee = 0  # at mid=99.5, rounded_mid=100 -> fee=0, per the frozen limit fix
+    superseded_band = fee + round((100 - 99) / 2)  # round(0.5) == 0 (banker's rounding)
+    corrected_band = h0005.cost_band_cents(
+        mid_price_cents=99.5, yes_bid_close_cents=99, yes_ask_close_cents=100
+    )
+    assert superseded_band == 0
+    assert corrected_band == Fraction(1, 2)
+    assert superseded_band != corrected_band
+
+
+def test_regression_float_comparison_would_have_passed_the_exact_tie() -> None:
+    """Reconstructs the superseded implementation's raw-float comparison
+    (`lower_abs > cost_band_cents / 100`, no Decimal quantization) at the
+    exact tie that decided the superseded execution's sole clearing cell,
+    and shows it evaluates True purely from float representation noise --
+    contrasted with the corrected, exact-arithmetic result (False)."""
+    lower_abs = abs(99.5 / 100 - 1)  # what the bootstrap pipeline actually computes
+    superseded_band_float = 0.5 / 100  # the (corrected) band, compared as raw float
+    superseded_result = lower_abs > superseded_band_float
+    assert superseded_result is True  # passes only due to ~4e-18 float noise
+
+    corrected_result = h0005._exceeds_cost_band(lower_abs, Fraction(1, 200))
+    assert corrected_result is False
 
 
 # --- Evaluation-order logic (AMENDMENT Finding 4) ----------------------------

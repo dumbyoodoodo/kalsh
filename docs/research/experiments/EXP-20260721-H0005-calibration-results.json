@@ -1,0 +1,3563 @@
+{
+  "experiment": "EXP-20260721-H0005-calibration",
+  "hypothesis": "H0005",
+  "preregistration": {
+    "document": "docs/research/experiments/PREREG-20260721-H0005-calibration.md",
+    "frozen_date": "2026-07-21",
+    "frozen_git_commit": "b30f92e3c8db17e2a246fb1be9d1f6328161a1e9",
+    "protocol_differences_document": "docs/research/experiments/DIFFERENCES-20260721-H0005-from-original-design.md",
+    "original_hypotheses_entry": "HYPOTHESES.md H0005, opened 2026-07-21",
+    "amendment": {
+      "document": "docs/research/experiments/AMENDMENT-20260721-H0005-pre-execution.md",
+      "frozen_date": "2026-07-21",
+      "resolves": [
+        "research_question_wording",
+        "bootstrap_pool_separation",
+        "rng_consumption_order",
+        "evaluation_order",
+        "fee_invocation",
+        "close_time_verification_gate",
+        "empty_cell_handling",
+        "split_tie_break",
+        "duplicate_invariants"
+      ],
+      "blocked_on": []
+    }
+  },
+  "dataset": {
+    "version": "exp-20260721-h0005",
+    "content_hashes": {
+      "market_price_weather": "d88e6ccb5ace784f22d251c6c43ab2d733cc23ec592c51abf0c40816a1814da1",
+      "settlement_labels": "b0d907c051ed2d8b3710717ba4bfbbddc2b66de36cc93239e865b26e95c5b050"
+    },
+    "market_price_weather_schema_version": "1",
+    "settlement_label_reconstruction_version": "1",
+    "source_db_revision": "0007",
+    "git_commit": "a9df34eea0284965b6fb333ea2fab6fd9bae5e75"
+  },
+  "config": {
+    "primary_series": "KXHIGHNY",
+    "exploratory_series": [
+      "KXLOWTNYC"
+    ],
+    "horizons_hours": [
+      72,
+      48,
+      24,
+      12,
+      6,
+      2
+    ],
+    "candle_staleness_tolerance_minutes": 15,
+    "decile_boundaries_pct": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100
+    ],
+    "primary_price_definition": "mid = (yes_bid_close_cents + yes_ask_close_cents) / 2",
+    "secondary_price_definitions": [
+      "ask_implied = yes_ask_close_cents/100",
+      "bid_implied = yes_bid_close_cents/100"
+    ],
+    "fee_config": {
+      "source": "scripts/h0007_fees.py: KALSHI_WEATHER_TAKER_FEE_CONFIG",
+      "multiplier": "0.07",
+      "verified": true,
+      "verified_date": "2026-07-21"
+    },
+    "cost_band_formula": "contract_fee_cents(price_cents=round_half_up(mid_price_cents), contracts=1, config=KALSHI_WEATHER_TAKER_FEE_CONFIG) + half_spread_cents",
+    "mid_price_rounding": "round_half_up (X.5 rounds up to X+1), per AMENDMENT-20260721-H0005-pre-execution.md Finding 5",
+    "outcome_derivation": "settlement/labels.py implied_result(value_at_settlement, strike_type, floor_strike, cap_strike); requires settlement_label_status == 'resolved'",
+    "primary_family_size": 60,
+    "bonferroni_alpha": 0.0008333333333333334,
+    "confidence_level": 0.95,
+    "random_seed": 20260721,
+    "rng_consumption_order": "single random.Random(20260721); discovery-slice cells (horizon ascending [2,6,12,24,48,72] outer, decile ascending inner, 60 calls) then hold-out-slice cells, same nested order, unconditional for all 60 cells (120 calls total); no other statistic consumes randomness -- AMENDMENT Finding 3",
+    "bootstrap_resamples": 10000,
+    "bootstrap_cluster_unit": "settlement day",
+    "bootstrap_pool_separation": "discovery bootstrap resamples only discovery-slice days; holdout bootstrap resamples only holdout-slice days; pools never mixed -- AMENDMENT Finding 2",
+    "min_settlement_days_required": 60,
+    "min_days_per_cell": 20,
+    "replication_split": "chronological halves of the valid-day population, 1-day embargo at the boundary",
+    "split_tie_break": "if the post-embargo day count is odd, discovery slice receives the extra (earliest) day -- AMENDMENT Finding 8",
+    "evaluation_order": "1) total-day floor -> inconclusive; 2) any cell clears both screens -> rejected; 3) any discovery-passing cell insufficient_n in holdout -> inconclusive-for-power; 4) otherwise confirmed -- AMENDMENT Finding 4",
+    "empty_cell_handling": "N=0 cell: calibration_error null, excluded from ECE weighted sum, contributes zero rows to regression -- AMENDMENT Finding 7",
+    "close_time_immutability_verified": true,
+    "close_time_immutability_evidence": "Queried market_snapshots directly (2026-07-21): for every KXHIGHNY/KXLOWTNYC market_ticker in the archive (828 distinct markets, 828 market_snapshots rows -- i.e. every snapshot row belongs to one of these two series), count(distinct close_time) grouped by market_ticker == 1 for all 828 markets (0 markets with >1 distinct close_time). close_time is empirically immutable across the entire pinned population, not just a sample -- AMENDMENT Finding 6.",
+    "duplicate_invariants_checked": true
+  },
+  "coverage": {
+    "settlement_days_available": 66,
+    "settlement_days_excluded_missing_data": 1,
+    "excluded_days": [
+      "2026-07-02"
+    ],
+    "discovery_slice_days": 33,
+    "holdout_slice_days": 32,
+    "observations_excluded_stale": {
+      "72": 402,
+      "48": 402,
+      "24": 19,
+      "12": 12,
+      "6": 109,
+      "2": 118
+    },
+    "cells_below_min_n": [
+      [
+        72,
+        0
+      ],
+      [
+        72,
+        1
+      ],
+      [
+        72,
+        2
+      ],
+      [
+        72,
+        3
+      ],
+      [
+        72,
+        4
+      ],
+      [
+        72,
+        5
+      ],
+      [
+        72,
+        6
+      ],
+      [
+        72,
+        7
+      ],
+      [
+        72,
+        8
+      ],
+      [
+        72,
+        9
+      ],
+      [
+        48,
+        0
+      ],
+      [
+        48,
+        1
+      ],
+      [
+        48,
+        2
+      ],
+      [
+        48,
+        3
+      ],
+      [
+        48,
+        4
+      ],
+      [
+        48,
+        5
+      ],
+      [
+        48,
+        6
+      ],
+      [
+        48,
+        7
+      ],
+      [
+        48,
+        8
+      ],
+      [
+        48,
+        9
+      ],
+      [
+        24,
+        1
+      ],
+      [
+        24,
+        2
+      ],
+      [
+        24,
+        4
+      ],
+      [
+        24,
+        5
+      ],
+      [
+        24,
+        6
+      ],
+      [
+        24,
+        7
+      ],
+      [
+        24,
+        8
+      ],
+      [
+        24,
+        9
+      ],
+      [
+        12,
+        1
+      ],
+      [
+        12,
+        2
+      ],
+      [
+        12,
+        3
+      ],
+      [
+        12,
+        4
+      ],
+      [
+        12,
+        5
+      ],
+      [
+        12,
+        6
+      ],
+      [
+        12,
+        7
+      ],
+      [
+        12,
+        8
+      ],
+      [
+        12,
+        9
+      ],
+      [
+        6,
+        1
+      ],
+      [
+        6,
+        2
+      ],
+      [
+        6,
+        3
+      ],
+      [
+        6,
+        4
+      ],
+      [
+        6,
+        5
+      ],
+      [
+        6,
+        6
+      ],
+      [
+        6,
+        7
+      ],
+      [
+        6,
+        8
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        2,
+        4
+      ],
+      [
+        2,
+        5
+      ],
+      [
+        2,
+        6
+      ],
+      [
+        2,
+        7
+      ],
+      [
+        2,
+        8
+      ]
+    ]
+  },
+  "primary_results": {
+    "cells": [
+      {
+        "horizon_hours": 72,
+        "decile": 0,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 1,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 2,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 3,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 4,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 5,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 6,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 7,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 8,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 9,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 0,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 1,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 2,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 3,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 4,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 5,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 6,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 7,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 8,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 9,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 0,
+        "n_days_discovery": 33,
+        "n_days_holdout": 32,
+        "mean_predicted_probability": 0.024900990099009902,
+        "realized_yes_frequency": 0.019801980198019802,
+        "calibration_error": 0.0050990099009901,
+        "cost_band_cents": 1.618811881188119,
+        "discovery_ci": [
+          -0.04586124617737002,
+          0.030032556634304187
+        ],
+        "discovery_ci95": [
+          -0.04586124617737002,
+          0.030032556634304187
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.025384615384615384,
+        "holdout_realized_yes_frequency": 0.02197802197802198,
+        "holdout_calibration_error": 0.003406593406593404,
+        "holdout_cost_band_cents": 1.5714285714285714,
+        "holdout_ci": [
+          -0.03063882394201543,
+          0.02741582094961943
+        ],
+        "holdout_ci95": [
+          -0.03063882394201543,
+          0.02741582094961943
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 1,
+        "n_days_discovery": 17,
+        "n_days_holdout": 17,
+        "mean_predicted_probability": 0.14868421052631578,
+        "realized_yes_frequency": 0.10526315789473684,
+        "calibration_error": 0.043421052631578944,
+        "cost_band_cents": 1.9210526315789473,
+        "discovery_ci": [
+          -0.2220615131578947,
+          0.16939840277777765
+        ],
+        "discovery_ci95": [
+          -0.2220615131578947,
+          0.16939840277777765
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.1368421052631579,
+        "holdout_realized_yes_frequency": 0.10526315789473684,
+        "holdout_calibration_error": 0.03157894736842107,
+        "holdout_cost_band_cents": 2.0,
+        "holdout_ci": [
+          -0.11020907738095237,
+          0.1407142857142857
+        ],
+        "holdout_ci95": [
+          -0.11020907738095237,
+          0.1407142857142857
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 2,
+        "n_days_discovery": 13,
+        "n_days_holdout": 16,
+        "mean_predicted_probability": 0.25261904761904763,
+        "realized_yes_frequency": 0.23809523809523808,
+        "calibration_error": 0.01452380952380955,
+        "cost_band_cents": 3.0238095238095237,
+        "discovery_ci": [
+          -0.297240404040404,
+          0.2636223557692305
+        ],
+        "discovery_ci95": [
+          -0.297240404040404,
+          0.2636223557692305
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.24904761904761905,
+        "holdout_realized_yes_frequency": 0.23809523809523808,
+        "holdout_calibration_error": 0.010952380952380963,
+        "holdout_cost_band_cents": 2.8095238095238093,
+        "holdout_ci": [
+          -0.12666666666666668,
+          0.16999999999999998
+        ],
+        "holdout_ci95": [
+          -0.12666666666666668,
+          0.16999999999999998
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 3,
+        "n_days_discovery": 13,
+        "n_days_holdout": 20,
+        "mean_predicted_probability": 0.3496153846153846,
+        "realized_yes_frequency": 0.3076923076923077,
+        "calibration_error": 0.041923076923076896,
+        "cost_band_cents": 3.1153846153846154,
+        "discovery_ci": [
+          -0.4352845833333333,
+          0.35623401442307695
+        ],
+        "discovery_ci95": [
+          -0.4352845833333333,
+          0.35623401442307695
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.34891304347826085,
+        "holdout_realized_yes_frequency": 0.391304347826087,
+        "holdout_calibration_error": -0.04239130434782612,
+        "holdout_cost_band_cents": 3.0217391304347827,
+        "holdout_ci": [
+          -0.23479687500000002,
+          0.14079577850877184
+        ],
+        "holdout_ci95": [
+          -0.23479687500000002,
+          0.14079577850877184
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 4,
+        "n_days_discovery": 16,
+        "n_days_holdout": 11,
+        "mean_predicted_probability": 0.44916666666666666,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": -0.05083333333333334,
+        "cost_band_cents": 3.25,
+        "discovery_ci": [
+          -0.4330616038602941,
+          0.3245235937499985
+        ],
+        "discovery_ci95": [
+          -0.4330616038602941,
+          0.3245235937499985
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.4425,
+        "holdout_realized_yes_frequency": 0.25,
+        "holdout_calibration_error": 0.1925,
+        "holdout_cost_band_cents": 3.0,
+        "holdout_ci": [
+          -0.052918749999999994,
+          0.4444479166666666
+        ],
+        "holdout_ci95": [
+          -0.052918749999999994,
+          0.4444479166666666
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 5,
+        "n_days_discovery": 11,
+        "n_days_holdout": 8,
+        "mean_predicted_probability": 0.5268181818181819,
+        "realized_yes_frequency": 0.36363636363636365,
+        "calibration_error": 0.1631818181818182,
+        "cost_band_cents": 3.3181818181818183,
+        "discovery_ci": [
+          -0.38212644230769227,
+          0.5361807291666666
+        ],
+        "discovery_ci95": [
+          -0.38212644230769227,
+          0.5361807291666666
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.525,
+        "holdout_realized_yes_frequency": 0.5,
+        "holdout_calibration_error": 0.025000000000000022,
+        "holdout_cost_band_cents": 3.375,
+        "holdout_ci": [
+          -0.3357142857142857,
+          0.385
+        ],
+        "holdout_ci95": [
+          -0.3357142857142857,
+          0.385
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 6,
+        "n_days_discovery": 2,
+        "n_days_holdout": 3,
+        "mean_predicted_probability": 0.6725,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.3275,
+        "cost_band_cents": 3.25,
+        "discovery_ci": [
+          -0.35,
+          -0.30500000000000005
+        ],
+        "discovery_ci95": [
+          -0.35,
+          -0.30500000000000005
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.6383333333333333,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.3616666666666667,
+        "holdout_cost_band_cents": 2.5,
+        "holdout_ci": [
+          -0.395,
+          -0.31499999999999995
+        ],
+        "holdout_ci95": [
+          -0.395,
+          -0.31499999999999995
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 7,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 8,
+        "n_days_discovery": 5,
+        "n_days_holdout": 1,
+        "mean_predicted_probability": 0.862,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.138,
+        "cost_band_cents": 1.8,
+        "discovery_ci": [
+          -0.17500000000000004,
+          -0.10499999999999998
+        ],
+        "discovery_ci95": [
+          -0.17500000000000004,
+          -0.10499999999999998
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.895,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.10499999999999998,
+        "holdout_cost_band_cents": 1.5,
+        "holdout_ci": [
+          -0.10499999999999998,
+          -0.10499999999999998
+        ],
+        "holdout_ci95": [
+          -0.10499999999999998,
+          -0.10499999999999998
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 9,
+        "n_days_discovery": 0,
+        "n_days_holdout": 3,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.925,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.07499999999999996,
+        "holdout_cost_band_cents": 1.5,
+        "holdout_ci": [
+          -0.08499999999999996,
+          -0.05500000000000005
+        ],
+        "holdout_ci95": [
+          -0.08499999999999996,
+          -0.05500000000000005
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 0,
+        "n_days_discovery": 33,
+        "n_days_holdout": 32,
+        "mean_predicted_probability": 0.015753968253968253,
+        "realized_yes_frequency": 0,
+        "calibration_error": 0.015753968253968253,
+        "cost_band_cents": 1.5595238095238095,
+        "discovery_ci": [
+          0.01102353507704785,
+          0.02157384271018537
+        ],
+        "discovery_ci95": [
+          0.01102353507704785,
+          0.02157384271018537
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.014879032258064516,
+        "holdout_realized_yes_frequency": 0,
+        "holdout_calibration_error": 0.014879032258064516,
+        "holdout_cost_band_cents": 1.5201612903225807,
+        "holdout_ci": [
+          0.012054136484940907,
+          0.017834779527559054
+        ],
+        "holdout_ci95": [
+          0.012054136484940907,
+          0.017834779527559054
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 1,
+        "n_days_discovery": 11,
+        "n_days_holdout": 8,
+        "mean_predicted_probability": 0.13791666666666666,
+        "realized_yes_frequency": 0.16666666666666666,
+        "calibration_error": -0.028749999999999998,
+        "cost_band_cents": 1.9583333333333333,
+        "discovery_ci": [
+          -0.4262880681818182,
+          0.16343108766233747
+        ],
+        "discovery_ci95": [
+          -0.4262880681818182,
+          0.16343108766233747
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.1475,
+        "holdout_realized_yes_frequency": 0.2,
+        "holdout_calibration_error": -0.05250000000000002,
+        "holdout_cost_band_cents": 2.35,
+        "holdout_ci": [
+          -0.3219711538461538,
+          0.16666666666666669
+        ],
+        "holdout_ci95": [
+          -0.3219711538461538,
+          0.16666666666666669
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 2,
+        "n_days_discovery": 6,
+        "n_days_holdout": 5,
+        "mean_predicted_probability": 0.22916666666666666,
+        "realized_yes_frequency": 0.3333333333333333,
+        "calibration_error": -0.10416666666666666,
+        "cost_band_cents": 2.9166666666666665,
+        "discovery_ci": [
+          -0.8,
+          0.265
+        ],
+        "discovery_ci95": [
+          -0.8,
+          0.265
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.265,
+        "holdout_realized_yes_frequency": 0.4,
+        "holdout_calibration_error": -0.135,
+        "holdout_cost_band_cents": 2.9,
+        "holdout_ci": [
+          -0.735,
+          0.27699999999999997
+        ],
+        "holdout_ci95": [
+          -0.735,
+          0.27699999999999997
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 3,
+        "n_days_discovery": 8,
+        "n_days_holdout": 7,
+        "mean_predicted_probability": 0.35625,
+        "realized_yes_frequency": 0,
+        "calibration_error": 0.35625,
+        "cost_band_cents": 3.75,
+        "discovery_ci": [
+          0.3225,
+          0.39
+        ],
+        "discovery_ci95": [
+          0.3225,
+          0.39
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.36,
+        "holdout_realized_yes_frequency": 0.5,
+        "holdout_calibration_error": -0.14,
+        "holdout_cost_band_cents": 3.25,
+        "holdout_ci": [
+          -0.48714285714285716,
+          0.20583333333333334
+        ],
+        "holdout_ci95": [
+          -0.48714285714285716,
+          0.20583333333333334
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 4,
+        "n_days_discovery": 8,
+        "n_days_holdout": 10,
+        "mean_predicted_probability": 0.44,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": -0.06,
+        "cost_band_cents": 3.1,
+        "discovery_ci": [
+          -0.5729197916666667,
+          0.4408778124999999
+        ],
+        "discovery_ci95": [
+          -0.5729197916666667,
+          0.4408778124999999
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.4404166666666667,
+        "holdout_realized_yes_frequency": 0.4166666666666667,
+        "holdout_calibration_error": 0.023749999999999993,
+        "holdout_cost_band_cents": 3.2083333333333335,
+        "holdout_ci": [
+          -0.23459375,
+          0.2775
+        ],
+        "holdout_ci95": [
+          -0.23459375,
+          0.2775
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 5,
+        "n_days_discovery": 7,
+        "n_days_holdout": 9,
+        "mean_predicted_probability": 0.5421428571428571,
+        "realized_yes_frequency": 0.8571428571428571,
+        "calibration_error": -0.31499999999999995,
+        "cost_band_cents": 3.0714285714285716,
+        "discovery_ci": [
+          -0.49983500000000003,
+          0.575
+        ],
+        "discovery_ci95": [
+          -0.49983500000000003,
+          0.575
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.5383333333333333,
+        "holdout_realized_yes_frequency": 0.6666666666666666,
+        "holdout_calibration_error": -0.1283333333333333,
+        "holdout_cost_band_cents": 3.1666666666666665,
+        "holdout_ci": [
+          -0.4641726190476191,
+          0.2130166666666664
+        ],
+        "holdout_ci95": [
+          -0.4641726190476191,
+          0.2130166666666664
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 6,
+        "n_days_discovery": 7,
+        "n_days_holdout": 7,
+        "mean_predicted_probability": 0.655,
+        "realized_yes_frequency": 0.8571428571428571,
+        "calibration_error": -0.20214285714285707,
+        "cost_band_cents": 3.357142857142857,
+        "discovery_ci": [
+          -0.395,
+          0.5150291666666696
+        ],
+        "discovery_ci95": [
+          -0.395,
+          0.5150291666666696
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.6564285714285715,
+        "holdout_realized_yes_frequency": 0.42857142857142855,
+        "holdout_calibration_error": 0.22785714285714292,
+        "holdout_cost_band_cents": 3.0714285714285716,
+        "holdout_ci": [
+          -0.17216964285714287,
+          0.6391666666666667
+        ],
+        "holdout_ci95": [
+          -0.17216964285714287,
+          0.6391666666666667
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 7,
+        "n_days_discovery": 6,
+        "n_days_holdout": 2,
+        "mean_predicted_probability": 0.7666666666666667,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": 0.2666666666666667,
+        "cost_band_cents": 3.3333333333333335,
+        "discovery_ci": [
+          -0.255,
+          0.7850000000000001
+        ],
+        "discovery_ci95": [
+          -0.255,
+          0.7850000000000001
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.7575000000000001,
+        "holdout_realized_yes_frequency": 0.5,
+        "holdout_calibration_error": 0.25750000000000006,
+        "holdout_cost_band_cents": 2.75,
+        "holdout_ci": [
+          -0.20499999999999996,
+          0.72
+        ],
+        "holdout_ci95": [
+          -0.20499999999999996,
+          0.72
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 8,
+        "n_days_discovery": 2,
+        "n_days_holdout": 4,
+        "mean_predicted_probability": 0.82,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.18000000000000005,
+        "cost_band_cents": 2.0,
+        "discovery_ci": [
+          -0.18500000000000005,
+          -0.17500000000000004
+        ],
+        "discovery_ci95": [
+          -0.18500000000000005,
+          -0.17500000000000004
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.855,
+        "holdout_realized_yes_frequency": 0.75,
+        "holdout_calibration_error": 0.10499999999999998,
+        "holdout_cost_band_cents": 2.25,
+        "holdout_ci": [
+          -0.17000000000000004,
+          0.885
+        ],
+        "holdout_ci95": [
+          -0.17000000000000004,
+          0.885
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 9,
+        "n_days_discovery": 7,
+        "n_days_holdout": 6,
+        "mean_predicted_probability": 0.9621428571428571,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.03785714285714292,
+        "cost_band_cents": 1.5,
+        "discovery_ci": [
+          -0.06499999999999995,
+          -0.0050000000000000044
+        ],
+        "discovery_ci95": [
+          -0.06499999999999995,
+          -0.0050000000000000044
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.9666666666666667,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.033333333333333326,
+        "holdout_cost_band_cents": 1.1666666666666667,
+        "holdout_ci": [
+          -0.060999999999999964,
+          -0.00833333333333334
+        ],
+        "holdout_ci95": [
+          -0.060999999999999964,
+          -0.00833333333333334
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 0,
+        "n_days_discovery": 33,
+        "n_days_holdout": 32,
+        "mean_predicted_probability": 0.0076694915254237285,
+        "realized_yes_frequency": 0.00847457627118644,
+        "calibration_error": -0.0008050847457627122,
+        "cost_band_cents": 1.5381355932203389,
+        "discovery_ci": [
+          -0.036375220170454546,
+          0.010346844450293251
+        ],
+        "discovery_ci95": [
+          -0.036375220170454546,
+          0.010346844450293251
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.008861386138613862,
+        "holdout_realized_yes_frequency": 0,
+        "holdout_calibration_error": 0.008861386138613862,
+        "holdout_cost_band_cents": 1.5693069306930694,
+        "holdout_ci": [
+          0.006238083451202262,
+          0.011666666666666667
+        ],
+        "holdout_ci95": [
+          0.006238083451202262,
+          0.011666666666666667
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 1,
+        "n_days_discovery": 1,
+        "n_days_holdout": 1,
+        "mean_predicted_probability": 0.105,
+        "realized_yes_frequency": 0,
+        "calibration_error": 0.105,
+        "cost_band_cents": 2.5,
+        "discovery_ci": [
+          0.105,
+          0.105
+        ],
+        "discovery_ci95": [
+          0.105,
+          0.105
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.165,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.835,
+        "holdout_cost_band_cents": 1.5,
+        "holdout_ci": [
+          -0.835,
+          -0.835
+        ],
+        "holdout_ci95": [
+          -0.835,
+          -0.835
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 2,
+        "n_days_discovery": 2,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": 0.25,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": -0.25,
+        "cost_band_cents": 4.0,
+        "discovery_ci": [
+          -0.76,
+          0.26
+        ],
+        "discovery_ci95": [
+          -0.76,
+          0.26
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 3,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 4,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 5,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 6,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 7,
+        "n_days_discovery": 2,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": 0.735,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": 0.235,
+        "cost_band_cents": 7.5,
+        "discovery_ci": [
+          -0.30000000000000004,
+          0.77
+        ],
+        "discovery_ci95": [
+          -0.30000000000000004,
+          0.77
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 8,
+        "n_days_discovery": 1,
+        "n_days_holdout": 2,
+        "mean_predicted_probability": 0.885,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.11499999999999999,
+        "cost_band_cents": 2.5,
+        "discovery_ci": [
+          -0.11499999999999999,
+          -0.11499999999999999
+        ],
+        "discovery_ci95": [
+          -0.11499999999999999,
+          -0.11499999999999999
+        ],
+        "discovery_bonferroni_pass": true,
+        "holdout_mean_predicted_probability": 0.865,
+        "holdout_realized_yes_frequency": 0.5,
+        "holdout_calibration_error": 0.365,
+        "holdout_cost_band_cents": 2.5,
+        "holdout_ci": [
+          -0.10999999999999999,
+          0.8400000000000001
+        ],
+        "holdout_ci95": [
+          -0.10999999999999999,
+          0.8400000000000001
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 9,
+        "n_days_discovery": 27,
+        "n_days_holdout": 30,
+        "mean_predicted_probability": 0.9824074074074074,
+        "realized_yes_frequency": 0.9629629629629629,
+        "calibration_error": 0.019444444444444486,
+        "cost_band_cents": 1.0925925925925926,
+        "discovery_ci": [
+          -0.02960631868131868,
+          0.16271666666666634
+        ],
+        "discovery_ci95": [
+          -0.02960631868131868,
+          0.16271666666666634
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.9845,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.015499999999999958,
+        "holdout_cost_band_cents": 0.8166666666666667,
+        "holdout_ci": [
+          -0.024677419354838703,
+          -0.007968750000000004
+        ],
+        "holdout_ci95": [
+          -0.024677419354838703,
+          -0.007968750000000004
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 0,
+        "n_days_discovery": 32,
+        "n_days_holdout": 32,
+        "mean_predicted_probability": 0.005,
+        "realized_yes_frequency": 0,
+        "calibration_error": 0.005,
+        "cost_band_cents": 1.5,
+        "discovery_ci": [
+          0.005000000000000001,
+          0.005
+        ],
+        "discovery_ci95": [
+          0.005000000000000001,
+          0.005
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.005398230088495575,
+        "holdout_realized_yes_frequency": 0,
+        "holdout_calibration_error": 0.005398230088495575,
+        "holdout_cost_band_cents": 1.5132743362831858,
+        "holdout_ci": [
+          0.005,
+          0.00625
+        ],
+        "holdout_ci95": [
+          0.005,
+          0.00625
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 1,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 2,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 3,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 4,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 5,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 6,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 7,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 8,
+        "n_days_discovery": 0,
+        "n_days_holdout": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null,
+        "discovery_ci": [
+          null,
+          null
+        ],
+        "discovery_ci95": [
+          null,
+          null
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": null,
+        "holdout_realized_yes_frequency": null,
+        "holdout_calibration_error": null,
+        "holdout_cost_band_cents": null,
+        "holdout_ci": [
+          null,
+          null
+        ],
+        "holdout_ci95": [
+          null,
+          null
+        ],
+        "holdout_insufficient_n": true,
+        "insufficient_n": true,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 9,
+        "n_days_discovery": 29,
+        "n_days_holdout": 26,
+        "mean_predicted_probability": 0.995,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.0050000000000000044,
+        "cost_band_cents": 0.5,
+        "discovery_ci": [
+          -0.0050000000000000044,
+          -0.0050000000000000044
+        ],
+        "discovery_ci95": [
+          -0.0050000000000000044,
+          -0.0050000000000000044
+        ],
+        "discovery_bonferroni_pass": false,
+        "holdout_mean_predicted_probability": 0.9928846153846154,
+        "holdout_realized_yes_frequency": 1,
+        "holdout_calibration_error": -0.0071153846153846345,
+        "holdout_cost_band_cents": 0.6346153846153846,
+        "holdout_ci": [
+          -0.01187500000000001,
+          -0.0050000000000000044
+        ],
+        "holdout_ci95": [
+          -0.01187500000000001,
+          -0.0050000000000000044
+        ],
+        "holdout_insufficient_n": false,
+        "insufficient_n": false,
+        "holdout_pass": false,
+        "clears_both_screens": false
+      }
+    ],
+    "cells_rejecting_null": [],
+    "decision_rule": {
+      "confirmed_if": "no primary-family cell clears both the Bonferroni-adjusted discovery-slice screen and the hold-out replication screen",
+      "rejected_if": "at least one primary-family cell clears both screens",
+      "inconclusive_if": "settlement_days_available < 60, OR every discovery-screen-passing cell falls below min_days_per_cell in the holdout slice",
+      "evaluation_order": "1) total-day floor -> inconclusive; 2) any cell clears both screens -> rejected; 3) any discovery-passing cell insufficient_n in holdout -> inconclusive-for-power; 4) otherwise confirmed -- AMENDMENT Finding 4",
+      "outcome": "inconclusive",
+      "reason": "cell(s) cleared the discovery screen but were underpowered (< 20 days) in the hold-out slice",
+      "clearing_cells": [],
+      "underpowered_cells": [
+        [
+          24,
+          6
+        ],
+        [
+          24,
+          8
+        ],
+        [
+          12,
+          3
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          6,
+          1
+        ],
+        [
+          6,
+          8
+        ]
+      ]
+    }
+  },
+  "secondary_results": {
+    "metrics_by_horizon": {
+      "72": {
+        "brier": null,
+        "baseline_brier": null,
+        "log_loss": null,
+        "baseline_log_loss": null,
+        "ece": null,
+        "calibration_slope": null,
+        "calibration_intercept": null
+      },
+      "48": {
+        "brier": null,
+        "baseline_brier": null,
+        "log_loss": null,
+        "baseline_log_loss": null,
+        "ece": null,
+        "calibration_slope": null,
+        "calibration_intercept": null
+      },
+      "24": {
+        "brier": 0.09871465517241379,
+        "baseline_brier": 0.14441809905086223,
+        "log_loss": 0.3085420819785429,
+        "baseline_log_loss": 0.46382924935388375,
+        "ece": 0.024283819628647226,
+        "calibration_slope": 1.1323218831941428,
+        "calibration_intercept": 0.033158963867638135
+      },
+      "12": {
+        "brier": 0.07136028645833334,
+        "baseline_brier": 0.142333984375,
+        "log_loss": 0.21682284720322023,
+        "baseline_log_loss": 0.458846842437101,
+        "ece": 0.03468749999999998,
+        "calibration_slope": 1.0519337610421706,
+        "calibration_intercept": -0.031771334495832054
+      },
+      "6": {
+        "brier": 0.015659655172413793,
+        "baseline_brier": 0.1700475624256837,
+        "log_loss": 0.05235912029710448,
+        "baseline_log_loss": 0.5233942273565716,
+        "ece": 0.011000000000000013,
+        "calibration_slope": 1.0518542131982942,
+        "calibration_intercept": -0.1561161375958651
+      },
+      "2": {
+        "brier": 4.653024911032032e-05,
+        "baseline_brier": 0.15957244715745747,
+        "log_loss": 0.005379600949731295,
+        "baseline_log_loss": 0.49941415268903805,
+        "ece": 0.00535587188612099,
+        "calibration_slope": 5.785778420869891,
+        "calibration_intercept": 0.9020389265170676
+      }
+    },
+    "reliability_curves_by_horizon": {
+      "72": [
+        {
+          "decile": 0,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 1,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 2,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 3,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 4,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 5,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 6,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 7,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 8,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 9,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        }
+      ],
+      "48": [
+        {
+          "decile": 0,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 1,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 2,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 3,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 4,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 5,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 6,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 7,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 8,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 9,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        }
+      ],
+      "24": [
+        {
+          "decile": 0,
+          "n": 195,
+          "mean_predicted_probability": 0.025025641025641025,
+          "realized_yes_frequency": 0.020512820512820513
+        },
+        {
+          "decile": 1,
+          "n": 38,
+          "mean_predicted_probability": 0.14276315789473684,
+          "realized_yes_frequency": 0.10526315789473684
+        },
+        {
+          "decile": 2,
+          "n": 43,
+          "mean_predicted_probability": 0.24976744186046512,
+          "realized_yes_frequency": 0.2558139534883721
+        },
+        {
+          "decile": 3,
+          "n": 37,
+          "mean_predicted_probability": 0.3504054054054054,
+          "realized_yes_frequency": 0.35135135135135137
+        },
+        {
+          "decile": 4,
+          "n": 31,
+          "mean_predicted_probability": 0.4451612903225806,
+          "realized_yes_frequency": 0.3870967741935484
+        },
+        {
+          "decile": 5,
+          "n": 19,
+          "mean_predicted_probability": 0.5260526315789474,
+          "realized_yes_frequency": 0.42105263157894735
+        },
+        {
+          "decile": 6,
+          "n": 5,
+          "mean_predicted_probability": 0.652,
+          "realized_yes_frequency": 1
+        },
+        {
+          "decile": 7,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 8,
+          "n": 6,
+          "mean_predicted_probability": 0.8674999999999999,
+          "realized_yes_frequency": 1
+        },
+        {
+          "decile": 9,
+          "n": 3,
+          "mean_predicted_probability": 0.925,
+          "realized_yes_frequency": 1
+        }
+      ],
+      "12": [
+        {
+          "decile": 0,
+          "n": 255,
+          "mean_predicted_probability": 0.015372549019607844,
+          "realized_yes_frequency": 0.00392156862745098
+        },
+        {
+          "decile": 1,
+          "n": 22,
+          "mean_predicted_probability": 0.14227272727272727,
+          "realized_yes_frequency": 0.18181818181818182
+        },
+        {
+          "decile": 2,
+          "n": 11,
+          "mean_predicted_probability": 0.24545454545454545,
+          "realized_yes_frequency": 0.36363636363636365
+        },
+        {
+          "decile": 3,
+          "n": 16,
+          "mean_predicted_probability": 0.358125,
+          "realized_yes_frequency": 0.25
+        },
+        {
+          "decile": 4,
+          "n": 22,
+          "mean_predicted_probability": 0.44022727272727274,
+          "realized_yes_frequency": 0.45454545454545453
+        },
+        {
+          "decile": 5,
+          "n": 16,
+          "mean_predicted_probability": 0.54,
+          "realized_yes_frequency": 0.75
+        },
+        {
+          "decile": 6,
+          "n": 14,
+          "mean_predicted_probability": 0.6557142857142857,
+          "realized_yes_frequency": 0.6428571428571429
+        },
+        {
+          "decile": 7,
+          "n": 8,
+          "mean_predicted_probability": 0.764375,
+          "realized_yes_frequency": 0.5
+        },
+        {
+          "decile": 8,
+          "n": 6,
+          "mean_predicted_probability": 0.8433333333333333,
+          "realized_yes_frequency": 0.8333333333333334
+        },
+        {
+          "decile": 9,
+          "n": 14,
+          "mean_predicted_probability": 0.9621428571428572,
+          "realized_yes_frequency": 0.9285714285714286
+        }
+      ],
+      "6": [
+        {
+          "decile": 0,
+          "n": 223,
+          "mean_predicted_probability": 0.008161434977578475,
+          "realized_yes_frequency": 0.004484304932735426
+        },
+        {
+          "decile": 1,
+          "n": 2,
+          "mean_predicted_probability": 0.135,
+          "realized_yes_frequency": 0.5
+        },
+        {
+          "decile": 2,
+          "n": 2,
+          "mean_predicted_probability": 0.25,
+          "realized_yes_frequency": 0.5
+        },
+        {
+          "decile": 3,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 4,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 5,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 6,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 7,
+          "n": 2,
+          "mean_predicted_probability": 0.735,
+          "realized_yes_frequency": 0.5
+        },
+        {
+          "decile": 8,
+          "n": 3,
+          "mean_predicted_probability": 0.8716666666666667,
+          "realized_yes_frequency": 0.6666666666666666
+        },
+        {
+          "decile": 9,
+          "n": 58,
+          "mean_predicted_probability": 0.9837068965517242,
+          "realized_yes_frequency": 0.9827586206896551
+        }
+      ],
+      "2": [
+        {
+          "decile": 0,
+          "n": 225,
+          "mean_predicted_probability": 0.0052,
+          "realized_yes_frequency": 0
+        },
+        {
+          "decile": 1,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 2,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 3,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 4,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 5,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 6,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 7,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 8,
+          "n": 0,
+          "mean_predicted_probability": null,
+          "realized_yes_frequency": null
+        },
+        {
+          "decile": 9,
+          "n": 56,
+          "mean_predicted_probability": 0.9940178571428572,
+          "realized_yes_frequency": 1
+        }
+      ]
+    },
+    "brier_score_by_horizon": {
+      "72": {
+        "brier": null,
+        "baseline_brier": null
+      },
+      "48": {
+        "brier": null,
+        "baseline_brier": null
+      },
+      "24": {
+        "brier": 0.09871465517241379,
+        "baseline_brier": 0.14441809905086223
+      },
+      "12": {
+        "brier": 0.07136028645833334,
+        "baseline_brier": 0.142333984375
+      },
+      "6": {
+        "brier": 0.015659655172413793,
+        "baseline_brier": 0.1700475624256837
+      },
+      "2": {
+        "brier": 4.653024911032032e-05,
+        "baseline_brier": 0.15957244715745747
+      }
+    },
+    "log_loss_by_horizon": {
+      "72": {
+        "log_loss": null,
+        "baseline_log_loss": null
+      },
+      "48": {
+        "log_loss": null,
+        "baseline_log_loss": null
+      },
+      "24": {
+        "log_loss": 0.3085420819785429,
+        "baseline_log_loss": 0.46382924935388375
+      },
+      "12": {
+        "log_loss": 0.21682284720322023,
+        "baseline_log_loss": 0.458846842437101
+      },
+      "6": {
+        "log_loss": 0.05235912029710448,
+        "baseline_log_loss": 0.5233942273565716
+      },
+      "2": {
+        "log_loss": 0.005379600949731295,
+        "baseline_log_loss": 0.49941415268903805
+      }
+    },
+    "ece_by_horizon": {
+      "72": null,
+      "48": null,
+      "24": 0.024283819628647226,
+      "12": 0.03468749999999998,
+      "6": 0.011000000000000013,
+      "2": 0.00535587188612099
+    },
+    "calibration_slope_intercept_by_horizon": {
+      "72": {
+        "slope": null,
+        "intercept": null
+      },
+      "48": {
+        "slope": null,
+        "intercept": null
+      },
+      "24": {
+        "slope": 1.1323218831941428,
+        "intercept": 0.033158963867638135
+      },
+      "12": {
+        "slope": 1.0519337610421706,
+        "intercept": -0.031771334495832054
+      },
+      "6": {
+        "slope": 1.0518542131982942,
+        "intercept": -0.1561161375958651
+      },
+      "2": {
+        "slope": 5.785778420869891,
+        "intercept": 0.9020389265170676
+      }
+    },
+    "executable_price_robustness": []
+  },
+  "exploratory_results": {
+    "kxlowtnyc_observation_count": 1052,
+    "kxlowtnyc_cell": [
+      {
+        "horizon_hours": 72,
+        "decile": 0,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 1,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 2,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 3,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 4,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 5,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 6,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 7,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 8,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 72,
+        "decile": 9,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 0,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 1,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 2,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 3,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 4,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 5,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 6,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 7,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 8,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 48,
+        "decile": 9,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 0,
+        "n": 145,
+        "mean_predicted_probability": 0.030482758620689655,
+        "realized_yes_frequency": 0.034482758620689655,
+        "calibration_error": -0.004,
+        "cost_band_cents": 2.296551724137931
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 1,
+        "n": 42,
+        "mean_predicted_probability": 0.13904761904761906,
+        "realized_yes_frequency": 0.09523809523809523,
+        "calibration_error": 0.043809523809523826,
+        "cost_band_cents": 5.0476190476190474
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 2,
+        "n": 35,
+        "mean_predicted_probability": 0.24571428571428572,
+        "realized_yes_frequency": 0.17142857142857143,
+        "calibration_error": 0.07428571428571429,
+        "cost_band_cents": 8.485714285714286
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 3,
+        "n": 47,
+        "mean_predicted_probability": 0.35340425531914893,
+        "realized_yes_frequency": 0.3404255319148936,
+        "calibration_error": 0.012978723404255321,
+        "cost_band_cents": 6.23404255319149
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 4,
+        "n": 32,
+        "mean_predicted_probability": 0.4421875,
+        "realized_yes_frequency": 0.46875,
+        "calibration_error": -0.02656249999999999,
+        "cost_band_cents": 6.71875
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 5,
+        "n": 15,
+        "mean_predicted_probability": 0.5423333333333333,
+        "realized_yes_frequency": 0.6,
+        "calibration_error": -0.057666666666666644,
+        "cost_band_cents": 7.966666666666667
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 6,
+        "n": 3,
+        "mean_predicted_probability": 0.635,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.365,
+        "cost_band_cents": 8.166666666666666
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 7,
+        "n": 1,
+        "mean_predicted_probability": 0.705,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.29500000000000004,
+        "cost_band_cents": 5.5
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 8,
+        "n": 2,
+        "mean_predicted_probability": 0.8075,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.1925,
+        "cost_band_cents": 7.75
+      },
+      {
+        "horizon_hours": 24,
+        "decile": 9,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 0,
+        "n": 165,
+        "mean_predicted_probability": 0.013545454545454546,
+        "realized_yes_frequency": 0.024242424242424242,
+        "calibration_error": -0.010696969696969696,
+        "cost_band_cents": 1.7303030303030302
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 1,
+        "n": 15,
+        "mean_predicted_probability": 0.148,
+        "realized_yes_frequency": 0.13333333333333333,
+        "calibration_error": 0.014666666666666661,
+        "cost_band_cents": 4.333333333333333
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 2,
+        "n": 8,
+        "mean_predicted_probability": 0.225,
+        "realized_yes_frequency": 0.25,
+        "calibration_error": -0.024999999999999994,
+        "cost_band_cents": 5.25
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 3,
+        "n": 16,
+        "mean_predicted_probability": 0.359375,
+        "realized_yes_frequency": 0.125,
+        "calibration_error": 0.234375,
+        "cost_band_cents": 6.9375
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 4,
+        "n": 5,
+        "mean_predicted_probability": 0.436,
+        "realized_yes_frequency": 0.4,
+        "calibration_error": 0.035999999999999976,
+        "cost_band_cents": 8.0
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 5,
+        "n": 8,
+        "mean_predicted_probability": 0.551875,
+        "realized_yes_frequency": 0.625,
+        "calibration_error": -0.073125,
+        "cost_band_cents": 8.1875
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 6,
+        "n": 4,
+        "mean_predicted_probability": 0.65375,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": 0.15375000000000005,
+        "cost_band_cents": 4.875
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 7,
+        "n": 3,
+        "mean_predicted_probability": 0.7316666666666667,
+        "realized_yes_frequency": 0.6666666666666666,
+        "calibration_error": 0.06500000000000006,
+        "cost_band_cents": 12.166666666666666
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 8,
+        "n": 5,
+        "mean_predicted_probability": 0.867,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.133,
+        "cost_band_cents": 2.5
+      },
+      {
+        "horizon_hours": 12,
+        "decile": 9,
+        "n": 25,
+        "mean_predicted_probability": 0.9793999999999999,
+        "realized_yes_frequency": 0.96,
+        "calibration_error": 0.019399999999999973,
+        "cost_band_cents": 1.14
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 0,
+        "n": 155,
+        "mean_predicted_probability": 0.013096774193548388,
+        "realized_yes_frequency": 0.01935483870967742,
+        "calibration_error": -0.0062580645161290326,
+        "cost_band_cents": 1.761290322580645
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 1,
+        "n": 16,
+        "mean_predicted_probability": 0.136875,
+        "realized_yes_frequency": 0.1875,
+        "calibration_error": -0.050625,
+        "cost_band_cents": 4.0
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 2,
+        "n": 9,
+        "mean_predicted_probability": 0.25222222222222224,
+        "realized_yes_frequency": 0.3333333333333333,
+        "calibration_error": -0.08111111111111108,
+        "cost_band_cents": 6.444444444444445
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 3,
+        "n": 9,
+        "mean_predicted_probability": 0.33722222222222226,
+        "realized_yes_frequency": 0.2222222222222222,
+        "calibration_error": 0.11500000000000005,
+        "cost_band_cents": 5.388888888888889
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 4,
+        "n": 10,
+        "mean_predicted_probability": 0.444,
+        "realized_yes_frequency": 0.4,
+        "calibration_error": 0.043999999999999984,
+        "cost_band_cents": 7.1
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 5,
+        "n": 9,
+        "mean_predicted_probability": 0.5561111111111111,
+        "realized_yes_frequency": 0.2222222222222222,
+        "calibration_error": 0.3338888888888889,
+        "cost_band_cents": 8.833333333333334
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 6,
+        "n": 3,
+        "mean_predicted_probability": 0.67,
+        "realized_yes_frequency": 0.6666666666666666,
+        "calibration_error": 0.0033333333333334103,
+        "cost_band_cents": 5.333333333333333
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 7,
+        "n": 0,
+        "mean_predicted_probability": null,
+        "realized_yes_frequency": null,
+        "calibration_error": null,
+        "cost_band_cents": null
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 8,
+        "n": 5,
+        "mean_predicted_probability": 0.869,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.131,
+        "cost_band_cents": 4.1
+      },
+      {
+        "horizon_hours": 6,
+        "decile": 9,
+        "n": 21,
+        "mean_predicted_probability": 0.9773809523809524,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.02261904761904765,
+        "cost_band_cents": 1.3095238095238095
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 0,
+        "n": 171,
+        "mean_predicted_probability": 0.010175438596491228,
+        "realized_yes_frequency": 0.005847953216374269,
+        "calibration_error": 0.0043274853801169594,
+        "cost_band_cents": 1.736842105263158
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 1,
+        "n": 11,
+        "mean_predicted_probability": 0.13,
+        "realized_yes_frequency": 0,
+        "calibration_error": 0.13,
+        "cost_band_cents": 7.454545454545454
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 2,
+        "n": 4,
+        "mean_predicted_probability": 0.2475,
+        "realized_yes_frequency": 0.25,
+        "calibration_error": -0.0025000000000000022,
+        "cost_band_cents": 9.5
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 3,
+        "n": 3,
+        "mean_predicted_probability": 0.33666666666666667,
+        "realized_yes_frequency": 0.3333333333333333,
+        "calibration_error": 0.003333333333333355,
+        "cost_band_cents": 9.0
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 4,
+        "n": 2,
+        "mean_predicted_probability": 0.43,
+        "realized_yes_frequency": 0.5,
+        "calibration_error": -0.07,
+        "cost_band_cents": 7.5
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 5,
+        "n": 1,
+        "mean_predicted_probability": 0.525,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.475,
+        "cost_band_cents": 5.5
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 6,
+        "n": 5,
+        "mean_predicted_probability": 0.642,
+        "realized_yes_frequency": 0.6,
+        "calibration_error": 0.04200000000000004,
+        "cost_band_cents": 14.2
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 7,
+        "n": 3,
+        "mean_predicted_probability": 0.7666666666666667,
+        "realized_yes_frequency": 0.6666666666666666,
+        "calibration_error": 0.10000000000000009,
+        "cost_band_cents": 8.333333333333334
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 8,
+        "n": 4,
+        "mean_predicted_probability": 0.86625,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.13375000000000004,
+        "cost_band_cents": 6.125
+      },
+      {
+        "horizon_hours": 2,
+        "decile": 9,
+        "n": 28,
+        "mean_predicted_probability": 0.9808928571428571,
+        "realized_yes_frequency": 1,
+        "calibration_error": -0.019107142857142878,
+        "cost_band_cents": 1.4464285714285714
+      }
+    ],
+    "by_month_descriptive": [
+      {
+        "year": 2026,
+        "month": 5,
+        "n": 341,
+        "mean_predicted_probability": 0.1917008797653959,
+        "realized_yes_frequency": 0.187683284457478,
+        "calibration_error": 0.004017595307917898
+      },
+      {
+        "year": 2026,
+        "month": 6,
+        "n": 614,
+        "mean_predicted_probability": 0.1925,
+        "realized_yes_frequency": 0.18729641693811075,
+        "calibration_error": 0.005203583061889255
+      },
+      {
+        "year": 2026,
+        "month": 7,
+        "n": 377,
+        "mean_predicted_probability": 0.19542440318302387,
+        "realized_yes_frequency": 0.1909814323607427,
+        "calibration_error": 0.004442970822281178
+      }
+    ]
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": true,
+    "config_matches_prereg": true
+  },
+  "date_run": "2026-07-21"
+}

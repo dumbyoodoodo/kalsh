@@ -29,9 +29,10 @@ import statistics
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import polars as pl
 
@@ -84,15 +85,53 @@ def round_half_up_cents(price_cents: float) -> int:
 
 def cost_band_cents(
     mid_price_cents: float, yes_bid_close_cents: int, yes_ask_close_cents: int
-) -> int:
+) -> Fraction:
     """PREREG Sec 9, exact invocation frozen by AMENDMENT Finding 5:
     contract_fee_cents(price_cents=round_half_up(mid), contracts=1,
-    config=KALSHI_WEATHER_TAKER_FEE_CONFIG) + half_spread_cents."""
-    fee = contract_fee_cents(
-        round_half_up_cents(mid_price_cents), contracts=1, config=KALSHI_WEATHER_TAKER_FEE_CONFIG
-    )
-    half_spread = (yes_ask_close_cents - yes_bid_close_cents) / 2
-    return fee + round(half_spread)
+    config=KALSHI_WEATHER_TAKER_FEE_CONFIG) + half_spread_cents.
+
+    Execution-time defect fix #1 (discovered running against the pinned
+    exp-20260721-h0005 dataset, not anticipated by either frozen
+    document): PREREG Sec 7 states Kalshi's price ceiling is 99 cents, so
+    the top decile bucket ([90,100], closed both ends) "naturally lands
+    inside it" -- but the pinned archive's real yes_ask_close_cents
+    reaches 100 (13,682 of 761,475 executable candle rows), and
+    round_half_up(mid_price_cents) can therefore equal 100 (e.g. bid=99,
+    ask=100 -> mid=99.5 -> 100). `contract_fee_cents` (scripts/
+    h0007_fees.py, frozen/verified for H0007, reused verbatim and NOT
+    modified here) rejects any price outside its documented 1-99 domain by
+    design. Rather than excluding these observations -- which would
+    silently bias away from exactly the extreme, near-certain-outcome
+    decile H0005's anchoring/favorite-longshot economic motivation (Sec 2)
+    is most interested in -- the fee is evaluated at its own mathematical
+    boundary: ceil(multiplier * P * (1-P) * contracts) is well-defined and
+    equals exactly 0 at P=0 or P=1, since (1-P) or P is 0. This is not a
+    new fee model or threshold; it is the same frozen formula evaluated at
+    a domain edge contract_fee_cents defensively declines to compute
+    itself. contract_fee_cents is still called, unmodified, for every
+    price in its documented 1-99 range.
+
+    Execution-time defect fix #2, superseding an earlier, defective
+    execution (see IMPLEMENTATION-NOTE-20260721-H0005-exact-cost-band.md):
+    PREREG Sec 9 defines `half_spread_cents = (yes_ask_close_cents -
+    yes_bid_close_cents) / 2` -- a real-valued quantity. Neither frozen
+    document specifies rounding it (AMENDMENT Finding 5 froze only the fee
+    term's rounding). The superseded execution nonetheless computed
+    `round(half_spread)` (Python's banker's rounding, a mode this
+    platform's own conventions explicitly reject), which silently zeroed a
+    1-cent spread's cost (round(0.5) == 0) and decided the sole clearing
+    cell's discovery/hold-out screens. This function now returns an exact
+    `Fraction` -- fee (an exact integer) plus the exact, unrounded
+    half-spread -- so no rounding is ever applied to the half-spread, at
+    this function or anywhere it is subsequently averaged across a cell's
+    observations (Fraction addition/division is always exact)."""
+    rounded_mid = round_half_up_cents(mid_price_cents)
+    if rounded_mid in (0, 100):
+        fee = 0
+    else:
+        fee = contract_fee_cents(rounded_mid, contracts=1, config=KALSHI_WEATHER_TAKER_FEE_CONFIG)
+    half_spread = Fraction(yes_ask_close_cents - yes_bid_close_cents, 2)
+    return Fraction(fee) + half_spread
 
 
 # --- Decile assignment (PREREG Sec 7) ---------------------------------------
@@ -127,7 +166,7 @@ class HorizonObservation:
     yes_ask_close_cents: int
     mid_price_cents: float
     decile: int
-    cost_band_cents: int
+    cost_band_cents: Fraction  # exact fee + half_spread; see cost_band_cents()
     outcome: int | None  # 1=yes, 0=no, None=no usable label
 
 
@@ -379,7 +418,7 @@ class CellResult:
     mean_predicted_probability: float | None
     realized_yes_frequency: float | None
     calibration_error: float | None  # AMENDMENT Finding 1/Finding 7
-    cost_band_cents: float | None
+    cost_band_cents: Fraction | None
     discovery_ci: tuple[float | None, float | None] = (None, None)
     discovery_bonferroni_pass: bool = False
     # Hold-out-slice point estimates -- exposed for auditability of the
@@ -388,16 +427,26 @@ class CellResult:
     holdout_mean_predicted_probability: float | None = None
     holdout_realized_yes_frequency: float | None = None
     holdout_calibration_error: float | None = None
-    holdout_cost_band_cents: float | None = None
+    holdout_cost_band_cents: Fraction | None = None
     holdout_ci: tuple[float | None, float | None] = (None, None)
     holdout_insufficient_n: bool = False
     holdout_pass: bool = False
     clears_both_screens: bool = False
 
 
-def _cell_point_estimates(obs: list[HorizonObservation]) -> dict[str, float | None]:
+class CellPointEstimate(TypedDict):
+    mean_predicted_probability: float | None
+    realized_yes_frequency: float | None
+    calibration_error: float | None
+    cost_band_cents: Fraction | None
+
+
+def _cell_point_estimates(obs: list[HorizonObservation]) -> CellPointEstimate:
     """AMENDMENT Finding 7: an empty cell's calibration_error is undefined
-    (None), never fabricated as 0.0."""
+    (None), never fabricated as 0.0. cost_band_cents is averaged as an
+    exact Fraction (Fraction division is always exact) -- no rounding is
+    introduced here or in cost_band_cents() itself; see that function's
+    docstring for the half-spread-rounding defect this corrects."""
     labeled = [o for o in obs if o.outcome is not None]
     if not labeled:
         return {
@@ -408,7 +457,7 @@ def _cell_point_estimates(obs: list[HorizonObservation]) -> dict[str, float | No
         }
     mean_p = statistics.mean(o.mid_price_cents / 100 for o in labeled)
     freq = statistics.mean(o.outcome for o in labeled if o.outcome is not None)
-    band = statistics.mean(o.cost_band_cents for o in labeled)
+    band = statistics.mean(o.cost_band_cents for o in labeled)  # exact: Fraction in, Fraction out
     return {
         "mean_predicted_probability": mean_p,
         "realized_yes_frequency": freq,
@@ -429,7 +478,7 @@ def _cell_day_values(obs: list[HorizonObservation]) -> dict[Any, list[float]]:
     return by_day
 
 
-def _cost_band_probability(band_cents: float) -> float:
+def _cost_band_probability(band_cents: Fraction) -> Fraction:
     """Unit reconciliation for the discovery/hold-out screen comparison
     (PREREG Sec 1/9, AMENDMENT Finding 5). `calibration_error` (and its
     bootstrap CI) is a probability-scale deviation in [0,1] --
@@ -444,8 +493,50 @@ def _cost_band_probability(band_cents: float) -> float:
     conversion the frozen protocol itself applies at Sec 8
     (`ask_implied = yes_ask_close_cents / 100`) -- so comparing the two is
     a matter of expressing `cost_band_cents` on the same [0,1] scale, not
-    of changing `calibration_error`'s units."""
+    of changing `calibration_error`'s units. `band_cents` is an exact
+    Fraction (see cost_band_cents()); dividing by 100 stays exact."""
     return band_cents / 100
+
+
+#: Precision at which the discovery/hold-out screen comparison is decided
+#: (see _exceeds_cost_band). 1e-9 is far finer than any genuine difference
+#: cents-scale prices, averaged over at most a few hundred day-observations,
+#: can ever produce -- it exists solely to strip IEEE-754 binary-float
+#: representation noise (~1e-16) from the IEEE-754-derived side of the
+#: comparison, never to suppress a real signal.
+_COMPARISON_PRECISION = Decimal("1E-9")
+
+
+def _to_comparison_decimal(value: float | Fraction) -> Decimal:
+    """Converts either an exact Fraction or a bootstrap-derived float to a
+    Decimal at a fixed, controlled precision, so the strict `>` comparison
+    below is decided by the underlying data, never by which side happens
+    to carry more binary-float representation error. Fraction inputs are
+    exact rationals (may not terminate in base 10, e.g. 1/29) -- both are
+    quantized identically, so this never advantages one side."""
+    exact = (
+        Decimal(value.numerator) / Decimal(value.denominator)
+        if isinstance(value, Fraction)
+        else Decimal(value)
+    )
+    return exact.quantize(_COMPARISON_PRECISION, rounding=ROUND_HALF_EVEN)
+
+
+def _exceeds_cost_band(lower_abs: float | None, cost_band_probability: Fraction | None) -> bool:
+    """Execution-integrity-review fix #2: the discovery/hold-out screen
+    comparison ('|CI lower bound| > cost_band', PREREG Sec 1/9/10) decided
+    in controlled-precision Decimal arithmetic rather than raw binary
+    float, so a mathematically exact tie (e.g. the pinned dataset's
+    horizon=2h/decile=9 discovery slice, where every observation has an
+    identical deviation and the corrected cost band happens to equal it
+    exactly, 1/200 == 1/200) evaluates to False -- 'exceeds' means
+    strictly exceeds, never a coincidence of which side's floating-point
+    representation rounds up. `lower_abs` remains whatever
+    day_clustered_bootstrap_ci (AMENDMENT Finding 3, unchanged) computed;
+    only the final strict-inequality decision is exact."""
+    if lower_abs is None or cost_band_probability is None:
+        return False
+    return _to_comparison_decimal(lower_abs) > _to_comparison_decimal(cost_band_probability)
 
 
 def _ci_lower_bound_of_abs(lo: float | None, hi: float | None) -> float | None:
@@ -530,9 +621,9 @@ def build_cells(
             )
             cell.discovery_ci = (lo, hi)
             lower_abs = _ci_lower_bound_of_abs(lo, hi)
-            if lower_abs is not None and cell.cost_band_cents is not None:
-                cell.discovery_bonferroni_pass = lower_abs > _cost_band_probability(
-                    cell.cost_band_cents
+            if cell.cost_band_cents is not None:
+                cell.discovery_bonferroni_pass = _exceeds_cost_band(
+                    lower_abs, _cost_band_probability(cell.cost_band_cents)
                 )
 
     # Pass 2: hold-out-slice bootstrap, same nested order, unconditional for
@@ -558,9 +649,10 @@ def build_cells(
                 same_sign
                 and not cell.holdout_insufficient_n
                 and cell.holdout_cost_band_cents is not None
-                and lower_abs is not None
             ):
-                cell.holdout_pass = lower_abs > _cost_band_probability(cell.holdout_cost_band_cents)
+                cell.holdout_pass = _exceeds_cost_band(
+                    lower_abs, _cost_band_probability(cell.holdout_cost_band_cents)
+                )
             cell.clears_both_screens = cell.discovery_bonferroni_pass and cell.holdout_pass
 
     return [cells[(h, d)] for h in HORIZON_HOURS for d in range(N_DECILES)]
@@ -900,13 +992,17 @@ def compute_executable_price_robustness(
             cell_obs, price_cents_of=lambda o: o.yes_bid_close_cents
         )
 
-        def _exceeds(point: dict[str, float | None], band: float | None = cost_band) -> bool | None:
+        def _exceeds(
+            point: dict[str, float | None], band: Fraction | None = cost_band
+        ) -> bool | None:
             err = point["calibration_error"]
             if err is None or band is None:
                 return None
-            # Same cents-to-probability reconciliation as build_cells'
-            # discovery/hold-out screens -- see _cost_band_probability.
-            return abs(err) > _cost_band_probability(band)
+            # Same cents-to-probability reconciliation, and the same
+            # exact-arithmetic tie-breaking, as build_cells' discovery/
+            # hold-out screens -- see _cost_band_probability/
+            # _exceeds_cost_band.
+            return _exceeds_cost_band(abs(err), _cost_band_probability(band))
 
         ask_exceeds = _exceeds(ask_point)
         bid_exceeds = _exceeds(bid_point)
@@ -918,7 +1014,7 @@ def compute_executable_price_robustness(
                 "horizon_hours": horizon,
                 "decile": decile,
                 "n": int(mid_point["n"] or 0),
-                "cost_band_cents": cost_band,
+                "cost_band_cents": float(cost_band) if cost_band is not None else None,
                 "mid_calibration_error": mid_point["calibration_error"],
                 "ask_implied_mean_probability": ask_point["mean_predicted_probability"],
                 "ask_calibration_error": ask_point["calibration_error"],
@@ -981,6 +1077,7 @@ def build_exploratory_grid(observations: list[HorizonObservation]) -> list[dict[
             ]
             point = _cell_point_estimates(cell_obs)
             labeled_n = len([o for o in cell_obs if o.outcome is not None])
+            band = point["cost_band_cents"]
             grid.append(
                 {
                     "horizon_hours": horizon,
@@ -989,7 +1086,7 @@ def build_exploratory_grid(observations: list[HorizonObservation]) -> list[dict[
                     "mean_predicted_probability": point["mean_predicted_probability"],
                     "realized_yes_frequency": point["realized_yes_frequency"],
                     "calibration_error": point["calibration_error"],
-                    "cost_band_cents": point["cost_band_cents"],
+                    "cost_band_cents": float(band) if band is not None else None,
                 }
             )
     return grid
@@ -1398,14 +1495,20 @@ def run(dataset_dir: Path) -> dict[str, Any]:
                     "mean_predicted_probability": c.mean_predicted_probability,
                     "realized_yes_frequency": c.realized_yes_frequency,
                     "calibration_error": c.calibration_error,
-                    "cost_band_cents": c.cost_band_cents,
+                    "cost_band_cents": float(c.cost_band_cents)
+                    if c.cost_band_cents is not None
+                    else None,
                     "discovery_ci": list(c.discovery_ci),
                     "discovery_ci95": list(c.discovery_ci),
                     "discovery_bonferroni_pass": c.discovery_bonferroni_pass,
                     "holdout_mean_predicted_probability": c.holdout_mean_predicted_probability,
                     "holdout_realized_yes_frequency": c.holdout_realized_yes_frequency,
                     "holdout_calibration_error": c.holdout_calibration_error,
-                    "holdout_cost_band_cents": c.holdout_cost_band_cents,
+                    "holdout_cost_band_cents": (
+                        float(c.holdout_cost_band_cents)
+                        if c.holdout_cost_band_cents is not None
+                        else None
+                    ),
                     "holdout_ci": list(c.holdout_ci),
                     "holdout_ci95": list(c.holdout_ci),
                     "holdout_insufficient_n": c.holdout_insufficient_n,

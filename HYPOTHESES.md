@@ -524,9 +524,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0017 — Near-settlement prices misprice known revision risk (preliminary-CLI event study)
 
-- **Status:** Proposed
+- **Status:** Rejected (outcome EFFICIENT-WITHIN-MARGIN — a decisive equivalence null)
 - **Opened:** 2026-07-22
-- **Closed:**
+- **Closed:** 2026-07-22
 - **Related:** H0002/H0011/H0013 (the revision-risk facts), H0007 (rejected bound-violation mispricing — the locked side; reused here only as a negative-control concept), H0012/E-A (payout-validated labels), 2026-07-22 roadmap P3
 - **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0017-revision-risk-pricing.md` (frozen 2026-07-22, before any price-vs-outcome quantity was computed). Inputs pinned: market dataset `exp-20260722-h0017-market` (market_prices `f3641322…`, settlement_labels `49bc34df…`) + issuance frame `exp-20260722-h0013-replication` (`5ccf5b7a…`).
 
@@ -550,6 +550,6 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** None; runnable now on archives.
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-22 — [EXP-20260722-H0017-revision-risk-pricing](docs/research/experiments/EXP-20260722-H0017-revision-risk-pricing.md), all three input hashes re-verified at G1; analysis commit `512d248`; reruns byte-identical. All gates passed: strike-semantics agreement **792/792** vs realized payouts; event-time presence 100%; N = 122 adjacent at-risk variable-days, quote coverage 96.8%, 9 qualifying revisions. **Primary: D = +2.33pp, 95% CI [−1.85, +6.50]pp** (mean implied 9.7¢ vs realized 7.4%) — within the frozen ±7.5pp margin on both sides → **EFFICIENT-WITHIN-MARGIN** (step 3). Controls coherent: locked-NO contracts at 0.5¢ mean; placebo-window reaction (9.3¢) exceeds event reaction (6.0¢) — the preliminary confirms rather than surprises, and the event-study path shows impossible buckets priced to ~0 *before* official publication; per-variable D = +0.5pp (tmax) / +4.1pp (tmin — a slight premium on the riskier variable, not neglect); sensitivities stable (+2.4 to +2.8pp); the 12h-extension artifact (stale end-of-life quotes) documented as a measurement caution. Figures + narrative: `docs/research/postmortems/2026-07-22-h0017-closeout.md`.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Rejected** — and the rejection is the finding: near-settlement NYC weather prices incorporate the program's proven revision-risk knowledge to within economic materiality (an equivalence claim at ±7.5pp, not mere absence of evidence). Combined with H0007's locked-side null, the near-settlement zone is efficiently priced; there is no Phase-6 case from this channel on this evidence. The remaining edge candidates are the forecast-side questions (H0003 → M-01 → H0006), which concern genuinely probabilistic horizons rather than the near-settlement zone traders demonstrably handle well. Dated (2026-05→07, NYC): scheduled re-run ≥ late Sept 2026 with a ~3× cohort and possibly DEN/LAX as their candle history accrues.

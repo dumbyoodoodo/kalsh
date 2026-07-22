@@ -65,6 +65,38 @@ derived from the data itself, not from process state:
 Start the process again (or let systemd do it); collection resumes exactly
 where the data left off.
 
+## Collector restart policy
+
+The collector loads code, `.env`, and key material once at start, so edits to
+the working tree do **not** reach a running collector until it restarts. The
+single source of truth for which changes require what action is the `RULES`
+table in `src/kalshi_weather/ops/restart_policy.py`; this table summarizes it:
+
+| Change | Action | Why |
+|---|---|---|
+| `docs/`, `tests/`, `notebooks/`, `scripts/` (non-service), `*.md`, `Makefile`, `.gitignore`, `.env.example`, `.env.bak-*` | **none** | not loaded by the collector process |
+| `docker-compose.yml` | **none** (apply via `docker compose up -d`) | Postgres restarts are self-healed by preflight + cycle retry |
+| `src/` (incl. migrations), `.env`, `secrets/`, `config/`, `pyproject.toml`, `uv.lock`, `alembic.ini` | **graceful restart** (`scripts/service/restart.sh`) | imported/read once at start; run `uv sync` / `alembic upgrade head` first where relevant |
+| `scripts/service/` (or the repo moved) | **reinstall** (`scripts/service/install.sh`, idempotent) | launchd plist/entry-script layer |
+| anything unclassified | **graceful restart** (conservative default) | a needless restart is cheap; stale code collecting data is not |
+
+Detection is automatic: at every service start, `scripts/service/launch.py`
+records a manifest (git commit + SHA-256 of every restart-relevant file —
+hashes only, never contents) to `<KALSHI_LOG_DIR>/collector.manifest.json`.
+To ask whether the running collector matches the working tree:
+
+```bash
+scripts/service/check_restart.sh            # report only; never restarts
+scripts/service/check_restart.sh --restart  # act on the verdict (graceful)
+```
+
+Exit codes: `0` no restart needed, `10` restart required, `11` reinstall
+required, `12` unknown (no manifest yet — restart once to establish the
+baseline). The underlying command is `kalshi-weather ops restart-check`.
+Nothing ever restarts automatically; the check only reports, and `--restart`
+is an explicit operator action (the restart itself is graceful — current
+cycles finish and commit, per "Stopping collectors" above).
+
 ## Operational metrics
 
 Every collection cycle appends a row to `collector_runs`: start/finish time,
@@ -96,6 +128,44 @@ staleness (warning), settlement resolution failures (warning, with tickers).
 Errors mean corruption or drift -- stop and investigate; warnings are
 operational gaps to schedule fixes for. Wire `ops quality` into cron and
 alert on non-zero exit.
+
+## Monitoring forecast-collection cadence
+
+```bash
+uv run kalshi-weather ops forecast-cadence   # scheduled-floor check + schedule-agnostic gap alert
+```
+
+Forecast history has **no backfill source** (ADR 0003) -- a capture gap is
+permanently unrecoverable -- so this report exists to catch under-capture
+while it is still preventable. It applies two complementary invariants
+(architecture review, 2026-07-21):
+
+1. **Minimum cadence verification.** NWS guarantees a morning and an
+   afternoon forecast package per office at roughly fixed local times, so
+   each station-local day is checked as two windows (00-12 / 12-24 local);
+   an empty interior window is a missing cycle. This verifies the
+   documented scheduled floor only. `--expected-per-day` values above 2
+   are clamped: the stored issue_time is NWS's irregular, clustered
+   `updateTime` event stream, and finer equal partitions would assert a
+   uniformity the data does not have, producing systematic false
+   missing-cycle alerts rather than better monitoring.
+2. **Schedule-agnostic outage detection.** The largest gap between
+   successive captured issuances must stay within
+   `max_issuance_gap_hours` (default 18h; strictly greater fires). This
+   makes no assumption about when in the day issuances cluster, stays
+   valid across seasonal schedule changes, and catches long silent
+   stretches the window check structurally cannot (both windows of a day
+   can be occupied while 20+ hours pass between issuances).
+
+Per station the report also includes: issuance counts and gaps, a
+local-hour issuance histogram, duplicate captures, out-of-order and
+delayed arrivals, and health metrics (observed issuances/day,
+completeness %, gap distribution, last capture/run, longest collector
+outage from `collector_runs`). Deterministic alerts (`missing_issuance`,
+`duplicate_issuance`, `abnormal_cadence`, `issuance_gap`,
+`collector_outage`, `stalled_updates`) each carry the expected state, the
+observed state, and a recommended action; there is no notification
+transport -- wire the JSON output into whatever alerting exists.
 
 ## Performing backfills
 

@@ -32,6 +32,8 @@ from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.logging import configure_logging, get_logger
+from kalshi_weather.ops import restart_policy
+from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
 from kalshi_weather.ops.price_coverage import build_price_coverage_report
 from kalshi_weather.ops.quality import run_quality_checks
@@ -514,7 +516,7 @@ def dataset_build(
         )
         _echo_summary(output)
         if export:
-            root = Path(output_root) if output_root else settings.dataset_root
+            root = Path(output_root) if output_root else settings.ensure_dataset_root()
             result = dataset_pipeline.export(
                 output, root=root, version=resolved_version, fmt=ExportFormat.PARQUET
             )
@@ -608,7 +610,7 @@ def dataset_export(
             end=_parse_date(end),
             version=resolved_version,
         )
-        root = Path(output_root) if output_root else settings.dataset_root
+        root = Path(output_root) if output_root else settings.ensure_dataset_root()
         result = dataset_pipeline.export(
             output, root=root, version=resolved_version, fmt=ExportFormat(export_format)
         )
@@ -907,6 +909,44 @@ def ops_quality() -> None:
     asyncio.run(run())
 
 
+@ops_app.command("forecast-cadence")
+def ops_forecast_cadence(
+    expected_per_day: int = typer.Option(
+        2,
+        help=(
+            "Issuance-window floor per station-local day (minimum cadence "
+            "verification of NWS's scheduled AM/PM packages). Values above 2 are "
+            "clamped: the stored issue_time is the irregular, clustered NWS "
+            "updateTime stream, so finer equal partitions produce false "
+            "missing-cycle alerts, not better monitoring. Long silent stretches "
+            "are covered separately by the schedule-agnostic issuance-gap alert."
+        ),
+    ),
+) -> None:
+    """Verify forecast-collection cadence with two complementary
+    invariants: minimum cadence verification (the twice-daily NWS
+    scheduled-floor window check) and schedule-agnostic outage detection
+    (the maximum-gap alert), plus duplicates, ordering, delays, and
+    per-station health. Forecast history has no backfill source, so
+    capture gaps surfaced here are permanent unless fixed promptly."""
+
+    async def run() -> None:
+        if expected_per_day > 2:
+            typer.echo(
+                "note: --expected-per-day above 2 is clamped to 2 (see command help); "
+                "the issuance-gap alert covers irregular-schedule outages.",
+                err=True,
+            )
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            report = await run_forecast_cadence(
+                session, config=CadenceConfig(expected_issuances_per_day=expected_per_day)
+            )
+        typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+
+    asyncio.run(run())
+
+
 @ops_app.command("health")
 def ops_health(
     as_json: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),
@@ -981,7 +1021,7 @@ def ops_snapshot(
         settings = get_settings()
         configure_logging(settings.log_level)
         resolved_version = version or default_snapshot_version()
-        root = Path(output_root) if output_root else settings.dataset_root
+        root = Path(output_root) if output_root else settings.ensure_dataset_root()
         async with _open_session(settings) as session:
             result = await create_snapshot(
                 session,
@@ -1064,6 +1104,25 @@ def ops_run(
         logger.info("ops.run.stopped")
 
     asyncio.run(run())
+
+
+@ops_app.command("restart-check")
+def ops_restart_check(
+    manifest: str = typer.Option(
+        ...,
+        help="Manifest written at service start (usually <KALSHI_LOG_DIR>/collector.manifest.json;"
+        " operators should prefer scripts/service/check_restart.sh, which supplies this).",
+    ),
+    repo_root: str = typer.Option(".", help="Repository root to compare against."),
+) -> None:
+    """Report whether the running collector needs a restart to pick up the
+    working tree's code. Read-only: never restarts anything (use
+    scripts/service/check_restart.sh --restart for that). Exit codes:
+    0 no restart needed, 10 restart required, 11 reinstall required,
+    12 unknown (no manifest)."""
+    report = restart_policy.compare(Path(repo_root).resolve(), Path(manifest))
+    typer.echo(restart_policy.format_report(report))
+    raise typer.Exit(report.exit_code)
 
 
 if __name__ == "__main__":

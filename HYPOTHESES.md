@@ -521,3 +521,35 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 **Results.** Run 2026-07-22 — [EXP-20260722-H0015-late-max-mechanism](docs/research/experiments/EXP-20260722-H0015-late-max-mechanism.md), inputs hash-verified (issuance `5ccf5b7a…`, occurrence extract `9bf01d8f…`; analysis commit `a4ac3db`). **EXECUTION BLOCKED at gate G4 (step 0)** — no interval, criterion, or A/B/C/D verdict was computed, per the frozen table. Integrity/quality gates all passed (parse-ok 97.5–99.1%; AS-OF modal share 96–99.9%; product-vs-frame value agreement 100.0%). G4 failed at LAX: 21 late-stratum days (floor 30) and 15 total revised days (floor 50) in ~3.5 years — its daily maximum essentially never occurs at/after its own 17:00 cutoff and it almost never revises (≈1.2%). DEN passed G4 with extreme structure: ~93% late-max composition, ~91% revised days — the pre-registration's structural prediction (early 06:00 cutoff → near-universal revisions) qualitatively visible in the gate counts. Gate facts only; nothing confirmatory. Blocked reruns byte-identical; `config_matches_prereg` true.
 
 **Conclusion.** **Inconclusive — blocked by design** (the pre-registered step-0 outcome; PREREG §8 explicitly named DEN's early stratum and LAX's late stratum as the G4 risks). The stratum-separation criteria inherited from the CHI/NYC mid-composition regime are unevaluable at the composition extremes the evaluation stations turned out to occupy (≈1.7% and ≈93% late-max), where the mechanism's testable content is the aggregate composition-implied prediction, not the within-station contrast. The published gate counts are directionally consistent with the composition mechanism at both poles, and per the frozen rules nothing sharper may be claimed. Follow-up: a successor pre-registration (H0015b) with criteria valid across the full composition range (exact-binomial handling for thin cells; composition-implied prediction error; cross-station ordering), obligated to disclose this blocked run's published gate values as post-hoc knowledge, with the full-2026 time-disjoint window (≥ 2027-01-15) as its clean arm — see `docs/research/postmortems/2026-07-22-h0015-closeout.md`.
+
+### H0017 — Near-settlement prices misprice known revision risk (preliminary-CLI event study)
+
+- **Status:** Proposed
+- **Opened:** 2026-07-22
+- **Closed:**
+- **Related:** H0002/H0011/H0013 (the revision-risk facts), H0007 (rejected bound-violation mispricing — the locked side; reused here only as a negative-control concept), H0012/E-A (payout-validated labels), 2026-07-22 roadmap P3
+- **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0017-revision-risk-pricing.md` (frozen 2026-07-22, before any price-vs-outcome quantity was computed). Inputs pinned: market dataset `exp-20260722-h0017-market` (market_prices `f3641322…`, settlement_labels `49bc34df…`) + issuance frame `exp-20260722-h0013-replication` (`5ccf5b7a…`).
+
+**Hypothesis.** After the preliminary CLI issues (~16:35 ET), prices of *at-risk* contracts — those whose YES requires the settlement label to move beyond the preliminary value in the physically possible direction (up for tmax, down for tmin) — are miscalibrated against realized qualifying-revision frequency: the mean post-event implied probability differs from the realized YES rate by more than the frozen margin. Directional alternative from anchoring: underpricing (traders treat the preliminary as final). The efficient-market null: calibration within ±7.5pp.
+
+**Rationale.** The program has proven revision risk is real, directional, and material (~13–26% of days revise, upward-only for tmax); H0007 showed markets do not misprice *locked* outcomes. Whether they price the *live* revision probability is the sharpest efficiency question the archive can answer today, and the first genuine edge test: confirmed underpricing is directly actionable; a well-powered null is the honest headline that near-settlement weather pricing is efficient.
+
+**Required data.** Only point-in-time archives, all pinned: 1-minute candles with bid/ask quotes and strike structure joined to payout-validated settlement labels (`exp-20260722-h0017-market`); archived preliminary CLI values and publication timestamps (issuance frame). Occurrence-time data is **deliberately excluded** — it derives from the final product and is not knowable at event time. Cohort: NYC only (KXHIGHNY/KXLOWTNYC; the only series with candle history — CHI/DEN/LAX excluded for coverage, named in the prereg).
+
+**Experiment design.** Frozen in the pre-registration: event time = archived first-CLI publication timestamp per date; windows PRE [E−90m, E−10m], POST [E+15m, E+120m], placebo at E−240m; price = bid/ask midpoint of the last fully-quoted candle in-window; per variable-day one *adjacent at-risk* contract (YES region nearest beyond the preliminary) and one *adjacent locked-NO* control; primary estimand D = mean(post-event implied probability − realized YES) with a deterministic normal-approximation 95% CI; decision table: L(D)>0 → OVERPRICED; U(D)<0 → UNDERPRICED; CI within ±0.075 → EFFICIENT-WITHIN-MARGIN; else INCONCLUSIVE; gates on hashes, strike-semantics agreement ≥99%, N ≥ 80, events ≥ 5, quote coverage ≥ 50%.
+
+**Metrics.** D with 95% CI; per-variable and per-distance splits, locked-NO control, placebo-time reaction, pre-window calibration, liquidity descriptives — all secondary/descriptive with the single pooled primary carrying the decision.
+
+**Required features.** None new — the pinned frames carry everything.
+
+**Statistical tests.** Deterministic normal-approximation CI on a mean of bounded calibration residuals (z frozen literal); Wilson CIs on descriptive rates; exact Decimal arithmetic; single primary cell (no multiplicity correction needed, declared).
+
+**Failure modes.** (1) Thin quoting → missing post-window prices (excluded-and-counted, coverage gate, extended-window sensitivity). (2) Few qualifying events at n≈100–130 → only gross miscalibration (≳6pp) detectable; the margin and INCONCLUSIVE branch encode this honestly. (3) Strike-semantics error → G3 agreement gate against realized payouts. (4) Same-day tmax/tmin dependence → disclosed; near-independent physically (concordance data). (5) Two-month single-station window → conclusions dated and NYC-scoped.
+
+**Difficulty.** Moderate.
+
+**Dependencies.** None; runnable now on archives.
+
+**Results.** Not yet run.
+
+**Conclusion.** Not yet concluded.

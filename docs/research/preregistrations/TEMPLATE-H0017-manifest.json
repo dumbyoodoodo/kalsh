@@ -1,0 +1,89 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0017, frozen 2026-07-22 by PREREG-20260722-H0017-revision-risk-pricing.md. Every <TO_BE_FILLED> value is populated ONLY at execution; no key may be added, removed, or renamed after results are seen. All input pins frozen NOW. Copy to docs/research/experiments/EXP-20260722-H0017-revision-risk-pricing-results.json and fill in.",
+  "experiment": "EXP-20260722-H0017-revision-risk-pricing",
+  "hypothesis": "H0017",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0017-revision-risk-pricing.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: structural/coverage facts only seen pre-freeze; no event-window price, implied probability, at-risk identity, or price-vs-outcome pairing computed; occurrence-time data excluded by the leakage rule",
+    "original_hypotheses_entry": "HYPOTHESES.md H0017, opened 2026-07-22",
+    "elaboration_flags_for_audit": [
+      "single_primary_cell_no_multiplicity (Sec 5)",
+      "quote_midpoint_price_measurement (Sec 3)",
+      "deterministic_normal_ci_in_place_of_bootstrap (Sec 5)",
+      "equivalence_margin_0075_frozen (Sec 1/6)",
+      "occurrence_time_excluded_leakage_rule (Sec 0)",
+      "nyc_only_coverage_exclusion (Sec 2)"
+    ]
+  },
+  "datasets": {
+    "market": {
+      "version": "exp-20260722-h0017-market",
+      "frames": {
+        "market_prices": "f364132289e7f453ddd0e6c969b0905809bc5f03ac000feab989e42e4083eb53",
+        "settlement_labels": "49bc34dfc4d78da5494a23192780790f068dbb74f0f85a9c671b78258e9d7bf7"
+      },
+      "row_counts_expected": {"market_prices": 761475, "settlement_labels": 2862}
+    },
+    "issuance_frame": {
+      "version": "exp-20260722-h0013-replication",
+      "frame": "observation_issuances.parquet",
+      "content_hash": "5ccf5b7a3ec11f1ec10fd8a3eac244640406130ec75934e58ead3b2f44e28775"
+    },
+    "analysis_git_commit": "<TO_BE_FILLED>"
+  },
+  "config": {
+    "station_cohort": "NYC only (KXHIGHNY tmax_f, KXLOWTNYC tmin_f); CHI/DEN/LAX excluded for zero candle coverage -- Sec 2",
+    "unit": "variable-day; adjacent at-risk contract (primary) + adjacent locked-NO contract (control)",
+    "event_time": "archived publication timestamp of the day's first CLI product (naive-UTC) -- Sec 3",
+    "windows": "PRE [E-90m, E-10m]; POST [E+15m, E+120m]; placebo P = E-240m, same shapes -- Sec 3",
+    "price": "bid/ask midpoint of last fully-quoted candle in-window (Decimal cents/100); trade-price is sensitivity only",
+    "strike_semantics": "between: floor<=v<=cap; greater: v>floor; less: v<cap -- Sec 4, validated by G3",
+    "at_risk": "YES region entirely beyond the preliminary in the physically possible direction; adjacent = nearest such region -- Sec 4",
+    "outcome": "kalshi_result == 'yes' (payout-validated labels)",
+    "primary_estimand": "D = mean(p_POST - y) over the primary cohort; D<0 = underpriced revision risk",
+    "ci_method": "D +/- z*s/sqrt(N), z = 1.959963984540054, deterministic; Decimal precision-50; 1e-12 quantized decisions",
+    "equivalence_margin": "0.075",
+    "decision_rule": "0 gate fails -> BLOCKED; 1 L(D)>0 -> OVERPRICED; 2 U(D)<0 -> UNDERPRICED; 3 CI within (-0.075,+0.075) -> EFFICIENT-WITHIN-MARGIN; 4 else INCONCLUSIVE -- Sec 6",
+    "multiplicity": "one primary cell, pooled variables; everything else non-decisional -- Sec 5",
+    "leakage_rule": "occurrence-time data excluded entirely (final-product-derived) -- Sec 0",
+    "random_seed": "not applicable -- fully deterministic",
+    "software_versions": "<TO_BE_FILLED>"
+  },
+  "eligibility_gates": {
+    "_note": "Order G1a -> G1b -> G2 -> G3 -> G4; sentinel 'not_evaluated' after first failure.",
+    "g1a_market_hashes_match": "<TO_BE_FILLED>",
+    "g1b_issuance_hash_matches": "<TO_BE_FILLED>",
+    "g2_invariants": "<TO_BE_FILLED: {market_key_unique, labels_key_unique, issuance_invariants, issuance_station_set_exact}>",
+    "g3_semantics": "<TO_BE_FILLED: {strike_semantics_agreement >= 0.99 with counts, event_time_presence >= 0.90}>",
+    "g4_cohort": "<TO_BE_FILLED: {n_primary >= 80, qualifying_events >= 5, quote_coverage >= 0.50, exclusion_counts_by_reason}>",
+    "all_gates_passed": "<TO_BE_FILLED>"
+  },
+  "primary_results": {
+    "cohort": "<TO_BE_FILLED: {n, qualifying_events, mean_p_post, realized_rate}>",
+    "calibration": "<TO_BE_FILLED: {d_hat, sd, ci95, per Sec 5 serialization}>",
+    "decision": {
+      "outcome": "<TO_BE_FILLED: OVERPRICED | UNDERPRICED | EFFICIENT-WITHIN-MARGIN | INCONCLUSIVE | blocked>",
+      "evaluation_step": "<TO_BE_FILLED>",
+      "reason": "<TO_BE_FILLED>",
+      "interpretation": "<TO_BE_FILLED: frozen Sec 6 wording>"
+    }
+  },
+  "descriptive_results": {
+    "per_variable": "<TO_BE_FILLED>",
+    "per_distance": "<TO_BE_FILLED>",
+    "pre_window_calibration": "<TO_BE_FILLED>",
+    "locked_no_control": "<TO_BE_FILLED: mean post-event price of certain-NO contracts>",
+    "placebo_reaction": "<TO_BE_FILLED: event vs placebo |post - pre| reactions>",
+    "monthly": "<TO_BE_FILLED>",
+    "liquidity": "<TO_BE_FILLED: spreads, volume, quote presence in windows>",
+    "exclusions": "<TO_BE_FILLED: counts by reason>",
+    "sensitivity": "<TO_BE_FILLED: extended POST, trade-price, +/-15m windows>"
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": "<TO_BE_FILLED>",
+    "config_matches_prereg": "<TO_BE_FILLED>",
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits. Integer counts remain plain JSON integers."
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

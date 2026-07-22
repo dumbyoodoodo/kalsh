@@ -10,7 +10,7 @@ yet in this milestone.
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,10 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # An empty env value means "unset, use the default" -- without this,
+        # `KALSHI_DATA_DIR=` (the .env.example placeholder style) would parse
+        # to Path(".") and count as explicitly configured.
+        env_ignore_empty=True,
     )
 
     kalshi_env: Environment = Field(default=Environment.DEMO, alias="KALSHI_ENV")
@@ -111,14 +115,76 @@ class Settings(BaseSettings):
         default=10, alias="PRICE_RETENTION_WARNING_BUFFER_DAYS"
     )
 
-    # Research dataset export (see dataset/, docs/runbooks/dataset.md). Storage
-    # location is configurable and never hardcoded; the directory is created on
-    # demand. The market map is the documented stand-in for settlement_specs
-    # until Milestone 2b (dataset/market_map.py).
-    dataset_root: Path = Field(default=Path("data/datasets"), alias="DATASET_ROOT")
+    # --- Storage roots (CLAUDE.md "Storage philosophy": code and data have
+    # separate lifecycles; data locations are config, never source). ---
+    #
+    # KALSHI_DATA_DIR is the single root for all *file-based* persistent data
+    # (dataset exports today; any future file artifact). Point it at an
+    # external drive to keep bulk data off the repo disk. The PostgreSQL
+    # store is separate infrastructure (docker-compose.yml; see
+    # KALSHI_PG_DATA_DIR there) because a live database has stricter
+    # filesystem requirements than plain files. Git-tracked research records
+    # (docs/research/**) are deliberately NOT under this root: they are part
+    # of the reproducibility record, versioned with the code.
+    data_dir: Path = Field(default=Path("data"), alias="KALSHI_DATA_DIR")
+    # Dataset exports live beneath the data root by default; DATASET_ROOT
+    # remains an explicit override for split layouts. An empty value means
+    # "derive from KALSHI_DATA_DIR" (resolved by the validator below; note
+    # pathlib normalizes "" to ".", so DATASET_ROOT=. also derives).
+    dataset_root: Path = Field(default=Path(""), alias="DATASET_ROOT")
     dataset_market_map_path: Path | None = Field(
         default=None, alias="DATASET_MARKET_MAP_PATH"
     )
+
+    # Captured by _derive_dataset_root BEFORE it mutates dataset_root:
+    # pydantic v2 adds a field to model_fields_set on assignment, so the
+    # "was this explicitly configured?" question must be answered first.
+    _storage_explicitly_configured: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="after")
+    def _derive_dataset_root(self) -> "Settings":
+        self._storage_explicitly_configured = bool(
+            {"data_dir", "dataset_root"} & self.model_fields_set
+        )
+        if self.dataset_root == Path(""):
+            self.dataset_root = self.data_dir / "datasets"
+        return self
+
+    def ensure_dataset_root(self) -> Path:
+        """Fail-fast guard for file-data writes, resolving the dataset root.
+
+        If the data root was *explicitly configured* (KALSHI_DATA_DIR or
+        DATASET_ROOT set in the environment/.env), its base directory must
+        already exist: for an external drive, a missing root almost always
+        means the drive isn't mounted, and silently creating the path would
+        write data to the wrong disk. The repo-local *default* is created on
+        demand, as before. Writability is always probed, so a read-only
+        mount fails here -- loudly, before any collector or export runs --
+        rather than partway through a write.
+        """
+        explicitly_configured = self._storage_explicitly_configured
+        root = self.dataset_root
+        base = root if root.is_absolute() else Path.cwd() / root
+        if explicitly_configured:
+            # The configured *parent* volume/root must exist; the datasets
+            # subdirectory itself may still be created on first use.
+            probe_base = base if base.exists() else base.parent
+            if not probe_base.exists():
+                raise RuntimeError(
+                    f"configured data root {base} does not exist -- if it lives on "
+                    "an external drive, is the drive mounted? Refusing to create "
+                    "it implicitly (that would silently write to the wrong disk)."
+                )
+        base.mkdir(parents=True, exist_ok=True)
+        probe = base / ".write-probe"
+        try:
+            probe.write_text("")
+            probe.unlink()
+        except OSError as exc:
+            raise RuntimeError(
+                f"configured data root {base} is not writable: {exc}"
+            ) from exc
+        return base
 
     @model_validator(mode="after")
     def _forbid_live_trading_outside_production(self) -> "Settings":

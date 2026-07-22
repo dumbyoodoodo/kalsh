@@ -6,6 +6,27 @@ trading, feature, or model logic. See `docs/adr/0004-research-dataset.md` for
 design and `ARCHITECTURE.md` for where it sits. This is Phase 2 / Milestone 4
 of `TASKS.md`.
 
+## Where it writes
+
+All file-based data lives under a single configurable root, `KALSHI_DATA_DIR`
+(default: repo-local `./data`, created on demand). Dataset builds write to
+`<KALSHI_DATA_DIR>/datasets/` unless `DATASET_ROOT` explicitly overrides the
+subpath. To keep bulk data on an external drive:
+
+```
+KALSHI_DATA_DIR=/Volumes/Extreme Pro/kalshi-weather-data
+```
+
+When the root is explicitly configured, the CLI **fails early** if the
+directory (or its parent volume) doesn't exist or isn't writable — a missing
+external root almost always means the drive isn't mounted, and silently
+creating a same-named path on the internal disk would strand new data on the
+wrong drive. The repo-local default keeps the old create-on-demand behavior.
+
+The live PostgreSQL store is configured separately (`KALSHI_PG_DATA_DIR` in
+`docker-compose.yml`) because a live database requires a POSIX filesystem —
+see the warning there before pointing it at an external drive.
+
 ## What it produces
 
 A build writes `<DATASET_ROOT>/<version>/`:

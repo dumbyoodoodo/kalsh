@@ -8,7 +8,15 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - kalshi_weather_postgres_data:/var/lib/postgresql/data
+      # KALSHI_PG_DATA_DIR unset (default): Docker named volume, managed by
+      # Docker Desktop on the internal disk. Set it to an ABSOLUTE path to
+      # bind-mount the live database directory somewhere else instead.
+      # WARNING: a live Postgres data directory needs a POSIX filesystem
+      # (APFS, ext4). Do NOT point this at ExFAT/FAT32 external drives --
+      # missing POSIX permissions and weak fsync semantics through Docker's
+      # virtualization risk silent data corruption. For ExFAT drives, keep
+      # the live DB here and copy pg_dump backups to the drive instead.
+      - ${KALSHI_PG_DATA_DIR:-kalshi_weather_postgres_data}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U kalshi -d kalshi_weather"]
       interval: 5s

@@ -141,7 +141,7 @@ Responsibilities:
 
 - point-in-time (as-of) joins with no look-ahead leakage; forecast local `target_date` derived in the station timezone
 - the market->settlement association via an explicit versioned config map (`dataset/market_map.py`) --- a stand-in for `settlement_specs` until Milestone 2b; unmapped markets are reported as orphans, not guessed
-- a reproducibility manifest per build (git commit, source DB Alembic revision, credential-free DB URL, per-frame content hashes, generation config) and immutable versioned Parquet export under the configurable `DATASET_ROOT`
+- a reproducibility manifest per build (git commit, source DB Alembic revision, credential-free DB URL, per-frame content hashes, generation config) and immutable versioned Parquet export under the configurable data root (`KALSHI_DATA_DIR`, default `./data`; datasets in `<KALSHI_DATA_DIR>/datasets` unless `DATASET_ROOT` overrides — see `docs/runbooks/dataset.md` "Where it writes")
 - validation (missing/duplicate/impossible/mismatch/orphan checks) and summary statistics emitted alongside each build
 
 Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+) --- `market_price_weather` deliberately stops at attaching known facts; no forecasting feature, model input, or statistical estimate lives in this layer.

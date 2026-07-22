@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     collector_interval_seconds: float = Field(
         default=300.0, alias="COLLECTOR_INTERVAL_SECONDS"
     )
+    # Bounded bootstrap window for a market with no stored trade checkpoint
+    # yet (see docs/adr/0002-ingestion-collector.md decision 9). Without this,
+    # a market with a very large trade history (observed: >100,000 trades on
+    # some Climate & Weather markets) would have its first fetch abort at
+    # `paginate()`'s max_pages guard before any trades are persisted, so no
+    # checkpoint is ever established and every subsequent cycle repeats the
+    # same full-history fetch forever. 30 days mirrors the existing
+    # WEATHER_BACKFILL_DAYS default.
+    initial_trade_bootstrap_lookback_days: int = Field(
+        default=30, alias="INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS"
+    )
     # Proactive client-side request spacing (seconds). Kalshi's default matches
     # its reference client (see kalshi/client.py); the weather value paces
     # NWS/IEM requests as a courtesy to free public APIs.

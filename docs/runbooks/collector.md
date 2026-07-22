@@ -12,7 +12,10 @@ no order submission -- see `docs/adr/0002-ingestion-collector.md` and
 2. **Order books**: for every discovered market, fetch and persist the
    current order book.
 3. **Trades**: for every discovered market, fetch trades since the last one
-   already stored for that ticker (`min_ts`), persist any new ones.
+   already stored for that ticker (`min_ts`), persist any new ones. A market
+   with **no stored trade yet** (newly discovered, or never successfully
+   collected) does not fetch its entire lifetime history -- see "Trade
+   bootstrap window" below.
 
 Market/order-book snapshots identical to the immediately-prior stored row
 for that ticker are skipped (not inserted) -- history is still append-only,
@@ -107,6 +110,40 @@ already tolerates transient DB/API failures without exiting.
   ```
   If `observed_at`/`captured_at` stop advancing, the process has likely
   stopped or is stuck on a cycle failure loop -- check logs.
+
+## Trade bootstrap window
+
+Trade collection is incremental: each cycle only requests trades newer than
+the latest one already stored for that ticker (`min_ts`, checkpointed via
+`get_latest_trade_timestamp`). That checkpoint doesn't exist yet the first
+time a ticker is collected.
+
+**Why full-history bootstrap is intentionally avoided**: some Climate &
+Weather markets (long-running series can accumulate very large trade
+volumes) have well over 100,000 trades. Requesting `min_ts=None` on such a
+market asks for its entire lifetime history, which `paginate()`'s
+`max_pages=1000` safety guard then aborts (by design -- it exists precisely
+to stop a runaway fetch). Because `list_trades()` only returns once
+pagination fully completes, that abort happens *before any trades are
+returned*, so zero trades get persisted, no checkpoint is ever established,
+and every following cycle repeats the exact same full-history fetch --
+forever. This was an observed operational deadlock, not a hypothetical.
+
+**How bootstrap differs from incremental collection**: when no checkpoint
+exists for a ticker, the collector fetches only trades from the last
+`INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS` days (`min_ts = now - lookback`)
+instead of the market's full history. Those trades are persisted normally,
+which establishes the checkpoint -- every cycle after that is the same
+incremental `min_ts` fetch as any other market. A `collector.trades.bootstrap`
+log line is emitted each time this path is taken, and `CycleStats.
+trades_bootstrapped` counts how many tickers hit it in a given cycle. Trade
+history older than the bootstrap window, for a market with no prior
+checkpoint, is not collected by this path -- a known, documented gap (not
+silent data loss), matching the existing precedent for `weather_backfill_days`.
+
+**Changing the window**: set `INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS` in
+`.env` (default: 30, mirroring `WEATHER_BACKFILL_DAYS`). No code change or
+migration is required.
 
 ## Known limitations (see docs/API_VERIFICATION.md and the ADR)
 

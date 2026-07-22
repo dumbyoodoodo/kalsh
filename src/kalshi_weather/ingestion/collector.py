@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -36,6 +37,7 @@ class CycleStats:
     orderbooks_duplicate: int = 0
     trades_saved: int = 0
     trades_duplicate: int = 0
+    trades_bootstrapped: int = 0
     invalid_items: int = 0
     errors: int = 0
 
@@ -49,6 +51,7 @@ async def run_collection_cycle(
     *,
     category: str,
     market_status: str,
+    trade_bootstrap_lookback_days: int,
 ) -> CycleStats:
     """Run one full discovery + snapshot + trade collection pass.
 
@@ -56,6 +59,18 @@ async def run_collection_cycle(
     failure or malformed item for one market is logged and counted, and
     collection continues with the next market rather than aborting the
     cycle.
+
+    Trade collection is incremental via a stored per-ticker checkpoint
+    (`get_latest_trade_timestamp`). A market with no checkpoint yet (newly
+    discovered, or never successfully collected) does NOT fetch its entire
+    lifetime trade history -- some markets have well over 100,000 trades,
+    and `paginate()`'s `max_pages` safety guard would abort before any of
+    them were returned, so zero trades would be persisted and no checkpoint
+    would ever be established, repeating the same full-history fetch forever
+    (see docs/adr/0002-ingestion-collector.md decision 9). Instead, the first
+    fetch for an un-checkpointed ticker is bounded to the last
+    `trade_bootstrap_lookback_days` days; the checkpoint established from
+    those trades makes every subsequent cycle incremental as before.
     """
     stats = CycleStats()
 
@@ -87,7 +102,22 @@ async def run_collection_cycle(
 
         try:
             latest_trade_at = await get_latest_trade_timestamp(session, ticker)
-            min_ts = int(latest_trade_at.timestamp()) if latest_trade_at is not None else None
+            if latest_trade_at is not None:
+                min_ts = int(latest_trade_at.timestamp())
+            else:
+                bootstrap_since = utc_now() - timedelta(days=trade_bootstrap_lookback_days)
+                min_ts = int(bootstrap_since.timestamp())
+                stats.trades_bootstrapped += 1
+                logger.info(
+                    "collector.trades.bootstrap",
+                    message=(
+                        f"Bootstrap trade collection: no checkpoint found, "
+                        f"collecting previous {trade_bootstrap_lookback_days} days."
+                    ),
+                    ticker=ticker,
+                    lookback_days=trade_bootstrap_lookback_days,
+                    since=bootstrap_since.isoformat(),
+                )
             trades = await client.list_trades(ticker=ticker, min_ts=min_ts)
             for trade in trades:
                 if trade.created_time is None or trade.yes_price is None or trade.count is None:
@@ -131,6 +161,7 @@ async def run_collector_loop(
     client_factory: Callable[[AsyncSession], KalshiClient],
     category: str,
     market_status: str,
+    trade_bootstrap_lookback_days: int,
     interval_seconds: float,
     stop_event: asyncio.Event,
     max_cycles: int | None = None,
@@ -153,7 +184,11 @@ async def run_collector_loop(
                 client = client_factory(session)
                 async with client:
                     stats = await run_collection_cycle(
-                        client, session, category=category, market_status=market_status
+                        client,
+                        session,
+                        category=category,
+                        market_status=market_status,
+                        trade_bootstrap_lookback_days=trade_bootstrap_lookback_days,
                     )
                     run_stats = stats.as_dict()
                     run_requests, run_retries = client.requests_attempted, client.retries

@@ -329,6 +329,7 @@ def collector_run(
                 client_factory=lambda session: _build_client(settings, session),
                 category=category or settings.collector_category,
                 market_status=status or settings.collector_market_status,
+                trade_bootstrap_lookback_days=settings.initial_trade_bootstrap_lookback_days,
                 interval_seconds=(
                     interval if interval is not None else settings.collector_interval_seconds
                 ),
@@ -1079,6 +1080,7 @@ def ops_run(
                     client_factory=lambda session: _build_client(settings, session),
                     category=settings.collector_category,
                     market_status=settings.collector_market_status,
+                    trade_bootstrap_lookback_days=settings.initial_trade_bootstrap_lookback_days,
                     interval_seconds=kalshi_interval or settings.collector_interval_seconds,
                     stop_event=stop_event,
                 ),

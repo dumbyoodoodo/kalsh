@@ -103,6 +103,17 @@ def test_ensure_dataset_root_creates_datasets_subdir_when_root_exists(  # type: 
     assert root.is_dir()
 
 
+def test_initial_trade_bootstrap_lookback_days_defaults_to_30(_isolated_env) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.initial_trade_bootstrap_lookback_days == 30
+
+
+def test_initial_trade_bootstrap_lookback_days_parses_from_env(_isolated_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS", "7")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.initial_trade_bootstrap_lookback_days == 7
+
+
 def test_ensure_dataset_root_rejects_unwritable_root(_isolated_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     readonly = _isolated_env / "readonly"
     (readonly / "datasets").mkdir(parents=True)

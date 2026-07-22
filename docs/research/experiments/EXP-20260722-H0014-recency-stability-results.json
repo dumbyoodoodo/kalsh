@@ -1,0 +1,1279 @@
+{
+  "experiment": "EXP-20260722-H0014-recency-stability",
+  "hypothesis": "H0014",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0014-recency-stability.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: CHI full-year cells are published motivating data (partial post-hoc); NYC by-variable yearly cells and all season-matched cells were never computed pre-freeze",
+    "original_hypotheses_entry": "HYPOTHESES.md H0014, opened 2026-07-22",
+    "inherited_conventions": {
+      "documents": [
+        "AMENDMENT-20260721-H0011-audit-resolution.md (F3 decimal policy, F4 serialization, F6 gate sentinel, F7 null ratios)",
+        "PREREG-20260722-H0013-chi-replication.md (dataset pin, revision definition, exact-arithmetic policy)"
+      ],
+      "blocked_on": []
+    },
+    "elaboration_flags_for_audit": [
+      "decision_family_bonferroni_z_frozen (PREREG Sec 5)",
+      "season_matched_windows_decisional_full_year_tables_only (PREREG Sec 3)",
+      "operational_indicators_cooccurrence_not_causation (PREREG Sec 6)",
+      "cross_station_corroboration_as_interaction_rendering (PREREG Sec 7.1 step 3)",
+      "chi_partial_posthoc_disclosed (PREREG Sec 0/12 R1)"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260722-h0013-replication",
+    "frame": "observation_issuances.parquet",
+    "content_hashes": {
+      "observation_issuances": "5ccf5b7a3ec11f1ec10fd8a3eac244640406130ec75934e58ead3b2f44e28775"
+    },
+    "row_count_expected": 26310,
+    "dataset_build_git_commit": "9285a0145db39d5829b93b648a1e19e5a32c7237",
+    "source_db_revision": "0007",
+    "motivating_record_reference": "docs/research/experiments/EXP-20260722-H0013-chi-replication-results.json",
+    "analysis_git_commit": "1ad28f22e0bacb87a4f960a3ac40f2346ce479f3"
+  },
+  "config": {
+    "stations": [
+      "CHI",
+      "NYC"
+    ],
+    "variables": [
+      "tmax_f",
+      "tmin_f"
+    ],
+    "unit_of_analysis": "variable-day (station_id, variable, observation_date); >=1 issuance valid; single-issuance days unrevised",
+    "revision_definition": "first-issued value != final-issued value, Decimal-quantized to 0.01; Decimal(str(v)) construction; ROUND_HALF_EVEN; round-trip invariant < 1e-6 under G2",
+    "windows": "SM(y) = [y-01-01, y-07-21] for y in 2023..2026 (2026 YTD == SM(2026)); hist = pooled SM(2023..2025), decisional; FY(2023..2025) tables only; 2022-12-31 excluded and counted -- PREREG Sec 3, no adaptive splitting",
+    "timezone": "none -- windows are calendar dates of observation_date; no local-time computation exists in this design (PREREG Sec 2)",
+    "estimands": "Delta_{v,s} = p_{v,s,SM(2026)} - p_{v,s,hist}, the declared family of 4 (2 stations x 2 variables); independent samples (disjoint day sets); positive = 2026 revises more",
+    "ci_method": "Newcombe (1998) hybrid score interval (contrasts, gaps) and Wilson score interval (rates), no continuity correction -- PREREG Sec 5",
+    "z_reporting": "1.959963984540054 (95%, frozen literal)",
+    "z_decision": "2.497705474412374 (98.75% per contrast = Bonferroni family-wise 0.05 over 4; frozen literal, independently re-derived at implementation per PREREG Sec 11)",
+    "shift_event": "98.75% Newcombe CI on Delta excludes 0 (quantized); direction = sign of point estimate; touching 0 is NOT a shift",
+    "operational_indicators": "evaluated only at stations with >=1 shift event; OI-1 |cadence diff| >= 0.15; OI-2 |missing-day fraction diff| >= 0.05; OI-3 |single-issuance fraction diff| >= 0.05; quantized; exactly-at-threshold FIRES -- PREREG Sec 6",
+    "decision_rule": "0) gate fails -> BLOCKED; 1) no shift events -> A; 2) shifts and any OI fires at a shifted station -> C; 3) same-variable same-direction shifts at both stations -> D; 4) otherwise -> B (retry >= 2027-01-15) -- PREREG Sec 7.1",
+    "exact_arithmetic": "integer counts; Decimal precision-50 bounds; strict decisions after 1e-12 ROUND_HALF_EVEN quantization of both operands; fixed-point 12-digit serialization",
+    "random_seed": "not applicable -- fully deterministic, no resampling",
+    "software_versions": "python 3.12.13; polars 1.42.1"
+  },
+  "eligibility_gates": {
+    "g1_frame_hash_matches": true,
+    "g2_invariants": {
+      "natural_key_unique": true,
+      "no_nulls": true,
+      "station_set_exact": true,
+      "variable_set_exact": true,
+      "value_roundtrip_verified": true
+    },
+    "g3_sm_cell_min_n": {
+      "CHI": {
+        "tmax_f": {
+          "2023": 201,
+          "2024": 198,
+          "2025": 199,
+          "2026": 198
+        },
+        "tmin_f": {
+          "2023": 201,
+          "2024": 198,
+          "2025": 199,
+          "2026": 198
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "2023": 197,
+          "2024": 202,
+          "2025": 198,
+          "2026": 199
+        },
+        "tmin_f": {
+          "2023": 197,
+          "2024": 202,
+          "2025": 198,
+          "2026": 199
+        }
+      }
+    },
+    "g4_hist_min_r": {
+      "CHI": {
+        "tmax_f": 93,
+        "tmin_f": 166
+      },
+      "NYC": {
+        "tmax_f": 88,
+        "tmin_f": 144
+      }
+    },
+    "all_gates_passed": true
+  },
+  "primary_results": {
+    "contrasts": {
+      "CHI": {
+        "tmax_f": {
+          "n_2026": 198,
+          "r_2026": 50,
+          "p_2026": "0.252525252525",
+          "n_hist": 598,
+          "r_hist": 93,
+          "p_hist": "0.155518394649",
+          "delta_hat": "0.097006857876",
+          "ci95_newcombe": [
+            "0.033398055726",
+            "0.167173674604"
+          ],
+          "ci9875_newcombe": [
+            "0.017190351188",
+            "0.187293328836"
+          ],
+          "shift_event": true,
+          "direction": "up"
+        },
+        "tmin_f": {
+          "n_2026": 198,
+          "r_2026": 50,
+          "p_2026": "0.252525252525",
+          "n_hist": 598,
+          "r_hist": 166,
+          "p_hist": "0.277591973244",
+          "delta_hat": "-0.025066720719",
+          "ci95_newcombe": [
+            "-0.091820871338",
+            "0.048319121581"
+          ],
+          "ci9875_newcombe": [
+            "-0.108831219866",
+            "0.069301158845"
+          ],
+          "shift_event": false,
+          "direction": "down"
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "n_2026": 199,
+          "r_2026": 34,
+          "p_2026": "0.170854271357",
+          "n_hist": 597,
+          "r_hist": 88,
+          "p_hist": "0.147403685092",
+          "delta_hat": "0.023450586265",
+          "ci95_newcombe": [
+            "-0.031794660130",
+            "0.087453858173"
+          ],
+          "ci9875_newcombe": [
+            "-0.045604408169",
+            "0.106495878247"
+          ],
+          "shift_event": false,
+          "direction": "up"
+        },
+        "tmin_f": {
+          "n_2026": 199,
+          "r_2026": 52,
+          "p_2026": "0.261306532663",
+          "n_hist": 597,
+          "r_hist": 144,
+          "p_hist": "0.241206030151",
+          "delta_hat": "0.020100502513",
+          "ci95_newcombe": [
+            "-0.046512237728",
+            "0.092948895928"
+          ],
+          "ci9875_newcombe": [
+            "-0.063544842403",
+            "0.113710727748"
+          ],
+          "shift_event": false,
+          "direction": "up"
+        }
+      }
+    },
+    "shift_sets": {
+      "CHI": [
+        "tmax_f"
+      ],
+      "NYC": []
+    },
+    "operational_indicators": {
+      "CHI": {
+        "oi1_cadence": {
+          "value_2026": "2.020202020202",
+          "value_hist": "2.008361204013",
+          "abs_diff": "0.011840816189",
+          "fired": false
+        },
+        "oi2_missing_fraction": {
+          "value_2026": "0.019801980198",
+          "value_hist": "0.014827018122",
+          "abs_diff": "0.004974962076",
+          "fired": false
+        },
+        "oi3_single_issuance_fraction": {
+          "value_2026": "0.005050505051",
+          "value_hist": "0.006688963211",
+          "abs_diff": "0.001638458160",
+          "fired": false
+        }
+      }
+    },
+    "decision": {
+      "outcome": "B",
+      "evaluation_step": "step_4",
+      "reason": "shift event(s) exist but are not cross-station corroborated in the same direction and no operational indicator fired",
+      "interpretation": "At least one station shows a decision-level shift without cross-station corroboration or operational co-occurrence. The asymmetry's current magnitude is unreliable at the shifted station(s); downstream work must not assume it there. Retry with full-2026 windows (FY(2026) vs FY(2023-2025), a new pre-registered entry) on or after 2027-01-15."
+    }
+  },
+  "descriptive_results": {
+    "cells_sm": {
+      "CHI": {
+        "tmax_f": {
+          "2023": {
+            "n": 201,
+            "r": 35,
+            "rate": "0.174129353234",
+            "ci95_wilson": [
+              "0.127950639976",
+              "0.232530383962"
+            ]
+          },
+          "2024": {
+            "n": 198,
+            "r": 29,
+            "rate": "0.146464646465",
+            "ci95_wilson": [
+              "0.103953706388",
+              "0.202432598894"
+            ]
+          },
+          "2025": {
+            "n": 199,
+            "r": 29,
+            "rate": "0.145728643216",
+            "ci95_wilson": [
+              "0.103420887223",
+              "0.201454946250"
+            ]
+          },
+          "2026": {
+            "n": 198,
+            "r": 50,
+            "rate": "0.252525252525",
+            "ci95_wilson": [
+              "0.197113630068",
+              "0.317356783629"
+            ]
+          }
+        },
+        "tmin_f": {
+          "2023": {
+            "n": 201,
+            "r": 56,
+            "rate": "0.278606965174",
+            "ci95_wilson": [
+              "0.221225272343",
+              "0.344292369874"
+            ]
+          },
+          "2024": {
+            "n": 198,
+            "r": 52,
+            "rate": "0.262626262626",
+            "ci95_wilson": [
+              "0.206266730354",
+              "0.328021217478"
+            ]
+          },
+          "2025": {
+            "n": 199,
+            "r": 58,
+            "rate": "0.291457286432",
+            "ci95_wilson": [
+              "0.232744676524",
+              "0.358068757364"
+            ]
+          },
+          "2026": {
+            "n": 198,
+            "r": 50,
+            "rate": "0.252525252525",
+            "ci95_wilson": [
+              "0.197113630068",
+              "0.317356783629"
+            ]
+          }
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "2023": {
+            "n": 197,
+            "r": 29,
+            "rate": "0.147208121827",
+            "ci95_wilson": [
+              "0.104492048545",
+              "0.203419769980"
+            ]
+          },
+          "2024": {
+            "n": 202,
+            "r": 22,
+            "rate": "0.108910891089",
+            "ci95_wilson": [
+              "0.073030493424",
+              "0.159388471612"
+            ]
+          },
+          "2025": {
+            "n": 198,
+            "r": 37,
+            "rate": "0.186868686869",
+            "ci95_wilson": [
+              "0.138722635177",
+              "0.246933806644"
+            ]
+          },
+          "2026": {
+            "n": 199,
+            "r": 34,
+            "rate": "0.170854271357",
+            "ci95_wilson": [
+              "0.124917753418",
+              "0.229257666333"
+            ]
+          }
+        },
+        "tmin_f": {
+          "2023": {
+            "n": 197,
+            "r": 38,
+            "rate": "0.192893401015",
+            "ci95_wilson": [
+              "0.143883195260",
+              "0.253651553241"
+            ]
+          },
+          "2024": {
+            "n": 202,
+            "r": 53,
+            "rate": "0.262376237624",
+            "ci95_wilson": [
+              "0.206549248756",
+              "0.327072400886"
+            ]
+          },
+          "2025": {
+            "n": 198,
+            "r": 53,
+            "rate": "0.267676767677",
+            "ci95_wilson": [
+              "0.210858439833",
+              "0.333338275067"
+            ]
+          },
+          "2026": {
+            "n": 199,
+            "r": 52,
+            "rate": "0.261306532663",
+            "ci95_wilson": [
+              "0.205196981969",
+              "0.326456948384"
+            ]
+          }
+        }
+      }
+    },
+    "cells_fy": {
+      "CHI": {
+        "tmax_f": {
+          "2023": {
+            "n": 362,
+            "r": 50,
+            "rate": "0.138121546961",
+            "ci95_wilson": [
+              "0.106362415655",
+              "0.177480370112"
+            ]
+          },
+          "2024": {
+            "n": 359,
+            "r": 50,
+            "rate": "0.139275766017",
+            "ci95_wilson": [
+              "0.107265319301",
+              "0.178924299598"
+            ]
+          },
+          "2025": {
+            "n": 362,
+            "r": 51,
+            "rate": "0.140883977901",
+            "ci95_wilson": [
+              "0.108806041120",
+              "0.180503593611"
+            ]
+          }
+        },
+        "tmin_f": {
+          "2023": {
+            "n": 362,
+            "r": 96,
+            "rate": "0.265193370166",
+            "ci95_wilson": [
+              "0.222357306443",
+              "0.312960531650"
+            ]
+          },
+          "2024": {
+            "n": 359,
+            "r": 92,
+            "rate": "0.256267409471",
+            "ci95_wilson": [
+              "0.213853273604",
+              "0.303842414841"
+            ]
+          },
+          "2025": {
+            "n": 362,
+            "r": 92,
+            "rate": "0.254143646409",
+            "ci95_wilson": [
+              "0.212036829117",
+              "0.301413613121"
+            ]
+          }
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "2023": {
+            "n": 360,
+            "r": 46,
+            "rate": "0.127777777778",
+            "ci95_wilson": [
+              "0.097180247872",
+              "0.166235194478"
+            ]
+          },
+          "2024": {
+            "n": 363,
+            "r": 36,
+            "rate": "0.099173553719",
+            "ci95_wilson": [
+              "0.072497906744",
+              "0.134243880469"
+            ]
+          },
+          "2025": {
+            "n": 360,
+            "r": 54,
+            "rate": "0.150000000000",
+            "ci95_wilson": [
+              "0.116819750186",
+              "0.190570889636"
+            ]
+          }
+        },
+        "tmin_f": {
+          "2023": {
+            "n": 360,
+            "r": 77,
+            "rate": "0.213888888889",
+            "ci95_wilson": [
+              "0.174667964803",
+              "0.259151367750"
+            ]
+          },
+          "2024": {
+            "n": 363,
+            "r": 98,
+            "rate": "0.269972451791",
+            "ci95_wilson": [
+              "0.226887890505",
+              "0.317874578446"
+            ]
+          },
+          "2025": {
+            "n": 360,
+            "r": 84,
+            "rate": "0.233333333333",
+            "ci95_wilson": [
+              "0.192598315706",
+              "0.279699314635"
+            ]
+          }
+        }
+      }
+    },
+    "cells_hist_pooled": {
+      "CHI": {
+        "tmax_f": {
+          "n": 598,
+          "r": 93,
+          "rate": "0.155518394649",
+          "ci95_wilson": [
+            "0.128680832457",
+            "0.186753500021"
+          ]
+        },
+        "tmin_f": {
+          "n": 598,
+          "r": 166,
+          "rate": "0.277591973244",
+          "ci95_wilson": [
+            "0.243206592269",
+            "0.314816544719"
+          ]
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "n": 597,
+          "r": 88,
+          "rate": "0.147403685092",
+          "ci95_wilson": [
+            "0.121222350707",
+            "0.178093643855"
+          ]
+        },
+        "tmin_f": {
+          "n": 597,
+          "r": 144,
+          "rate": "0.241206030151",
+          "ci95_wilson": [
+            "0.208612905807",
+            "0.277108334857"
+          ]
+        }
+      }
+    },
+    "gaps_sm": {
+      "CHI": {
+        "2023": {
+          "d_hat": "0.104477611940",
+          "ci95_newcombe": [
+            "0.022603690193",
+            "0.184771110735"
+          ]
+        },
+        "2024": {
+          "d_hat": "0.116161616162",
+          "ci95_newcombe": [
+            "0.036733607392",
+            "0.194159565791"
+          ]
+        },
+        "2025": {
+          "d_hat": "0.145728643216",
+          "ci95_newcombe": [
+            "0.064780564721",
+            "0.224640203059"
+          ]
+        },
+        "2026": {
+          "d_hat": "0.000000000000",
+          "ci95_newcombe": [
+            "-0.085285258566",
+            "0.085285258566"
+          ]
+        },
+        "hist": {
+          "d_hat": "0.122073578595",
+          "ci95_newcombe": [
+            "0.075619448183",
+            "0.167963920345"
+          ]
+        }
+      },
+      "NYC": {
+        "2023": {
+          "d_hat": "0.045685279188",
+          "ci95_newcombe": [
+            "-0.028891859778",
+            "0.119956511698"
+          ]
+        },
+        "2024": {
+          "d_hat": "0.153465346535",
+          "ci95_newcombe": [
+            "0.078201551643",
+            "0.227445049680"
+          ]
+        },
+        "2025": {
+          "d_hat": "0.080808080808",
+          "ci95_newcombe": [
+            "-0.001872878261",
+            "0.162229674051"
+          ]
+        },
+        "2026": {
+          "d_hat": "0.090452261307",
+          "ci95_newcombe": [
+            "0.009463137198",
+            "0.170168886605"
+          ]
+        },
+        "hist": {
+          "d_hat": "0.093802345059",
+          "ci95_newcombe": [
+            "0.049034216626",
+            "0.138236990927"
+          ]
+        }
+      }
+    },
+    "monthly_rates": {
+      "CHI": {
+        "tmax_f": {
+          "1": {
+            "hist": {
+              "n": 93,
+              "r": 12,
+              "rate": "0.129032258065"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 7,
+              "rate": "0.233333333333"
+            }
+          },
+          "2": {
+            "hist": {
+              "n": 81,
+              "r": 7,
+              "rate": "0.086419753086"
+            },
+            "y2026": {
+              "n": 27,
+              "r": 3,
+              "rate": "0.111111111111"
+            }
+          },
+          "3": {
+            "hist": {
+              "n": 92,
+              "r": 15,
+              "rate": "0.163043478261"
+            },
+            "y2026": {
+              "n": 29,
+              "r": 9,
+              "rate": "0.310344827586"
+            }
+          },
+          "4": {
+            "hist": {
+              "n": 88,
+              "r": 22,
+              "rate": "0.250000000000"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 10,
+              "rate": "0.333333333333"
+            }
+          },
+          "5": {
+            "hist": {
+              "n": 92,
+              "r": 16,
+              "rate": "0.173913043478"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 6,
+              "rate": "0.193548387097"
+            }
+          },
+          "6": {
+            "hist": {
+              "n": 89,
+              "r": 10,
+              "rate": "0.112359550562"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 11,
+              "rate": "0.366666666667"
+            }
+          },
+          "7": {
+            "hist": {
+              "n": 63,
+              "r": 11,
+              "rate": "0.174603174603"
+            },
+            "y2026": {
+              "n": 21,
+              "r": 4,
+              "rate": "0.190476190476"
+            }
+          }
+        },
+        "tmin_f": {
+          "1": {
+            "hist": {
+              "n": 93,
+              "r": 28,
+              "rate": "0.301075268817"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 3,
+              "rate": "0.100000000000"
+            }
+          },
+          "2": {
+            "hist": {
+              "n": 81,
+              "r": 23,
+              "rate": "0.283950617284"
+            },
+            "y2026": {
+              "n": 27,
+              "r": 8,
+              "rate": "0.296296296296"
+            }
+          },
+          "3": {
+            "hist": {
+              "n": 92,
+              "r": 33,
+              "rate": "0.358695652174"
+            },
+            "y2026": {
+              "n": 29,
+              "r": 10,
+              "rate": "0.344827586207"
+            }
+          },
+          "4": {
+            "hist": {
+              "n": 88,
+              "r": 23,
+              "rate": "0.261363636364"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 11,
+              "rate": "0.366666666667"
+            }
+          },
+          "5": {
+            "hist": {
+              "n": 92,
+              "r": 22,
+              "rate": "0.239130434783"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 10,
+              "rate": "0.322580645161"
+            }
+          },
+          "6": {
+            "hist": {
+              "n": 89,
+              "r": 24,
+              "rate": "0.269662921348"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 5,
+              "rate": "0.166666666667"
+            }
+          },
+          "7": {
+            "hist": {
+              "n": 63,
+              "r": 13,
+              "rate": "0.206349206349"
+            },
+            "y2026": {
+              "n": 21,
+              "r": 3,
+              "rate": "0.142857142857"
+            }
+          }
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "1": {
+            "hist": {
+              "n": 92,
+              "r": 10,
+              "rate": "0.108695652174"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 5,
+              "rate": "0.161290322581"
+            }
+          },
+          "2": {
+            "hist": {
+              "n": 84,
+              "r": 16,
+              "rate": "0.190476190476"
+            },
+            "y2026": {
+              "n": 28,
+              "r": 4,
+              "rate": "0.142857142857"
+            }
+          },
+          "3": {
+            "hist": {
+              "n": 92,
+              "r": 16,
+              "rate": "0.173913043478"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 7,
+              "rate": "0.233333333333"
+            }
+          },
+          "4": {
+            "hist": {
+              "n": 87,
+              "r": 11,
+              "rate": "0.126436781609"
+            },
+            "y2026": {
+              "n": 29,
+              "r": 5,
+              "rate": "0.172413793103"
+            }
+          },
+          "5": {
+            "hist": {
+              "n": 93,
+              "r": 15,
+              "rate": "0.161290322581"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 9,
+              "rate": "0.290322580645"
+            }
+          },
+          "6": {
+            "hist": {
+              "n": 86,
+              "r": 15,
+              "rate": "0.174418604651"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 2,
+              "rate": "0.066666666667"
+            }
+          },
+          "7": {
+            "hist": {
+              "n": 63,
+              "r": 5,
+              "rate": "0.079365079365"
+            },
+            "y2026": {
+              "n": 20,
+              "r": 2,
+              "rate": "0.100000000000"
+            }
+          }
+        },
+        "tmin_f": {
+          "1": {
+            "hist": {
+              "n": 92,
+              "r": 27,
+              "rate": "0.293478260870"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 8,
+              "rate": "0.258064516129"
+            }
+          },
+          "2": {
+            "hist": {
+              "n": 84,
+              "r": 20,
+              "rate": "0.238095238095"
+            },
+            "y2026": {
+              "n": 28,
+              "r": 5,
+              "rate": "0.178571428571"
+            }
+          },
+          "3": {
+            "hist": {
+              "n": 92,
+              "r": 22,
+              "rate": "0.239130434783"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 9,
+              "rate": "0.300000000000"
+            }
+          },
+          "4": {
+            "hist": {
+              "n": 87,
+              "r": 26,
+              "rate": "0.298850574713"
+            },
+            "y2026": {
+              "n": 29,
+              "r": 11,
+              "rate": "0.379310344828"
+            }
+          },
+          "5": {
+            "hist": {
+              "n": 93,
+              "r": 21,
+              "rate": "0.225806451613"
+            },
+            "y2026": {
+              "n": 31,
+              "r": 7,
+              "rate": "0.225806451613"
+            }
+          },
+          "6": {
+            "hist": {
+              "n": 86,
+              "r": 19,
+              "rate": "0.220930232558"
+            },
+            "y2026": {
+              "n": 30,
+              "r": 6,
+              "rate": "0.200000000000"
+            }
+          },
+          "7": {
+            "hist": {
+              "n": 63,
+              "r": 9,
+              "rate": "0.142857142857"
+            },
+            "y2026": {
+              "n": 20,
+              "r": 6,
+              "rate": "0.300000000000"
+            }
+          }
+        }
+      }
+    },
+    "excluded_days": 4,
+    "contrasts_reporting_level": {
+      "CHI": {
+        "tmax_f": {
+          "delta_hat": "0.097006857876",
+          "ci95_newcombe": [
+            "0.033398055726",
+            "0.167173674604"
+          ]
+        },
+        "tmin_f": {
+          "delta_hat": "-0.025066720719",
+          "ci95_newcombe": [
+            "-0.091820871338",
+            "0.048319121581"
+          ]
+        }
+      },
+      "NYC": {
+        "tmax_f": {
+          "delta_hat": "0.023450586265",
+          "ci95_newcombe": [
+            "-0.031794660130",
+            "0.087453858173"
+          ]
+        },
+        "tmin_f": {
+          "delta_hat": "0.020100502513",
+          "ci95_newcombe": [
+            "-0.046512237728",
+            "0.092948895928"
+          ]
+        }
+      }
+    },
+    "diagnostics": {
+      "CHI": {
+        "sm_2023": {
+          "variable_days": 402,
+          "issuance_rows": 814,
+          "mean_issuances_per_day": "2.024875621891",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 202,
+          "observed_days": 201,
+          "missing_days": 1,
+          "missing_fraction": "0.004950495050",
+          "issuance_count_distribution": {
+            "2": 392,
+            "3": 10
+          }
+        },
+        "sm_2024": {
+          "variable_days": 396,
+          "issuance_rows": 794,
+          "mean_issuances_per_day": "2.005050505051",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 203,
+          "observed_days": 198,
+          "missing_days": 5,
+          "missing_fraction": "0.024630541872",
+          "issuance_count_distribution": {
+            "2": 394,
+            "3": 2
+          }
+        },
+        "sm_2025": {
+          "variable_days": 398,
+          "issuance_rows": 794,
+          "mean_issuances_per_day": "1.994974874372",
+          "single_issuance_days": 8,
+          "single_issuance_fraction": "0.020100502513",
+          "expected_days": 202,
+          "observed_days": 199,
+          "missing_days": 3,
+          "missing_fraction": "0.014851485149",
+          "issuance_count_distribution": {
+            "1": 8,
+            "2": 384,
+            "3": 6
+          }
+        },
+        "sm_2026": {
+          "variable_days": 396,
+          "issuance_rows": 800,
+          "mean_issuances_per_day": "2.020202020202",
+          "single_issuance_days": 2,
+          "single_issuance_fraction": "0.005050505051",
+          "expected_days": 202,
+          "observed_days": 198,
+          "missing_days": 4,
+          "missing_fraction": "0.019801980198",
+          "issuance_count_distribution": {
+            "1": 2,
+            "2": 386,
+            "3": 6,
+            "4": 2
+          }
+        },
+        "hist": {
+          "variable_days": 1196,
+          "issuance_rows": 2402,
+          "mean_issuances_per_day": "2.008361204013",
+          "single_issuance_days": 8,
+          "single_issuance_fraction": "0.006688963211",
+          "expected_days": 607,
+          "observed_days": 598,
+          "missing_days": 9,
+          "missing_fraction": "0.014827018122",
+          "issuance_count_distribution": {
+            "1": 8,
+            "2": 1170,
+            "3": 18
+          }
+        },
+        "fy_2023": {
+          "variable_days": 724,
+          "issuance_rows": 1458,
+          "mean_issuances_per_day": "2.013812154696",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 365,
+          "observed_days": 362,
+          "missing_days": 3,
+          "missing_fraction": "0.008219178082",
+          "issuance_count_distribution": {
+            "2": 714,
+            "3": 10
+          }
+        },
+        "fy_2024": {
+          "variable_days": 718,
+          "issuance_rows": 1438,
+          "mean_issuances_per_day": "2.002785515320",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 366,
+          "observed_days": 359,
+          "missing_days": 7,
+          "missing_fraction": "0.019125683060",
+          "issuance_count_distribution": {
+            "2": 716,
+            "3": 2
+          }
+        },
+        "fy_2025": {
+          "variable_days": 724,
+          "issuance_rows": 1454,
+          "mean_issuances_per_day": "2.008287292818",
+          "single_issuance_days": 8,
+          "single_issuance_fraction": "0.011049723757",
+          "expected_days": 365,
+          "observed_days": 362,
+          "missing_days": 3,
+          "missing_fraction": "0.008219178082",
+          "issuance_count_distribution": {
+            "1": 8,
+            "2": 702,
+            "3": 14
+          }
+        }
+      },
+      "NYC": {
+        "sm_2023": {
+          "variable_days": 394,
+          "issuance_rows": 790,
+          "mean_issuances_per_day": "2.005076142132",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 202,
+          "observed_days": 197,
+          "missing_days": 5,
+          "missing_fraction": "0.024752475248",
+          "issuance_count_distribution": {
+            "2": 392,
+            "3": 2
+          }
+        },
+        "sm_2024": {
+          "variable_days": 404,
+          "issuance_rows": 806,
+          "mean_issuances_per_day": "1.995049504950",
+          "single_issuance_days": 4,
+          "single_issuance_fraction": "0.009900990099",
+          "expected_days": 203,
+          "observed_days": 202,
+          "missing_days": 1,
+          "missing_fraction": "0.004926108374",
+          "issuance_count_distribution": {
+            "1": 4,
+            "2": 398,
+            "3": 2
+          }
+        },
+        "sm_2025": {
+          "variable_days": 396,
+          "issuance_rows": 794,
+          "mean_issuances_per_day": "2.005050505051",
+          "single_issuance_days": 2,
+          "single_issuance_fraction": "0.005050505051",
+          "expected_days": 202,
+          "observed_days": 198,
+          "missing_days": 4,
+          "missing_fraction": "0.019801980198",
+          "issuance_count_distribution": {
+            "1": 2,
+            "2": 390,
+            "3": 4
+          }
+        },
+        "sm_2026": {
+          "variable_days": 398,
+          "issuance_rows": 800,
+          "mean_issuances_per_day": "2.010050251256",
+          "single_issuance_days": 2,
+          "single_issuance_fraction": "0.005025125628",
+          "expected_days": 202,
+          "observed_days": 199,
+          "missing_days": 3,
+          "missing_fraction": "0.014851485149",
+          "issuance_count_distribution": {
+            "1": 2,
+            "2": 390,
+            "3": 6
+          }
+        },
+        "hist": {
+          "variable_days": 1194,
+          "issuance_rows": 2390,
+          "mean_issuances_per_day": "2.001675041876",
+          "single_issuance_days": 6,
+          "single_issuance_fraction": "0.005025125628",
+          "expected_days": 607,
+          "observed_days": 597,
+          "missing_days": 10,
+          "missing_fraction": "0.016474464580",
+          "issuance_count_distribution": {
+            "1": 6,
+            "2": 1180,
+            "3": 8
+          }
+        },
+        "fy_2023": {
+          "variable_days": 720,
+          "issuance_rows": 1442,
+          "mean_issuances_per_day": "2.002777777778",
+          "single_issuance_days": 0,
+          "single_issuance_fraction": "0.000000000000",
+          "expected_days": 365,
+          "observed_days": 360,
+          "missing_days": 5,
+          "missing_fraction": "0.013698630137",
+          "issuance_count_distribution": {
+            "2": 718,
+            "3": 2
+          }
+        },
+        "fy_2024": {
+          "variable_days": 726,
+          "issuance_rows": 1464,
+          "mean_issuances_per_day": "2.016528925620",
+          "single_issuance_days": 4,
+          "single_issuance_fraction": "0.005509641873",
+          "expected_days": 366,
+          "observed_days": 363,
+          "missing_days": 3,
+          "missing_fraction": "0.008196721311",
+          "issuance_count_distribution": {
+            "1": 4,
+            "2": 708,
+            "3": 12,
+            "4": 2
+          }
+        },
+        "fy_2025": {
+          "variable_days": 720,
+          "issuance_rows": 1442,
+          "mean_issuances_per_day": "2.002777777778",
+          "single_issuance_days": 6,
+          "single_issuance_fraction": "0.008333333333",
+          "expected_days": 365,
+          "observed_days": 360,
+          "missing_days": 5,
+          "missing_fraction": "0.013698630137",
+          "issuance_count_distribution": {
+            "1": 6,
+            "2": 706,
+            "3": 8
+          }
+        }
+      }
+    }
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": true,
+    "config_matches_prereg": true,
+    "decision_z_rederived": true,
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits after the point -- H0011 AMENDMENT Finding 4, inherited. Integer counts remain plain JSON integers."
+  },
+  "date_run": "2026-07-22"
+}

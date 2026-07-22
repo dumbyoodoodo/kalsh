@@ -460,9 +460,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0014 — The 2026 revision-gap collapse: sampling noise, operational artifact, or regime shift
 
-- **Status:** Proposed
+- **Status:** Rejected (outcome B — retry ≥ 2027-01-15)
 - **Opened:** 2026-07-22
-- **Closed:**
+- **Closed:** 2026-07-22
 - **Related:** H0013 (source of the motivating observation, its closeout §6.2), H0011/H0002 (the asymmetry under recency test)
 - **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0014-recency-stability.md` (frozen 2026-07-22, before any season-matched cell, any NYC by-variable yearly cell, or any contrast statistic was computed). Dataset: the already-pinned `exp-20260722-h0013-replication` (hash `5ccf5b7a…`) — no new build.
 
@@ -486,6 +486,6 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** H0013 (closed; supplies the pinned dataset and the motivating observation).
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-22 — [EXP-20260722-H0014-recency-stability](docs/research/experiments/EXP-20260722-H0014-recency-stability.md), dataset `exp-20260722-h0013-replication` (hash `5ccf5b7a…` re-verified at G1; analysis commit `1ad28f2`). All gates passed (16/16 SM cells n ∈ [194,200]; hist R ∈ [88,166]). The declared family of 4 season-matched contrasts (98.75% decision CIs): **CHI tmax Δ = +9.70pp [+1.72, +18.73] — SHIFT (up)**; CHI tmin −2.51pp [−10.88, +6.93]; NYC tmax +2.35pp [−4.56, +10.65]; NYC tmin +2.01pp [−6.35, +11.37] — no other shift. No operational indicator fired at CHI (cadence diff 0.012 vs threshold 0.15; missing-day fraction diff 0.5pp vs 5pp; single-issuance diff 0.2pp vs 5pp). Decision path: step 1 fails (a shift exists) → step 2 fails (no OI) → step 3 fails (NYC not corroborating) → **outcome B**. Season-matched yearly gaps: CHI +10.4/+11.6/+14.6/**+0.0**pp; NYC +4.6/+15.3/+8.1/**+9.0**pp (hist +9.4). Monthly profile: CHI tmax elevated in 5/7 months of 2026 (broad, not single-event). Deterministic: reruns byte-identical; decision-z re-derived by bisection in-run; config-vs-prereg true. Full narrative: `docs/research/postmortems/2026-07-22-h0014-closeout.md`.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Rejected** (the registered prediction was stability/outcome A; the frozen table returned **B — possible regime change requiring additional data**). What the run established: (1) seasonal composition is real (CHI's Jan–Jul tmax baseline is 15.6% vs 13.9% full-year) but does **not** explain the 2026 CHI tmax elevation, which survives season-matching at the multiplicity-corrected level; (2) no registered operational explanation exists — cadence, completeness, and single-issuance behavior are all stable; (3) the shift is CHI-only — NYC, the fully unseen sample, is textbook-stable (2026 gap +9.0pp vs +9.4pp history), so the change is not corroborated cross-station and D was not reached. Practical guidance: downstream label-noise handling may rely on NYC's asymmetry as published; CHI's current-day asymmetry must be treated as unknown (its 2026 season-matched gap is +0.0pp [−8.5, +8.6]). H0011/H0013's pooled conclusions are unaffected per the frozen interpretation. Retry with full-2026 windows (FY(2026) vs FY(2023–2025), both stations, new pre-registered entry) on or after **2027-01-15**; suggested non-decisional preparation: an operational inspection of CHI 2026 raw CLI product text (`raw_api_payloads`) to sharpen the retry's operational indicators.

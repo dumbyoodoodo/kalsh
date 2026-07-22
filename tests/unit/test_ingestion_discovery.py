@@ -176,3 +176,60 @@ async def test_discovery_filters_events_by_status(session: AsyncSession) -> None
 
     assert seen_events_params
     assert all(p.get("status") == "open" for p in seen_events_params)
+
+
+async def test_discovery_tolerates_non_numeric_expiration_value(session: AsyncSession) -> None:
+    """Operational-restoration regression (2026-07-21): a non-temperature
+    climate market carrying a non-numeric expiration_value (e.g. "" or a
+    categorical outcome) must be stored with expiration_value=None -- not
+    abort the entire discovery cycle, which is exactly what happened on
+    the first category-wide authenticated run and why collection never
+    got past NYC."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/markets"):
+            return httpx.Response(
+                200,
+                json={
+                    "markets": [
+                        {
+                            "ticker": "KXRAINLAXM-26JUL-X",
+                            "event_ticker": EVENT_TICKER,
+                            "market_type": "binary",
+                            "status": "settled",
+                            "yes_bid": 1,
+                            "yes_ask": 2,
+                            "close_time": "2026-07-21T23:59:00Z",
+                            "expiration_value": "",  # the real-world crash input
+                        },
+                        {
+                            "ticker": VALID_MARKET_TICKER,
+                            "event_ticker": EVENT_TICKER,
+                            "market_type": "binary",
+                            "status": "settled",
+                            "yes_bid": 42,
+                            "yes_ask": 47,
+                            "close_time": "2026-07-21T23:59:00Z",
+                            "expiration_value": "85.0",  # numeric: must still parse
+                        },
+                    ],
+                    "cursor": "",
+                },
+            )
+        return _handler(request)
+
+    client = KalshiClient(
+        base_url="https://example.invalid/trade-api/v2",
+        environment=Environment.DEVELOPMENT,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await discover_and_snapshot_weather_markets(
+        client, session, category="Climate and Weather", market_status="settled"
+    )
+    assert result.market_snapshots_saved == 2  # both stored; neither aborted the cycle
+
+    rows = (await session.execute(select(MarketSnapshot))).scalars().all()
+    by_ticker = {r.market_ticker: r for r in rows}
+    assert by_ticker["KXRAINLAXM-26JUL-X"].expiration_value is None
+    assert by_ticker[VALID_MARKET_TICKER].expiration_value is not None

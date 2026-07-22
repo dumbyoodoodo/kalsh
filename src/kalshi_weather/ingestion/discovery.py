@@ -7,7 +7,7 @@ is explicitly out of scope here -- see TASKS.md Milestone 2b.
 
 import json
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,11 +108,27 @@ async def discover_and_snapshot_weather_markets(
                     validate_price_cents(market.no_bid, field_name="market.no_bid")
                     validate_price_cents(market.no_ask, field_name="market.no_ask")
                 except MalformedPayloadError as exc:
-                    logger.warning(
-                        "discovery.market.invalid", ticker=market.ticker, error=str(exc)
-                    )
+                    logger.warning("discovery.market.invalid", ticker=market.ticker, error=str(exc))
                     result.invalid_items += 1
                     continue
+
+                # Non-temperature climate markets can carry a non-numeric
+                # expiration_value (e.g. empty string or a categorical
+                # outcome). Per this module's own error-isolation contract, a
+                # malformed field is logged and stored as None -- one such
+                # market must never abort the whole discovery cycle (it did,
+                # pre-2026-07-21, which is why category-wide collection never
+                # got past the first malformed market).
+                expiration_value: Decimal | None = None
+                if market.expiration_value is not None:
+                    try:
+                        expiration_value = Decimal(market.expiration_value)
+                    except (InvalidOperation, ValueError):
+                        logger.warning(
+                            "discovery.market.expiration_value_not_numeric",
+                            ticker=market.ticker,
+                            value=market.expiration_value,
+                        )
 
                 save_result = await save_market_snapshot(
                     session,
@@ -132,11 +148,7 @@ async def discover_and_snapshot_weather_markets(
                     rules_secondary=market.rules_secondary,
                     source_updated_at=market.updated_time,
                     result=market.result,
-                    expiration_value=(
-                        Decimal(market.expiration_value)
-                        if market.expiration_value is not None
-                        else None
-                    ),
+                    expiration_value=expiration_value,
                     settlement_ts=market.settlement_ts,
                     floor_strike=(
                         Decimal(str(market.floor_strike))

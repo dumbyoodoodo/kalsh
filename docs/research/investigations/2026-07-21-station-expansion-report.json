@@ -1,0 +1,350 @@
+{
+  "generated_from_data_through": "2026-07-21T21:45:25.897102+00:00",
+  "report": "station-expansion (Task 3B)",
+  "stations": {
+    "CHI": {
+      "forecasts": {
+        "distinct_issuances": 1,
+        "note": "single-run capture only; cadence completeness is NOT claimed from one run -- see ops forecast-cadence for ongoing monitoring",
+        "rows": 14
+      },
+      "kalshi_markets": {
+        "candles_in_store": 0,
+        "market_snapshots_in_store": 0,
+        "series_families": [
+          "KXHIGHCHI",
+          "KXLOWTCHI"
+        ]
+      },
+      "observations": {
+        "day_boundary_anomalies": 0,
+        "duplicate_natural_keys": 0,
+        "late_correction_issuances": 4,
+        "per_variable": {
+          "tmax_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1282,
+            "missing_date_pct": 1.31,
+            "missing_dates_in_span": 17,
+            "rows": 2576,
+            "single_issuance_days": 6,
+            "span_days": 1299
+          },
+          "tmin_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1282,
+            "missing_date_pct": 1.31,
+            "missing_dates_in_span": 17,
+            "rows": 2576,
+            "single_issuance_days": 6,
+            "span_days": 1299
+          }
+        },
+        "providers": [
+          "nws"
+        ]
+      },
+      "registry": {
+        "city": "Chicago",
+        "latitude": "41.7842",
+        "longitude": "-87.7553",
+        "name": "Chicago Midway, IL",
+        "source_location_code": "MDW",
+        "station_id": "CHI",
+        "timezone": "America/Chicago",
+        "wfo_site": "LOT"
+      },
+      "replication_readiness": {
+        "primary_checks": {
+          "missing_dates_within_tolerance": true,
+          "no_day_boundary_anomalies": true,
+          "no_duplicate_observations": true,
+          "observation_days_sufficient": true,
+          "registry_entry_valid": true,
+          "settlement_mapping_verified": true
+        },
+        "reason": "primary checks pass; secondary limitations: forecast_multi_issuance_observed, market_snapshots_present",
+        "secondary_checks": {
+          "cadence_monitor_covers_station": true,
+          "forecast_capture_started": true,
+          "forecast_multi_issuance_observed": false,
+          "market_snapshots_present": false
+        },
+        "status": "READY WITH DOCUMENTED LIMITATIONS"
+      },
+      "settlement_mapping": {
+        "active_markets_seen_live": true,
+        "cli_issuedby": "MDW",
+        "evidence": "GET /series/KXHIGHCHI + /series/KXLOWTCHI settlement URL site=LOT&issuedby=MDW (Midway, NOT O'Hare); NWS /points(41.7842,-87.7553) -> LOT; IEM CLIMDW products present 2023-01-02 and 2026-07-20",
+        "iem_history_probed": true,
+        "series_families": [
+          "KXHIGHCHI",
+          "KXLOWTCHI"
+        ],
+        "wfo_site": "LOT"
+      }
+    },
+    "DEN": {
+      "forecasts": {
+        "distinct_issuances": 1,
+        "note": "single-run capture only; cadence completeness is NOT claimed from one run -- see ops forecast-cadence for ongoing monitoring",
+        "rows": 14
+      },
+      "kalshi_markets": {
+        "candles_in_store": 0,
+        "market_snapshots_in_store": 0,
+        "series_families": [
+          "KXHIGHDEN",
+          "KXLOWTDEN"
+        ]
+      },
+      "observations": {
+        "day_boundary_anomalies": 0,
+        "duplicate_natural_keys": 0,
+        "late_correction_issuances": 8,
+        "per_variable": {
+          "tmax_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1294,
+            "missing_date_pct": 0.38,
+            "missing_dates_in_span": 5,
+            "rows": 4991,
+            "single_issuance_days": 32,
+            "span_days": 1299
+          },
+          "tmin_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1294,
+            "missing_date_pct": 0.38,
+            "missing_dates_in_span": 5,
+            "rows": 4991,
+            "single_issuance_days": 32,
+            "span_days": 1299
+          }
+        },
+        "providers": [
+          "nws"
+        ]
+      },
+      "registry": {
+        "city": "Denver",
+        "latitude": "39.8466",
+        "longitude": "-104.6562",
+        "name": "Denver International, CO",
+        "source_location_code": "DEN",
+        "station_id": "DEN",
+        "timezone": "America/Denver",
+        "wfo_site": "BOU"
+      },
+      "replication_readiness": {
+        "primary_checks": {
+          "missing_dates_within_tolerance": true,
+          "no_day_boundary_anomalies": true,
+          "no_duplicate_observations": true,
+          "observation_days_sufficient": true,
+          "registry_entry_valid": true,
+          "settlement_mapping_verified": true
+        },
+        "reason": "primary checks pass; secondary limitations: forecast_multi_issuance_observed, market_snapshots_present",
+        "secondary_checks": {
+          "cadence_monitor_covers_station": true,
+          "forecast_capture_started": true,
+          "forecast_multi_issuance_observed": false,
+          "market_snapshots_present": false
+        },
+        "status": "READY WITH DOCUMENTED LIMITATIONS"
+      },
+      "settlement_mapping": {
+        "active_markets_seen_live": true,
+        "cli_issuedby": "DEN",
+        "evidence": "GET /series/KXHIGHDEN + /series/KXLOWTDEN settlement URL site=BOU&issuedby=DEN; NWS /points(39.8466,-104.6562) -> BOU; IEM CLIDEN products present 2023-01-02 and 2026-07-20",
+        "iem_history_probed": true,
+        "series_families": [
+          "KXHIGHDEN",
+          "KXLOWTDEN"
+        ],
+        "wfo_site": "BOU"
+      }
+    },
+    "LAX": {
+      "forecasts": {
+        "distinct_issuances": 1,
+        "note": "single-run capture only; cadence completeness is NOT claimed from one run -- see ops forecast-cadence for ongoing monitoring",
+        "rows": 14
+      },
+      "kalshi_markets": {
+        "candles_in_store": 0,
+        "market_snapshots_in_store": 0,
+        "series_families": [
+          "KXHIGHLAX",
+          "KXLOWTLAX"
+        ]
+      },
+      "observations": {
+        "day_boundary_anomalies": 0,
+        "duplicate_natural_keys": 0,
+        "late_correction_issuances": 2,
+        "per_variable": {
+          "tmax_f": {
+            "coverage_end": "2026-07-20",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1281,
+            "missing_date_pct": 1.31,
+            "missing_dates_in_span": 17,
+            "rows": 3010,
+            "single_issuance_days": 22,
+            "span_days": 1298
+          },
+          "tmin_f": {
+            "coverage_end": "2026-07-20",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1281,
+            "missing_date_pct": 1.31,
+            "missing_dates_in_span": 17,
+            "rows": 3010,
+            "single_issuance_days": 22,
+            "span_days": 1298
+          }
+        },
+        "providers": [
+          "nws"
+        ]
+      },
+      "registry": {
+        "city": "Los Angeles",
+        "latitude": "33.9382",
+        "longitude": "-118.3866",
+        "name": "Los Angeles International, CA",
+        "source_location_code": "LAX",
+        "station_id": "LAX",
+        "timezone": "America/Los_Angeles",
+        "wfo_site": "LOX"
+      },
+      "replication_readiness": {
+        "primary_checks": {
+          "missing_dates_within_tolerance": true,
+          "no_day_boundary_anomalies": true,
+          "no_duplicate_observations": true,
+          "observation_days_sufficient": true,
+          "registry_entry_valid": true,
+          "settlement_mapping_verified": true
+        },
+        "reason": "primary checks pass; secondary limitations: forecast_multi_issuance_observed, market_snapshots_present",
+        "secondary_checks": {
+          "cadence_monitor_covers_station": true,
+          "forecast_capture_started": true,
+          "forecast_multi_issuance_observed": false,
+          "market_snapshots_present": false
+        },
+        "status": "READY WITH DOCUMENTED LIMITATIONS"
+      },
+      "settlement_mapping": {
+        "active_markets_seen_live": true,
+        "cli_issuedby": "LAX",
+        "evidence": "GET /series/KXHIGHLAX + /series/KXLOWTLAX settlement URL site=LOX&issuedby=LAX; NWS /points(33.9382,-118.3866) -> LOX; IEM CLILAX products present 2023-01-02 and 2026-07-20",
+        "iem_history_probed": true,
+        "series_families": [
+          "KXHIGHLAX",
+          "KXLOWTLAX"
+        ],
+        "wfo_site": "LOX"
+      }
+    },
+    "NYC": {
+      "forecasts": {
+        "distinct_issuances": 3,
+        "note": "single-run capture only; cadence completeness is NOT claimed from one run -- see ops forecast-cadence for ongoing monitoring",
+        "rows": 42
+      },
+      "kalshi_markets": {
+        "candles_in_store": null,
+        "market_snapshots_in_store": 828,
+        "series_families": [
+          "KXHIGHNY",
+          "KXLOWTNYC"
+        ]
+      },
+      "observations": {
+        "day_boundary_anomalies": 0,
+        "duplicate_natural_keys": 0,
+        "late_correction_issuances": 2,
+        "per_variable": {
+          "tmax_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1283,
+            "missing_date_pct": 1.23,
+            "missing_dates_in_span": 16,
+            "rows": 2575,
+            "single_issuance_days": 7,
+            "span_days": 1299
+          },
+          "tmin_f": {
+            "coverage_end": "2026-07-21",
+            "coverage_start": "2022-12-31",
+            "days_with_data": 1283,
+            "missing_date_pct": 1.23,
+            "missing_dates_in_span": 16,
+            "rows": 2575,
+            "single_issuance_days": 7,
+            "span_days": 1299
+          }
+        },
+        "providers": [
+          "nws"
+        ]
+      },
+      "registry": {
+        "city": "New York",
+        "latitude": "40.7829",
+        "longitude": "-73.9654",
+        "name": "Central Park, NY",
+        "source_location_code": "NYC",
+        "station_id": "NYC",
+        "timezone": "America/New_York",
+        "wfo_site": "OKX"
+      },
+      "replication_readiness": {
+        "primary_checks": {
+          "missing_dates_within_tolerance": true,
+          "no_day_boundary_anomalies": true,
+          "no_duplicate_observations": true,
+          "observation_days_sufficient": true,
+          "registry_entry_valid": true,
+          "settlement_mapping_verified": true
+        },
+        "reason": "all primary and secondary checks pass",
+        "secondary_checks": {
+          "cadence_monitor_covers_station": true,
+          "forecast_capture_started": true,
+          "forecast_multi_issuance_observed": true,
+          "market_snapshots_present": true
+        },
+        "status": "READY"
+      },
+      "settlement_mapping": {
+        "active_markets_seen_live": true,
+        "cli_issuedby": "NYC",
+        "evidence": "docs/adr/0003-weather-data-source.md (pre-expansion baseline)",
+        "iem_history_probed": true,
+        "series_families": [
+          "KXHIGHNY",
+          "KXLOWTNYC"
+        ],
+        "wfo_site": "OKX"
+      }
+    }
+  },
+  "thresholds": {
+    "max_missing_date_pct": 2.0,
+    "min_obs_days_per_variable": 1200
+  },
+  "unresolved_questions": [
+    "Prospective Kalshi market/candle collection for the new series requires the authenticated collector runner; the local .env private-key formatting currently fails PEM parsing (MalformedFraming), so live collector cycles are blocked in this environment until the operator repairs the key material. Discovery is category-wide and the settlement parser resolves all three new cities, so no code change is needed once the runner is restored.",
+    "Forecast cadence for the new stations has exactly one captured issuance; completeness claims require the continuously scheduled weather collector plus ops forecast-cadence observation over multiple days."
+  ]
+}

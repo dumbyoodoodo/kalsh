@@ -379,12 +379,53 @@ async def test_save_series_preserves_settlement_source_when_none(session: AsyncS
     erase a previously stored citation (the settlement parser depends on it)."""
     common = {"series_ticker": "KXHIGHNY", "category": "Climate and Weather", "frequency": "daily"}
     first = await save_series(
-        session, title="t", settlement_source='[{"url": "https://x"}]', **common  # type: ignore[arg-type]
+        session,
+        title="t",
+        settlement_source='[{"url": "https://x"}]',
+        **common,  # type: ignore[arg-type]
     )
     assert first.settlement_source is not None
     second = await save_series(session, title="t2", **common)  # type: ignore[arg-type]
     assert second.settlement_source == '[{"url": "https://x"}]'
     third = await save_series(
-        session, title="t3", settlement_source='[{"url": "https://y"}]', **common  # type: ignore[arg-type]
+        session,
+        title="t3",
+        settlement_source='[{"url": "https://y"}]',
+        **common,  # type: ignore[arg-type]
     )
     assert third.settlement_source == '[{"url": "https://y"}]'
+
+
+# --- Station isolation (Task 3B station expansion) ---------------------------
+
+
+async def test_same_date_observations_across_stations_do_not_collide(
+    session: AsyncSession,
+) -> None:
+    """Task 3B: two stations reporting the same variable at the same
+    issuance instant for the same observation date are distinct rows --
+    the natural key includes station_id, so multi-station ingestion is
+    isolated by construction."""
+    instant = datetime(2026, 7, 20, 20, 37, tzinfo=UTC)
+    nyc = await _make_weather_observation(session, issuance_time=instant, value=Decimal(81))
+    chi = await _make_weather_observation(
+        session, station_id="CHI", issuance_time=instant, value=Decimal(88)
+    )
+    assert nyc.was_duplicate is False
+    assert chi.was_duplicate is False
+    assert nyc.record.id != chi.record.id
+    assert chi.record.value == Decimal(88)
+    assert nyc.record.value == Decimal(81)  # untouched by CHI's write
+
+
+async def test_same_issue_time_forecasts_across_stations_do_not_collide(
+    session: AsyncSession,
+) -> None:
+    """Forecast natural key (station, variable, issue_time, valid_start):
+    identical instants for different stations are independent rows."""
+    nyc = await _make_weather_forecast(session)
+    den = await _make_weather_forecast(session, station_id="DEN", point_estimate=Decimal(95))
+    assert nyc.was_duplicate is False
+    assert den.was_duplicate is False
+    assert nyc.record.id != den.record.id
+    assert den.record.point_estimate == Decimal(95)

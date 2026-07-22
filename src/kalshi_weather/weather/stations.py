@@ -31,9 +31,15 @@ class Station:
     wfo_site: str
 
 
-#: Confirmed live (docs/adr/0003-weather-data-source.md): /points/{lat,lon}
-#: for this coordinate resolves to WFO office "OKX", matching Kalshi's own
-#: rules-text citation for NYC daily-temperature markets.
+#: Every entry's (source_location_code, wfo_site) pair is taken verbatim from
+#: Kalshi's own settlement-source URL for that city's series
+#: (`product.php?site=<WFO>&product=CLI&issuedby=<code>`) -- the same
+#: authority the settlement parser resolves against -- and cross-verified
+#: live against NWS `/points/{lat,lon}` (the coordinate resolves to the same
+#: WFO) and against IEM CLI-product availability at both the 2023 backfill
+#: start and the present day. NYC: docs/adr/0003-weather-data-source.md.
+#: CHI/DEN/LAX: station-expansion validation, 2026-07-21 (Task 3B) -- note
+#: Chicago settles on Midway (MDW), not O'Hare, per Kalshi's own URL.
 STATIONS: dict[str, Station] = {
     "NYC": Station(
         station_id="NYC",
@@ -45,7 +51,77 @@ STATIONS: dict[str, Station] = {
         city="New York",
         wfo_site="OKX",
     ),
+    "CHI": Station(
+        station_id="CHI",
+        source_location_code="MDW",
+        name="Chicago Midway, IL",
+        latitude=Decimal("41.7842"),
+        longitude=Decimal("-87.7553"),
+        timezone="America/Chicago",
+        city="Chicago",
+        wfo_site="LOT",
+    ),
+    "DEN": Station(
+        station_id="DEN",
+        source_location_code="DEN",
+        name="Denver International, CO",
+        latitude=Decimal("39.8466"),
+        longitude=Decimal("-104.6562"),
+        timezone="America/Denver",
+        city="Denver",
+        wfo_site="BOU",
+    ),
+    "LAX": Station(
+        station_id="LAX",
+        source_location_code="LAX",
+        name="Los Angeles International, CA",
+        latitude=Decimal("33.9382"),
+        longitude=Decimal("-118.3866"),
+        timezone="America/Los_Angeles",
+        city="Los Angeles",
+        wfo_site="LOX",
+    ),
 }
+
+
+class RegistryValidationError(ValueError):
+    """A registry entry is malformed or conflicts with another entry."""
+
+
+def validate_registry(stations: dict[str, Station] | None = None) -> None:
+    """Structural validation of the station registry: key/id agreement,
+    unique CLI location codes (the settlement parser's lookup key), unique
+    (wfo, location) pairs, resolvable IANA timezones, and no empty fields.
+    Raises RegistryValidationError on the first violation; called at import
+    so a bad entry fails fast rather than mis-mapping data silently."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    entries = STATIONS if stations is None else stations
+    seen_codes: dict[str, str] = {}
+    for key, station in entries.items():
+        if key != station.station_id:
+            raise RegistryValidationError(
+                f"registry key {key!r} != station_id {station.station_id!r}"
+            )
+        for field_name in ("source_location_code", "name", "timezone", "city", "wfo_site"):
+            if not getattr(station, field_name):
+                raise RegistryValidationError(f"station {key!r}: empty {field_name}")
+        if station.source_location_code in seen_codes:
+            raise RegistryValidationError(
+                f"duplicate source_location_code {station.source_location_code!r} "
+                f"({seen_codes[station.source_location_code]!r} and {key!r}): the "
+                "settlement parser's registry lookup would be ambiguous"
+            )
+        seen_codes[station.source_location_code] = key
+        try:
+            ZoneInfo(station.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise RegistryValidationError(
+                f"station {key!r}: unresolvable IANA timezone {station.timezone!r}"
+            ) from exc
+
+
+validate_registry()
 
 
 def station_for_location_code(code: str) -> Station | None:
@@ -70,4 +146,5 @@ def get_station(station_id: str) -> Station:
 
 
 def list_stations() -> list[Station]:
-    return list(STATIONS.values())
+    """All registered stations, in deterministic station_id order."""
+    return [STATIONS[key] for key in sorted(STATIONS)]

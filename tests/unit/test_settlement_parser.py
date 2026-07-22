@@ -107,10 +107,12 @@ def test_real_hourly_series_is_unsupported_source() -> None:
     assert spec.status is SettlementStatus.UNSUPPORTED
 
 
-def test_real_chicago_series_is_unsupported_station_with_actionable_note() -> None:
-    """KXHIGHCHI cites CLI issuedby=MDW -- a valid CLI product for a station
-    not in our registry. Must be unsupported (never guessed), with the
-    extracted code recorded so adding the station later resolves it."""
+def test_real_chicago_series_resolves_to_midway_station() -> None:
+    """KXHIGHCHI cites CLI issuedby=MDW / site=LOT. With the CHI registry
+    entry added (Task 3B, station-expansion), this now resolves -- exactly
+    the outcome the pre-expansion version of this test predicted ('adding
+    the station later resolves it'). Note the settlement station is Midway,
+    not O'Hare, straight from Kalshi's own settlement URL."""
     spec = parse_settlement(
         _series("KXHIGHCHI"),
         MarketInfo(
@@ -121,11 +123,87 @@ def test_real_chicago_series_is_unsupported_station_with_actionable_note() -> No
             None,
         ),
     )
-    assert spec.status is SettlementStatus.UNSUPPORTED
+    assert spec.status is SettlementStatus.RESOLVED
+    assert spec.station_id == "CHI"
+    assert spec.city == "Chicago"
+    assert spec.variable == "tmax_f"
     assert spec.source_location_code == "MDW"
     assert spec.wfo_site == "LOT"
+    assert spec.target_date == date(2026, 7, 21)
+
+
+def test_real_denver_series_resolves() -> None:
+    """KXHIGHDEN settlement source (live-fetched 2026-07-21):
+    site=BOU, issuedby=DEN."""
+    spec = parse_settlement(
+        _series("KXHIGHDEN"),
+        MarketInfo(
+            "KXHIGHDEN-26JUL22-T95",
+            "KXHIGHDEN-26JUL22",
+            None,
+            "If the highest temperature recorded at Denver for July 22, 2026 ...",
+            None,
+        ),
+    )
+    assert spec.status is SettlementStatus.RESOLVED
+    assert spec.station_id == "DEN"
+    assert spec.city == "Denver"
+    assert spec.variable == "tmax_f"
+    assert spec.wfo_site == "BOU"
+    assert spec.target_date == date(2026, 7, 22)
+
+
+def test_real_lax_low_series_resolves_tmin() -> None:
+    """KXLOWTLAX settlement source (live-fetched 2026-07-21):
+    site=LOX, issuedby=LAX; a LOW family must map to tmin_f."""
+    spec = parse_settlement(
+        _series("KXLOWTLAX"),
+        MarketInfo(
+            "KXLOWTLAX-26JUL22-T69",
+            "KXLOWTLAX-26JUL22",
+            None,
+            "If the lowest temperature recorded at Los Angeles for July 22, 2026 ...",
+            None,
+        ),
+    )
+    assert spec.status is SettlementStatus.RESOLVED
+    assert spec.station_id == "LAX"
+    assert spec.city == "Los Angeles"
+    assert spec.variable == "tmin_f"
+    assert spec.wfo_site == "LOX"
+    assert spec.target_date == date(2026, 7, 22)
+
+
+def test_unregistered_cli_station_is_still_unsupported_with_actionable_note() -> None:
+    """The pre-expansion guarantee survives: a valid CLI citation for a
+    station NOT in the registry stays UNSUPPORTED (never guessed), with
+    the extracted code recorded so a future registry addition resolves it."""
+    spec = parse_settlement(
+        SeriesInfo(
+            ticker="KXHIGHTBOS",
+            title="Boston Maximum Daily Temperature",
+            frequency="daily",
+            settlement_sources=[
+                {
+                    "name": "NWS Climatological Report",
+                    "url": (
+                        "https://forecast.weather.gov/product.php?site=BOX&product=CLI&issuedby=BOS"
+                    ),
+                }
+            ],
+        ),
+        MarketInfo(
+            "KXHIGHTBOS-26JUL21-B85",
+            "KXHIGHTBOS-26JUL21",
+            None,
+            "If the highest temperature recorded at Boston for July 21, 2026 ...",
+            None,
+        ),
+    )
+    assert spec.status is SettlementStatus.UNSUPPORTED
+    assert spec.source_location_code == "BOS"
     assert spec.station_id is None
-    assert any("MDW" in n and "registry" in n for n in spec.notes)
+    assert any("BOS" in n and "registry" in n for n in spec.notes)
 
 
 # --- ambiguity and failure paths (never silently guess) ----------------------
@@ -201,8 +279,12 @@ def test_multiple_distinct_cli_urls_is_unresolved_not_picked() -> None:
         _series(
             "KXHIGHNY",
             settlement_sources=[
-                {"url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"},
-                {"url": "https://forecast.weather.gov/product.php?site=LOT&product=CLI&issuedby=MDW"},
+                {
+                    "url": "https://forecast.weather.gov/product.php?site=OKX&product=CLI&issuedby=NYC"
+                },
+                {
+                    "url": "https://forecast.weather.gov/product.php?site=LOT&product=CLI&issuedby=MDW"
+                },
             ],
         ),
         _market("KXHIGHNY-26JUL21-T79"),
@@ -217,7 +299,9 @@ def test_wfo_site_mismatch_is_ambiguous() -> None:
         _series(
             "KXHIGHNY",
             settlement_sources=[
-                {"url": "https://forecast.weather.gov/product.php?site=PHI&product=CLI&issuedby=NYC"}
+                {
+                    "url": "https://forecast.weather.gov/product.php?site=PHI&product=CLI&issuedby=NYC"
+                }
             ],
         ),
         _market("KXHIGHNY-26JUL21-T79"),

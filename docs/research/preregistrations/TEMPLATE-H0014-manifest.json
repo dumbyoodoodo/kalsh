@@ -1,0 +1,107 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0014, frozen 2026-07-22 by PREREG-20260722-H0014-recency-stability.md. Every <TO_BE_FILLED> value is populated ONLY at execution time; no key may be added, removed, or renamed after results are seen. Dataset identity is frozen NOW (the already-pinned exp-20260722-h0013-replication frame). Copy to docs/research/experiments/EXP-20260722-H0014-recency-stability-results.json and fill in.",
+  "experiment": "EXP-20260722-H0014-recency-stability",
+  "hypothesis": "H0014",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0014-recency-stability.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: CHI full-year cells are published motivating data (partial post-hoc); NYC by-variable yearly cells and all season-matched cells were never computed pre-freeze",
+    "original_hypotheses_entry": "HYPOTHESES.md H0014, opened 2026-07-22",
+    "inherited_conventions": {
+      "documents": [
+        "AMENDMENT-20260721-H0011-audit-resolution.md (F3 decimal policy, F4 serialization, F6 gate sentinel, F7 null ratios)",
+        "PREREG-20260722-H0013-chi-replication.md (dataset pin, revision definition, exact-arithmetic policy)"
+      ],
+      "blocked_on": []
+    },
+    "elaboration_flags_for_audit": [
+      "decision_family_bonferroni_z_frozen (PREREG Sec 5)",
+      "season_matched_windows_decisional_full_year_tables_only (PREREG Sec 3)",
+      "operational_indicators_cooccurrence_not_causation (PREREG Sec 6)",
+      "cross_station_corroboration_as_interaction_rendering (PREREG Sec 7.1 step 3)",
+      "chi_partial_posthoc_disclosed (PREREG Sec 0/12 R1)"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260722-h0013-replication",
+    "frame": "observation_issuances.parquet",
+    "content_hashes": {
+      "observation_issuances": "5ccf5b7a3ec11f1ec10fd8a3eac244640406130ec75934e58ead3b2f44e28775"
+    },
+    "row_count_expected": 26310,
+    "dataset_build_git_commit": "9285a0145db39d5829b93b648a1e19e5a32c7237",
+    "source_db_revision": "0007",
+    "motivating_record_reference": "docs/research/experiments/EXP-20260722-H0013-chi-replication-results.json",
+    "analysis_git_commit": "<TO_BE_FILLED>"
+  },
+  "config": {
+    "stations": ["CHI", "NYC"],
+    "variables": ["tmax_f", "tmin_f"],
+    "unit_of_analysis": "variable-day (station_id, variable, observation_date); >=1 issuance valid; single-issuance days unrevised",
+    "revision_definition": "first-issued value != final-issued value, Decimal-quantized to 0.01; Decimal(str(v)) construction; ROUND_HALF_EVEN; round-trip invariant < 1e-6 under G2",
+    "windows": "SM(y) = [y-01-01, y-07-21] for y in 2023..2026 (2026 YTD == SM(2026)); hist = pooled SM(2023..2025), decisional; FY(2023..2025) tables only; 2022-12-31 excluded and counted -- PREREG Sec 3, no adaptive splitting",
+    "timezone": "none -- windows are calendar dates of observation_date; no local-time computation exists in this design (PREREG Sec 2)",
+    "estimands": "Delta_{v,s} = p_{v,s,SM(2026)} - p_{v,s,hist}, the declared family of 4 (2 stations x 2 variables); independent samples (disjoint day sets); positive = 2026 revises more",
+    "ci_method": "Newcombe (1998) hybrid score interval (contrasts, gaps) and Wilson score interval (rates), no continuity correction -- PREREG Sec 5",
+    "z_reporting": "1.959963984540054 (95%, frozen literal)",
+    "z_decision": "2.497705474412374 (98.75% per contrast = Bonferroni family-wise 0.05 over 4; frozen literal, independently re-derived at implementation per PREREG Sec 11)",
+    "shift_event": "98.75% Newcombe CI on Delta excludes 0 (quantized); direction = sign of point estimate; touching 0 is NOT a shift",
+    "operational_indicators": "evaluated only at stations with >=1 shift event; OI-1 |cadence diff| >= 0.15; OI-2 |missing-day fraction diff| >= 0.05; OI-3 |single-issuance fraction diff| >= 0.05; quantized; exactly-at-threshold FIRES -- PREREG Sec 6",
+    "decision_rule": "0) gate fails -> BLOCKED; 1) no shift events -> A; 2) shifts and any OI fires at a shifted station -> C; 3) same-variable same-direction shifts at both stations -> D; 4) otherwise -> B (retry >= 2027-01-15) -- PREREG Sec 7.1",
+    "exact_arithmetic": "integer counts; Decimal precision-50 bounds; strict decisions after 1e-12 ROUND_HALF_EVEN quantization of both operands; fixed-point 12-digit serialization",
+    "random_seed": "not applicable -- fully deterministic, no resampling",
+    "software_versions": "<TO_BE_FILLED>"
+  },
+  "eligibility_gates": {
+    "_note": "Evaluated strictly in order G1 -> filter -> G2 -> G3 -> G4. On first failure, later fields hold the literal string 'not_evaluated'.",
+    "g1_frame_hash_matches": "<TO_BE_FILLED: true/false -- full frame, before the station filter>",
+    "g2_invariants": {
+      "natural_key_unique": "<TO_BE_FILLED>",
+      "no_nulls": "<TO_BE_FILLED>",
+      "station_set_exact": "<TO_BE_FILLED: filtered set == {CHI, NYC}>",
+      "variable_set_exact": "<TO_BE_FILLED>",
+      "value_roundtrip_verified": "<TO_BE_FILLED>"
+    },
+    "g3_sm_cell_min_n": "<TO_BE_FILLED: {station: {variable: {year: n}}} -- gate: every cell >= 150, or 'not_evaluated'>",
+    "g4_hist_min_r": "<TO_BE_FILLED: {station: {variable: r_hist}} -- gate: every value >= 30, or 'not_evaluated'>",
+    "all_gates_passed": "<TO_BE_FILLED: true/false>"
+  },
+  "primary_results": {
+    "contrasts": {
+      "_note": "the declared family of 4; keys CHI/NYC then tmax_f/tmin_f",
+      "CHI": {
+        "tmax_f": "<TO_BE_FILLED: {n_2026, r_2026, p_2026, n_hist, r_hist, p_hist, delta_hat, ci95_newcombe, ci9875_newcombe, shift_event, direction}>",
+        "tmin_f": "<TO_BE_FILLED: same shape>"
+      },
+      "NYC": {
+        "tmax_f": "<TO_BE_FILLED: same shape>",
+        "tmin_f": "<TO_BE_FILLED: same shape>"
+      }
+    },
+    "shift_sets": "<TO_BE_FILLED: {CHI: [variables], NYC: [variables]}>",
+    "operational_indicators": "<TO_BE_FILLED: per shifted station: {oi1_cadence: {value_2026, value_hist, abs_diff, fired}, oi2_missing_fraction: {...}, oi3_single_issuance_fraction: {...}}; the literal string 'not_evaluated' when no shift events exist>",
+    "decision": {
+      "outcome": "<TO_BE_FILLED: A | B | C | D | blocked>",
+      "evaluation_step": "<TO_BE_FILLED: which PREREG Sec 7.1 row fired>",
+      "reason": "<TO_BE_FILLED>",
+      "interpretation": "<TO_BE_FILLED: the frozen Sec 7.2 wording for the outcome>"
+    }
+  },
+  "descriptive_results": {
+    "cells_sm": "<TO_BE_FILLED: {station: {variable: {year: {n, r, rate, ci95_wilson}}}} for SM windows>",
+    "cells_fy": "<TO_BE_FILLED: same shape for FY(2023..2025) -- tables only, never decisional>",
+    "cells_hist_pooled": "<TO_BE_FILLED: {station: {variable: {n, r, rate, ci95_wilson}}}>",
+    "gaps_sm": "<TO_BE_FILLED: {station: {year: {d_hat, ci95_newcombe}}} plus hist>",
+    "contrasts_reporting_level": "<TO_BE_FILLED: the 4 deltas restated with 95% CIs>",
+    "diagnostics": "<TO_BE_FILLED: per station x window: {mean_issuances_per_day, single_issuance_days, single_issuance_fraction, expected_days, observed_days, missing_days, missing_fraction, issuance_count_distribution}>",
+    "monthly_rates": "<TO_BE_FILLED: per station x variable: {month(1..7): {hist: {n, r, rate}, y2026: {n, r, rate}}} -- point estimates only>",
+    "excluded_days": "<TO_BE_FILLED: count of variable-days outside all windows (expected 4: 2022-12-31 x 2 stations x 2 variables)>"
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": "<TO_BE_FILLED: true/false>",
+    "config_matches_prereg": "<TO_BE_FILLED: true/false>",
+    "decision_z_rederived": "<TO_BE_FILLED: true/false -- bisection on NormalDist.cdf agrees with the frozen literal to >=12 significant digits, PREREG Sec 11>",
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits after the point -- H0011 AMENDMENT Finding 4, inherited. Integer counts remain plain JSON integers."
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

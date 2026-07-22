@@ -492,9 +492,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0015 — The late-maximum channel explains the tmax revision-rate structure
 
-- **Status:** Proposed
+- **Status:** Inconclusive (blocked at G4; successor H0015b required)
 - **Opened:** 2026-07-22
-- **Closed:**
+- **Closed:** 2026-07-22
 - **Related:** E0001 (`docs/research/investigations/2026-07-22-e0001-chi-2026-mechanism.md`, the exploratory source — its data may not be reused decisionally), H0014 (whose outcome-B retry this complements), H0011/H0013 (the asymmetry under mechanism study)
 - **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0015-late-max-mechanism.md` (frozen 2026-07-22, before any late-max fraction, conditional rate, or timing↔revision join was computed for any station). Inputs pinned: issuance frame `exp-20260722-h0013-replication` (`5ccf5b7a…`) + occurrence extract `exp-20260722-h0015-occurrence` (`9bf01d8f…`, built by the productionized `weather/cli_products.py` parser). Evaluation cohort: DEN + LAX (station-disjoint from all generating data — full-year 2026 does not yet exist); CHI/NYC are prespecified non-decisional reference cohorts.
 
@@ -518,6 +518,6 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** Occurrence-time parser productionization; for the full-2026 arm, calendar (≥ 2027-01-15).
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-22 — [EXP-20260722-H0015-late-max-mechanism](docs/research/experiments/EXP-20260722-H0015-late-max-mechanism.md), inputs hash-verified (issuance `5ccf5b7a…`, occurrence extract `9bf01d8f…`; analysis commit `a4ac3db`). **EXECUTION BLOCKED at gate G4 (step 0)** — no interval, criterion, or A/B/C/D verdict was computed, per the frozen table. Integrity/quality gates all passed (parse-ok 97.5–99.1%; AS-OF modal share 96–99.9%; product-vs-frame value agreement 100.0%). G4 failed at LAX: 21 late-stratum days (floor 30) and 15 total revised days (floor 50) in ~3.5 years — its daily maximum essentially never occurs at/after its own 17:00 cutoff and it almost never revises (≈1.2%). DEN passed G4 with extreme structure: ~93% late-max composition, ~91% revised days — the pre-registration's structural prediction (early 06:00 cutoff → near-universal revisions) qualitatively visible in the gate counts. Gate facts only; nothing confirmatory. Blocked reruns byte-identical; `config_matches_prereg` true.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Inconclusive — blocked by design** (the pre-registered step-0 outcome; PREREG §8 explicitly named DEN's early stratum and LAX's late stratum as the G4 risks). The stratum-separation criteria inherited from the CHI/NYC mid-composition regime are unevaluable at the composition extremes the evaluation stations turned out to occupy (≈1.7% and ≈93% late-max), where the mechanism's testable content is the aggregate composition-implied prediction, not the within-station contrast. The published gate counts are directionally consistent with the composition mechanism at both poles, and per the frozen rules nothing sharper may be claimed. Follow-up: a successor pre-registration (H0015b) with criteria valid across the full composition range (exact-binomial handling for thin cells; composition-implied prediction error; cross-station ordering), obligated to disclose this blocked run's published gate values as post-hoc knowledge, with the full-2026 time-disjoint window (≥ 2027-01-15) as its clean arm — see `docs/research/postmortems/2026-07-22-h0015-closeout.md`.

@@ -489,3 +489,34 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 **Results.** Run 2026-07-22 — [EXP-20260722-H0014-recency-stability](docs/research/experiments/EXP-20260722-H0014-recency-stability.md), dataset `exp-20260722-h0013-replication` (hash `5ccf5b7a…` re-verified at G1; analysis commit `1ad28f2`). All gates passed (16/16 SM cells n ∈ [194,200]; hist R ∈ [88,166]). The declared family of 4 season-matched contrasts (98.75% decision CIs): **CHI tmax Δ = +9.70pp [+1.72, +18.73] — SHIFT (up)**; CHI tmin −2.51pp [−10.88, +6.93]; NYC tmax +2.35pp [−4.56, +10.65]; NYC tmin +2.01pp [−6.35, +11.37] — no other shift. No operational indicator fired at CHI (cadence diff 0.012 vs threshold 0.15; missing-day fraction diff 0.5pp vs 5pp; single-issuance diff 0.2pp vs 5pp). Decision path: step 1 fails (a shift exists) → step 2 fails (no OI) → step 3 fails (NYC not corroborating) → **outcome B**. Season-matched yearly gaps: CHI +10.4/+11.6/+14.6/**+0.0**pp; NYC +4.6/+15.3/+8.1/**+9.0**pp (hist +9.4). Monthly profile: CHI tmax elevated in 5/7 months of 2026 (broad, not single-event). Deterministic: reruns byte-identical; decision-z re-derived by bisection in-run; config-vs-prereg true. Full narrative: `docs/research/postmortems/2026-07-22-h0014-closeout.md`.
 
 **Conclusion.** **Rejected** (the registered prediction was stability/outcome A; the frozen table returned **B — possible regime change requiring additional data**). What the run established: (1) seasonal composition is real (CHI's Jan–Jul tmax baseline is 15.6% vs 13.9% full-year) but does **not** explain the 2026 CHI tmax elevation, which survives season-matching at the multiplicity-corrected level; (2) no registered operational explanation exists — cadence, completeness, and single-issuance behavior are all stable; (3) the shift is CHI-only — NYC, the fully unseen sample, is textbook-stable (2026 gap +9.0pp vs +9.4pp history), so the change is not corroborated cross-station and D was not reached. Practical guidance: downstream label-noise handling may rely on NYC's asymmetry as published; CHI's current-day asymmetry must be treated as unknown (its 2026 season-matched gap is +0.0pp [−8.5, +8.6]). H0011/H0013's pooled conclusions are unaffected per the frozen interpretation. Retry with full-2026 windows (FY(2026) vs FY(2023–2025), both stations, new pre-registered entry) on or after **2027-01-15**; suggested non-decisional preparation: an operational inspection of CHI 2026 raw CLI product text (`raw_api_payloads`) to sharpen the retry's operational indicators.
+
+### H0015 — The late-maximum channel explains the tmax revision-rate structure
+
+- **Status:** Proposed
+- **Opened:** 2026-07-22
+- **Closed:**
+- **Related:** E0001 (`docs/research/investigations/2026-07-22-e0001-chi-2026-mechanism.md`, the exploratory source — its data may not be reused decisionally), H0014 (whose outcome-B retry this complements), H0011/H0013 (the asymmetry under mechanism study)
+
+**Hypothesis.** Preliminary→final tmax revisions are driven almost entirely by days whose daily maximum occurs at/after the CLI preliminary's 4 PM local cutoff: (a) P(revised | maximum before 16:00 local) is below 10% at every station-year; (b) cross-year changes in a station's tmax revision rate are explained by changes in its late-maximum day fraction — the composition-identity prediction (late-fraction × station-pooled conditional rates) tracks the observed revision rate within pre-registered tolerance; (c) conditional conversion within the late stratum is year-stable once occurrence depth (hour of maximum) is controlled.
+
+**Rationale.** E0001 (exploratory) found: revisions are 262/265 upward across all station-years; P(revised | late max) = 34–53% vs P(revised | early max) = 2–7% in all 8 CHI/NYC station-years; and CHI's 2026 revision elevation coincides with its late-max fraction jumping to 38.2% (vs 24.6–29.6% prior) with every operational axis quiet. If the late-maximum channel is the mechanism, revision risk becomes *predictable from occurrence-time composition* — directly improving label-noise handling for KXHIGH-family markets and explaining H0014's outcome B as weather-composition, not process change.
+
+**Required data.** Occurrence-time parsing productionized as a validated pipeline feature (E0001's parser is exploratory-only; ≥96% coverage demonstrated, ~3.5% 2026 residue must be handled); evaluation data disjoint from E0001's: full-2026 windows once complete (≥ 2027-01-15) and/or DEN/LAX as unseen stations (different cadence regimes — DEN's 3.86 issuances/day makes the preliminary-cutoff structure itself different there, which is part of the test). Dataset version pinned at pre-registration.
+
+**Experiment design.** To be frozen in a PREREG document before execution, per program convention: exact stratum definitions (the 16:00 cutoff and depth bands frozen in advance), the composition-identity tolerance, station/window cells, gates, and a decision rule — noting explicitly that E0001's CHI/NYC 2023–2026-YTD data generated this hypothesis and cannot support its confirmation.
+
+**Metrics.** Conditional revision rates per stratum with Wilson 95% CIs; composition-identity prediction error per station-year; occurrence-depth profile stability.
+
+**Required features.** The occurrence-time feature (new, small platform work — flagged in E0001 §5.4).
+
+**Statistical tests.** Wilson/Newcombe intervals per program machinery; no model fitting.
+
+**Failure modes.** (1) Reusing generating data → the design's evaluation-data restriction. (2) Parser residue biasing strata → coverage gate. (3) DEN/LAX cadence differences confounding the cutoff structure → per-station cutoff derivation frozen from their own products' AS-OF lines before any outcome is seen.
+
+**Difficulty.** Small-to-Moderate (one parser feature + rate arithmetic).
+
+**Dependencies.** Occurrence-time parser productionization; for the full-2026 arm, calendar (≥ 2027-01-15).
+
+**Results.** Not yet run.
+
+**Conclusion.** Not yet concluded.

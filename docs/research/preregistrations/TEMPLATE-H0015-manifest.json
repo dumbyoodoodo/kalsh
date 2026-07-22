@@ -1,0 +1,97 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0015, frozen 2026-07-22 by PREREG-20260722-H0015-late-max-mechanism.md. Every <TO_BE_FILLED> value is populated ONLY at execution; no key may be added, removed, or renamed after results are seen. Both input pins are frozen NOW. Copy to docs/research/experiments/EXP-20260722-H0015-late-max-mechanism-results.json and fill in.",
+  "experiment": "EXP-20260722-H0015-late-max-mechanism",
+  "hypothesis": "H0015",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0015-late-max-mechanism.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: DEN/LAX revision+timing behavior never computed pre-freeze; CHI/NYC are generating-data reference cohorts (rank-agreement reuse disclosed, Sec 12 R6); structural extract facts (parse coverage, AS-OF modes) seen pre-freeze",
+    "original_hypotheses_entry": "HYPOTHESES.md H0015, opened 2026-07-22 (from E0001)",
+    "exploratory_source_frozen": "E0001 outputs are published and unmodified (docs/research/investigations/2026-07-22-e0001-*)",
+    "elaboration_flags_for_audit": [
+      "evaluation_cohort_station_disjoint_not_time_disjoint (Sec 0/12 R1)",
+      "cutoff_procedure_frozen_not_numbers (Sec 2)",
+      "reference_cohort_reuse_limited_to_rank_agreement (Sec 12 R6)",
+      "af_point_estimate_declared_no_ci (Sec 3)",
+      "conjunctive_A_multiplicity_declaration (Sec 4)"
+    ]
+  },
+  "datasets": {
+    "issuance_frame": {
+      "version": "exp-20260722-h0013-replication",
+      "frame": "observation_issuances.parquet",
+      "content_hash": "5ccf5b7a3ec11f1ec10fd8a3eac244640406130ec75934e58ead3b2f44e28775",
+      "row_count_expected": 26310
+    },
+    "occurrence_extract": {
+      "version": "exp-20260722-h0015-occurrence",
+      "frame": "cli_occurrences.parquet",
+      "content_hash": "9bf01d8fc708c17215434ad6c0a7767137f00504f360a164d57133580e4e1d77",
+      "row_count_expected": 5142,
+      "parser": "kalshi_weather.weather.cli_products"
+    },
+    "analysis_git_commit": "<TO_BE_FILLED>"
+  },
+  "config": {
+    "variable": "tmax_f",
+    "evaluation_stations": ["DEN", "LAX"],
+    "reference_cohorts": ["CHI", "NYC"],
+    "window": "2022-12-31 .. 2026-07-21 (full archive; per-year splits descriptive only)",
+    "population": "days in both inputs with parsed final-product occurrence time (parse-ok); missing-occurrence days excluded and counted, with an as-early sensitivity",
+    "cutoff_procedure": "per station: modal first_asof_hour among non-null preliminary AS-OF hours; gate on modal share -- PREREG Sec 2",
+    "late_day": "final max occurrence hour >= station cutoff (quantized at-or-after)",
+    "revision_definition": "first-issued != final-issued value, Decimal-quantized 0.01 (H0002 convention)",
+    "estimands": "L_s, p_late_s, p_early_s, R_s, sep_s = p_late - p_early (Newcombe 95%), AF_s = (R_s - p_early_s)/R_s (point), 4-station rank agreement, pairwise Kitagawa decomposition -- PREREG Sec 3",
+    "ci_method": "Wilson (rates) / Newcombe (differences), no continuity correction, two-sided 95%, z = 1.959963984540054",
+    "decision_criteria": "per evaluation station: sep strong (L > 0.10) / positive (L > 0) / straddle / inverted (U < 0); early floor (Wilson upper of p_early < 0.15); AF >= 0.50 (not-strictly-less) -- PREREG Sec 5",
+    "decision_rule": "0) gate fails -> BLOCKED; 1) any inversion -> D; 2) both full_pass AND rank agreement -> A; 3) any positive-or-strong sep -> B; 4) otherwise -> C -- PREREG Sec 7",
+    "timezone": "none -- local wall-clock hours from the products themselves",
+    "exact_arithmetic": "integer counts; Decimal precision-50 bounds; 1e-12 ROUND_HALF_EVEN quantized strict comparisons; fixed-point 12-digit serialization",
+    "random_seed": "not applicable -- fully deterministic",
+    "software_versions": "<TO_BE_FILLED>"
+  },
+  "eligibility_gates": {
+    "_note": "Order: G1a -> G1b -> G2 -> G3 -> G4; sentinel 'not_evaluated' after first failure.",
+    "g1a_issuance_hash_matches": "<TO_BE_FILLED>",
+    "g1b_extract_hash_matches": "<TO_BE_FILLED>",
+    "g2_invariants": {
+      "issuance_natural_key_unique": "<TO_BE_FILLED>",
+      "issuance_no_nulls": "<TO_BE_FILLED>",
+      "issuance_station_set_exact": "<TO_BE_FILLED>",
+      "issuance_value_roundtrip_verified": "<TO_BE_FILLED>",
+      "extract_key_unique": "<TO_BE_FILLED>",
+      "extract_station_set_exact": "<TO_BE_FILLED>"
+    },
+    "g3_quality": "<TO_BE_FILLED: per evaluation station {parse_ok_fraction >= 0.90, asof_modal_share >= 0.60, value_agreement >= 0.98}>",
+    "g4_counts": "<TO_BE_FILLED: per evaluation station {revised_total >= 50, min_stratum_n >= 30}>",
+    "all_gates_passed": "<TO_BE_FILLED>"
+  },
+  "primary_results": {
+    "stations": {
+      "DEN": "<TO_BE_FILLED: {n, L, late: {n, r, rate, ci95}, early: {n, r, rate, ci95}, R, sep_hat, sep_ci95, sep_state, early_floor_pass, af, af_pass, full_pass}>",
+      "LAX": "<TO_BE_FILLED: same shape>"
+    },
+    "rank_agreement": "<TO_BE_FILLED: {order_by_L, order_by_R, agree}>",
+    "decision": {
+      "outcome": "<TO_BE_FILLED: A | B | C | D | blocked>",
+      "evaluation_step": "<TO_BE_FILLED>",
+      "reason": "<TO_BE_FILLED>",
+      "interpretation": "<TO_BE_FILLED: frozen Sec 7.2 wording>"
+    }
+  },
+  "descriptive_results": {
+    "reference_stations": "<TO_BE_FILLED: CHI/NYC by the identical procedure -- non-decisional>",
+    "composition_identity_table": "<TO_BE_FILLED: per station: L*p_late + (1-L)*p_early vs R>",
+    "per_year_tables": "<TO_BE_FILLED: per station-year strata cells>",
+    "kitagawa_decomposition": "<TO_BE_FILLED: 6 station pairs: raw_diff, composition_component, rate_component>",
+    "diagnostics": "<TO_BE_FILLED: parse-ok, missing-occurrence counts, value agreement, asof modal shares, cadence>",
+    "sensitivity": "<TO_BE_FILLED: cutoff +/- 1h; missing-as-early; per-year>",
+    "occurrence_hour_histograms": "<TO_BE_FILLED: per station, 24 bins>"
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": "<TO_BE_FILLED>",
+    "config_matches_prereg": "<TO_BE_FILLED>",
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits -- inherited F4. Integer counts remain plain JSON integers."
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

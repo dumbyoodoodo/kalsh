@@ -146,6 +146,18 @@ Responsibilities:
 
 Explicitly out of scope here: settlement-rule parsing (Milestone 2b) and anything downstream of "join and version" (Phases 4+) --- `market_price_weather` deliberately stops at attaching known facts; no forecasting feature, model input, or statistical estimate lives in this layer.
 
+### Forecast verification framework
+
+Implemented in `verification/` (`docs/runbooks/forecast_verification.md`). Reusable, deterministic infrastructure joining point-in-time forecasts to finalized observations without leakage — pure library code: no scientific conclusion, no model fitting, no hypothesis-owned thresholds. Exists because H0003's first execution (2026-07-22) blocked at its own point-in-time integrity gate: the pre-existing "settled = latest observation issuance" convention is unsound for a target date still in progress. Rather than patch that one experiment script, the fix is generalized here for every future consumer (H0003 retries, M-01, H0006).
+
+- **Eligibility** (`eligibility.py`): a `(station, variable, observation_date)` is eligible only once its latest stored issuance was recorded at or after local midnight of the following day (the same boundary convention H0011/H0013/H0015 each independently froze) — a pure function of stored data, never a wall-clock "now".
+- **Forecast matching** (`forecast_matching.py`): horizon (lead time) from `valid_start - issue_time`; deterministic per-bucket selection among same-day reissues; duplicate-key and temporal-ordering validation.
+- **Observation matching** (`observation_matching.py`): the deterministic join, flagging (never silently dropping) any forecast whose `issue_time` doesn't strictly precede its observation's finalizing issuance — the generalized form of H0003's gate finding. Whether a violation blocks an entire run remains each hypothesis's own decision, not this library's.
+- **Metrics** (`metrics.py`): generic Decimal-exact `signed_error`/`absolute_error`/`bias`/`mae`/`rmse`/`error_sd` — point estimates only, no confidence intervals or thresholds.
+- **Reporting** (`reporting.py`): deterministic, JSON-serializable eligible/excluded tables and coverage reports, byte-identical across reruns of the same input.
+
+The already-executed H0003 script and its frozen pre-registration remain unmodified; this package is what a future retry (or M-01/H0006) should import instead of reimplementing the logic inline.
+
 ### Research operations
 
 Implemented in `ops/` and `ingestion/backfill.py` (Phase 6, `docs/runbooks/operations.md`). Makes the platform run unattended for months:

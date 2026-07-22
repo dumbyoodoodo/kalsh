@@ -428,9 +428,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0013 — H0011 replicates out-of-sample at Chicago Midway (independent-station replication)
 
-- **Status:** Proposed
+- **Status:** Confirmed
 - **Opened:** 2026-07-22
-- **Closed:**
+- **Closed:** 2026-07-22
 - **Related:** H0002 (conventions source), H0011 (the claim under replication; its own conclusion requires this — "replication on ≥1 additional station is required before treating the claim as general"), station-expansion report (`docs/research/investigations/2026-07-21-station-expansion-report.md`)
 - **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0013-chi-replication.md` (frozen 2026-07-22, before any CHI revision or attribution statistic was computed; provenance of everything inspected pre-freeze is §0 of that document). Dataset pinned by content hash at pre-registration time (`exp-20260722-h0013-replication`, `observation_issuances`).
 
@@ -454,6 +454,6 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** H0011 (closed), station expansion (done), CHI issuance backfill (done).
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-22 — [EXP-20260722-H0013-chi-replication](docs/research/experiments/EXP-20260722-H0013-chi-replication.md), dataset `exp-20260722-h0013-replication` (hash `5ccf5b7a…` verified by recomputation at execution, gate G1; analysis commit `9edfcce`). All gates passed (G1–G5; 0 unresolved attributions; G4's genuinely unknown R_tmin came in at 330). N = 1,282 valid variable-days per variable (CHI, 2022-12-31→2026-07-21). **Part 1: pass** — p_tmin = 25.74% (330/1,282) vs p_tmax = 15.68% (201/1,282), D_chi = +10.06pp, Newcombe 95% CI [+6.94, +13.17], lower bound well above zero. **Part 2: pass** — 330/330 revised tmin days post-midnight-formed, Wilson 95% lower bound 98.85% (with the mandatory adjacent disclosures: tmax attribution 199/201 = 99.0%; stratified gap {post: +10.22pp, pre: −0.16pp} — the cadence confound binds exactly as at NYC, per the inherited scope statement). **Replication assessment (§7.3): all positive** — direction replicated; magnitude consistent (CHI CI overlaps NYC's published [+8.00, +13.98]; D gap −0.94pp); part2 consistent. NYC same-frame cross-check reproduced H0011's published revision counts exactly (311/170) at the predicted +1-day archive drift. Deterministic execution: rerun byte-identical; naive-UTC verified 26/26 sampled rows; `config_matches_prereg` true. Figures + full comparison: `docs/research/postmortems/2026-07-22-h0013-closeout.md`.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Confirmed**, per the pre-registered decision rule (step 2), and — unlike H0011's Part 1 — this is genuine out-of-sample evidence: every decisional statistic was computed on data that played no role in generating the hypothesis. The tmin/tmax revision asymmetry generalizes beyond NYC with near-identical effect size (+11.0pp vs +10.1pp) and is best understood as a property of the CLI settlement-label formation process at matched-cadence stations, 2023–2026. Scope limits, unchanged or newly flagged: station- not era-generalization (shared calendar window); Part 2 remains label-formation timing only (tmax 99.0% post-midnight too — no mechanism identified); matched-cadence stations only (DEN/LAX regimes untested); and the registered per-year descriptive surfaced a material recency caveat — in the 2026 partial year (n=198) CHI's tmax rate rose to 25.25%, exactly equal to tmin's, so the asymmetry is absent in that slice. Two follow-up hypotheses are recommended before downstream reliance on the asymmetry's current magnitude: a 2026 recency check (both stations) and a cadence-regime replication (DEN/LAX).

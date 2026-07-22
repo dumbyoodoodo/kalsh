@@ -1,0 +1,334 @@
+{
+  "experiment": "EXP-20260722-H0013-chi-replication",
+  "hypothesis": "H0013",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0013-chi-replication.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0 (inline): availability facts inspected pre-freeze; no CHI revision/attribution statistic computed",
+    "original_hypotheses_entry": "HYPOTHESES.md H0013, opened 2026-07-22",
+    "inherited_amendments": {
+      "document": "docs/research/preregistrations/AMENDMENT-20260721-H0011-audit-resolution.md",
+      "applies_as": "folded into PREREG-20260722-H0013 Secs 1/2/4/6/9 from the start (F1 scope statement, F2 no paired check, F3 decimal policy, F4 serialization, F5 histogram, F6 gate sentinel, F7 null ratios, F9 unresolved trigger list)",
+      "blocked_on": []
+    },
+    "elaboration_flags_for_audit": [
+      "replication_assessment_subordinate_to_primary_decision (PREREG Sec 7.3)",
+      "part2_cadence_expectation_disclosed_pre_freeze (PREREG Sec 1/12 R1)",
+      "chi_selected_for_cadence_match_pre_freeze (PREREG Sec 0/12 R4)",
+      "nyc_consistency_check_descriptive_only (PREREG Sec 9)"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260722-h0013-replication",
+    "frame": "observation_issuances.parquet",
+    "content_hashes": {
+      "observation_issuances": "5ccf5b7a3ec11f1ec10fd8a3eac244640406130ec75934e58ead3b2f44e28775"
+    },
+    "row_count_expected": 26310,
+    "chi_row_count_expected": 5152,
+    "dataset_build_git_commit": "9285a0145db39d5829b93b648a1e19e5a32c7237",
+    "source_db_revision": "0007",
+    "discovery_sample_reference": "exp-20260721-h0002 (NYC), used only via H0011's frozen published results (ec38d1a66d7d93eeccdd6ca6df34d14d6e5214477a50c903e976a24f5f327ca9)",
+    "analysis_git_commit": "9edfccefd1e86f206e96ea33c4fed92c342836cf"
+  },
+  "config": {
+    "station": "CHI",
+    "variables": [
+      "tmax_f",
+      "tmin_f"
+    ],
+    "unit_of_analysis": "variable-day (station_id, variable, observation_date)",
+    "valid_variable_day": ">=1 stored issuance; single-issuance days counted as unrevised in Part 1 denominators (H0002 convention, mirrored)",
+    "revision_definition": "first-issued value != final-issued value, Decimal-quantized to 0.01 (construction/rounding frozen -- see decimal_policy); any-revision indicator per variable-day; first = min(issuance_time), final = max(issuance_time)",
+    "attribution_rule": "revised tmin day is post-midnight-attributed iff the earliest issuance whose quantized value equals the final value has local(issuance_time) >= 00:00:00 America/Chicago on observation_date + 1 day; issuance_time interpreted as naive-UTC; unresolved cases remain in denominator as non-attributed -- PREREG Sec 4",
+    "decimal_policy": "float->Decimal construction via Decimal(str(v)) only, never Decimal(v); value quantization to 0.01 via ROUND_HALF_EVEN; round-trip invariant (|float(quantized) - raw_float| < 1e-6) checked under gate G2, violation aborts -- H0011 AMENDMENT Finding 3, inherited",
+    "timezone": "America/Chicago (IANA, via pinned pip tzdata)",
+    "station_filter": "frozen filter step: station_id == 'CHI' applied after G1 (full-frame hash) and before G2 -- PREREG Sec 2/8",
+    "estimand_1": "D_chi = p_tmin - p_tmax (proportion of revised CHI variable-days); positive = tmin revises more",
+    "estimand_2": "p_pm_chi = X_pm / R_tmin (proportion of revised CHI tmin variable-days post-midnight-attributed)",
+    "ci_method_estimand_1": "Newcombe (1998) hybrid score interval for a difference of independent proportions, no continuity correction, two-sided 95% -- PREREG Sec 6",
+    "ci_method_estimand_2": "Wilson score interval, no continuity correction, two-sided 95% -- PREREG Sec 6",
+    "z_constant": "1.959963984540054 (frozen Decimal literal)",
+    "exact_arithmetic": "integer counts; Decimal precision-50 interval bounds; all strict decision comparisons after 1e-12 ROUND_HALF_EVEN quantization of both operands; quantized equality never satisfies a strict inequality -- PREREG Sec 6",
+    "pairing_treatment": "decisional interval unpaired (H0011 audit-approved convention, inherited); no paired robustness check exists -- H0011 AMENDMENT Finding 2",
+    "decision_rule": "1) any gate fails -> EXECUTION BLOCKED; 2) L(D_chi) <= 0 -> Rejected; 3) L(D_chi) > 0 and L(p_pm_chi) > 1/2 -> Confirmed; 4) L(D_chi) > 0 and U(p_pm_chi) < 1/2 -> Rejected (formation-timing conjunct refuted); 5) L(D_chi) > 0 and interval straddles 1/2 -> Inconclusive -- PREREG Sec 7.1",
+    "random_seed": "not applicable -- fully deterministic, no resampling",
+    "part_2_scope_statement": "This result is evidence about settlement-label formation timing only -- that revised daily-minimum labels typically reach their final value in a post-midnight issuance. It does not identify the timing of the underlying physical temperature event (when the true daily minimum occurred), because this dataset carries issuance timestamps only, not occurrence timestamps. A study identifying the physical mechanism would require new occurrence-time data (e.g. parsed from raw CLI product text) and would constitute a separate, future hypothesis, not a re-interpretation of this one.",
+    "tzdata_version": "2026.3",
+    "software_versions": "python 3.12.13; polars 1.42.1"
+  },
+  "eligibility_gates": {
+    "g1_frame_hash_matches": true,
+    "g2_invariants": {
+      "natural_key_unique": true,
+      "no_nulls": true,
+      "station_set_exact": true,
+      "variable_set_exact": true,
+      "value_roundtrip_verified": true
+    },
+    "g3_n_tmax": 1282,
+    "g3_n_tmin": 1282,
+    "g4_r_tmin": 330,
+    "g5_unresolved_attribution_rate": "0.000000000000",
+    "all_gates_passed": true
+  },
+  "primary_results": {
+    "part_1_rate_difference": {
+      "n_tmax": 1282,
+      "r_tmax": 201,
+      "p_tmax": "0.156786271451",
+      "n_tmin": 1282,
+      "r_tmin": 330,
+      "p_tmin": "0.257410296412",
+      "d_hat": "0.100624024961",
+      "ci95_newcombe": [
+        "0.069393717609",
+        "0.131656614311"
+      ],
+      "criterion_1_pass": true
+    },
+    "part_2_post_midnight_attribution": {
+      "r_tmin": 330,
+      "x_pm": 330,
+      "n_unresolved": 0,
+      "p_pm": "1.000000000000",
+      "ci95_wilson": [
+        "0.988493164287",
+        "1.000000000000"
+      ],
+      "criterion_2_state": "pass",
+      "required_adjacent_fields": [
+        "descriptive_results.tmax_attribution_rate",
+        "descriptive_results.stratified_gap_decomposition"
+      ]
+    },
+    "decision": {
+      "outcome": "confirmed",
+      "evaluation_step": "step_2",
+      "reason": "L(D_chi) > 0 and L(p_pm_chi) > 1/2"
+    },
+    "replication_assessment": {
+      "nyc_reference": {
+        "n_per_variable": 1282,
+        "r_tmin": 311,
+        "r_tmax": 170,
+        "d_nyc": "0.109984399376",
+        "ci95_newcombe": [
+          "0.079970196795",
+          "0.139841273431"
+        ],
+        "p_pm_nyc": "1.000000000000",
+        "ci95_wilson": [
+          "0.987798751679",
+          "1.000000000000"
+        ],
+        "criterion_2_state": "pass",
+        "source": "docs/research/experiments/EXP-20260721-H0011-midnight-boundary-results.json"
+      },
+      "direction_replicated": true,
+      "magnitude_consistent": true,
+      "d_gap_vs_nyc": "-0.009360374415",
+      "part2_consistent": true
+    }
+  },
+  "descriptive_results": {
+    "tmax_attribution_rate": {
+      "r_tmax": 201,
+      "x_pm_tmax": 199,
+      "rate": "0.990049751244"
+    },
+    "stratified_gap_decomposition": {
+      "post_midnight_stratum_gap": "0.102184087363",
+      "pre_midnight_stratum_gap": "-0.001560062402"
+    },
+    "first_appearance_local_hour_histogram": {
+      "tmax_f": [
+        51,
+        145,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "tmin_f": [
+        131,
+        189,
+        10,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "issuance_count_distribution": {
+      "tmax_f": {
+        "1": 6,
+        "2": 1259,
+        "3": 16,
+        "4": 1
+      },
+      "tmin_f": {
+        "1": 6,
+        "2": 1259,
+        "3": 16,
+        "4": 1
+      }
+    },
+    "single_issuance_days": {
+      "tmax_f": 6,
+      "tmin_f": 6
+    },
+    "flip_flop_counts": {
+      "tmax_f": {
+        "unrevised_with_intermediate_deviation": 1,
+        "revised_nonmonotone_final_appearance": 0
+      },
+      "tmin_f": {
+        "unrevised_with_intermediate_deviation": 1,
+        "revised_nonmonotone_final_appearance": 0
+      }
+    },
+    "exact_midnight_boundary_issuances": {
+      "tmax_f": 0,
+      "tmin_f": 0
+    },
+    "concordance_2x2": {
+      "both": 21,
+      "tmin_only": 309,
+      "tmax_only": 180,
+      "neither": 772
+    },
+    "unresolved_attribution_days": [],
+    "per_year_revision_rates": {
+      "tmax_f": {
+        "2022": {
+          "n": 1,
+          "r": 0,
+          "rate": "0.000000000000"
+        },
+        "2023": {
+          "n": 362,
+          "r": 50,
+          "rate": "0.138121546961"
+        },
+        "2024": {
+          "n": 359,
+          "r": 50,
+          "rate": "0.139275766017"
+        },
+        "2025": {
+          "n": 362,
+          "r": 51,
+          "rate": "0.140883977901"
+        },
+        "2026": {
+          "n": 198,
+          "r": 50,
+          "rate": "0.252525252525"
+        }
+      },
+      "tmin_f": {
+        "2022": {
+          "n": 1,
+          "r": 0,
+          "rate": "0.000000000000"
+        },
+        "2023": {
+          "n": 362,
+          "r": 96,
+          "rate": "0.265193370166"
+        },
+        "2024": {
+          "n": 359,
+          "r": 92,
+          "rate": "0.256267409471"
+        },
+        "2025": {
+          "n": 362,
+          "r": 92,
+          "rate": "0.254143646409"
+        },
+        "2026": {
+          "n": 198,
+          "r": 50,
+          "rate": "0.252525252525"
+        }
+      }
+    },
+    "feature_summary": {
+      "tmax_f": {
+        "n_days": 1282,
+        "issuance_rows": 2576,
+        "mean_issuances_per_day": "2.009360374415",
+        "single_issuance_days": 6,
+        "first_date": "2022-12-31",
+        "last_date": "2026-07-21"
+      },
+      "tmin_f": {
+        "n_days": 1282,
+        "issuance_rows": 2576,
+        "mean_issuances_per_day": "2.009360374415",
+        "single_issuance_days": 6,
+        "first_date": "2022-12-31",
+        "last_date": "2026-07-21"
+      }
+    },
+    "nyc_consistency_check": {
+      "recomputed": {
+        "n_tmax": 1283,
+        "r_tmax": 170,
+        "n_tmin": 1283,
+        "r_tmin": 311
+      },
+      "published_h0011": {
+        "n_tmax": 1282,
+        "r_tmax": 170,
+        "n_tmin": 1282,
+        "r_tmin": 311
+      },
+      "note": "expected +1 day per variable vs published (archive advanced 2026-07-20 -> 2026-07-21 between pins); larger divergence is a data-integrity flag -- PREREG Sec 9"
+    }
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": true,
+    "config_matches_prereg": true,
+    "issuance_time_utc_verified": true,
+    "serialization_policy": "Every non-integer decision-relevant quantity in primary_results is a JSON string: the Decimal value quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point notation, exactly 12 digits after the decimal point, no scientific notation, leading '-' only if negative -- H0011 AMENDMENT Finding 4, inherited. Integer counts remain plain JSON integers."
+  },
+  "date_run": "2026-07-22"
+}

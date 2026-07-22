@@ -1,0 +1,83 @@
+{
+  "_note": "Experiment manifest TEMPLATE for H0003, frozen 2026-07-22 by PREREG-20260722-H0003-forecast-error-foundation.md. Every <TO_BE_FILLED> value is populated ONLY at execution; no key may be added, removed, or renamed after results are seen. Copy to docs/research/experiments/EXP-20260722-H0003-forecast-error-foundation-results.json and fill in.",
+  "experiment": "EXP-20260722-H0003-forecast-error-foundation",
+  "hypothesis": "H0003",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0003-forecast-error-foundation.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: structural facts only (row counts, date ranges, precision) seen pre-freeze; no forecast-error statistic computed for any cell",
+    "original_hypotheses_entry": "HYPOTHESES.md H0003, opened 2026-07-21; frozen hypothesis text unaltered (Sec 1.1); this document adds an additive descriptive/inferential layer (Sec 1.2)",
+    "elaboration_flags_for_audit": [
+      "two_independent_decision_tracks_A_and_B (Sec 6)",
+      "horizon_definition_uses_valid_start_not_calendar_midnight (Sec 2/12 R2)",
+      "tier2c_station_comparison_non_decisional (Sec 4/5)",
+      "no_multiplicity_correction_two_declared_tests (Sec 5)",
+      "settled_truth_not_value_at_settlement (Sec 2)"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260722-h0003-forecast-extract",
+    "frame": "forecast_horizon_extract.parquet",
+    "content_hash": "<TO_BE_FILLED>",
+    "row_count_expected": "<TO_BE_FILLED>",
+    "analysis_git_commit": "<TO_BE_FILLED>"
+  },
+  "config": {
+    "stations_tier1_2": ["CHI", "DEN", "LAX", "NYC"],
+    "station_tier3": "NYC",
+    "variables": ["tmax_f", "tmin_f"],
+    "provider": "nws",
+    "truth_convention": "settled = latest-issuance CLI value per (station,variable,observation_date) -- _settled_observations convention, not value_at_settlement -- Sec 2",
+    "horizon_definition": "min(valid_start) over the (station,target_date,issue_time) period group used for the high/low aggregation, minus issue_time, hours -- Sec 2",
+    "horizon_buckets": ["[0,12)", "[12,24)", "[24,48)", "[48,inf)"],
+    "quality_floor": "horizon_hours in (-1, 240]; provider == nws; point_estimate not null -- Sec 7",
+    "selection_within_cell": "latest issuance per (station,variable,target_date,bucket) -- Sec 2",
+    "tier1_floor": 20,
+    "tier2_floor": 30,
+    "tier3_floor": 90,
+    "ci_method": "z = 1.959963984540054, deterministic normal-approximation CI; Decimal precision-50; 1e-12 quantized decisions",
+    "multiplicity": "two declared Tier-2 tests (2a, 2b); Tier 2c non-decisional; no correction applied -- Sec 5",
+    "random_seed": "not applicable -- fully deterministic",
+    "software_versions": "<TO_BE_FILLED>"
+  },
+  "eligibility_gates": {
+    "_note": "Order G1 -> G2a -> G2b -> G2c; sentinel 'not_evaluated' after first failure.",
+    "g1_hash_matches": "<TO_BE_FILLED>",
+    "g2a_key_unique_no_nulls": "<TO_BE_FILLED>",
+    "g2b_station_variable_provider_sets_exact": "<TO_BE_FILLED>",
+    "g2c_point_in_time_integrity": "<TO_BE_FILLED>",
+    "all_integrity_gates_passed": "<TO_BE_FILLED>"
+  },
+  "track_a_results": {
+    "cell_counts": "<TO_BE_FILLED: {station: {variable: {bucket: n}}}>",
+    "decision": {
+      "outcome": "<TO_BE_FILLED: BLOCKED | INCONCLUSIVE-ACCRUAL | PARTIAL-DESCRIPTIVE | FULL-FOUNDATION>",
+      "evaluation_step": "<TO_BE_FILLED>",
+      "reason": "<TO_BE_FILLED>",
+      "shortfall": "<TO_BE_FILLED: which cells/floors were short, by how much>"
+    },
+    "tier1_tables": "<TO_BE_FILLED: per-cell {n, bias, mae, rmse, sd, quantiles} -- populated only if reached>",
+    "tier2a_horizon_curve": "<TO_BE_FILLED -- populated only if reached>",
+    "tier2b_stability": "<TO_BE_FILLED -- populated only if reached>",
+    "tier2c_station_comparison": "<TO_BE_FILLED -- non-decisional, populated only if reached>"
+  },
+  "track_b_results": {
+    "settled_day_counts_by_bucket": "<TO_BE_FILLED: NYC tmax only>",
+    "decision": {
+      "outcome": "<TO_BE_FILLED: BLOCKED | INCONCLUSIVE-ACCRUAL | CONFIRMED | REJECTED>",
+      "evaluation_step": "<TO_BE_FILLED>",
+      "reason": "<TO_BE_FILLED>"
+    },
+    "pit_and_coverage": "<TO_BE_FILLED -- populated only if reached>"
+  },
+  "descriptive_results": {
+    "exclusions": "<TO_BE_FILLED: counts by reason>",
+    "sensitivity": "<TO_BE_FILLED -- populated only if any Track A tier reached>"
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": "<TO_BE_FILLED>",
+    "config_matches_prereg": "<TO_BE_FILLED>",
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits. Integer counts remain plain JSON integers."
+  },
+  "date_run": "<TO_BE_FILLED>"
+}

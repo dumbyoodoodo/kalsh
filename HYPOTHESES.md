@@ -115,6 +115,7 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 - **Opened:** 2026-07-21
 - **Closed:**
 - **Related:** H0001, STRATEGY_SPEC.md (baseline model), ROADMAP.md 0.5
+- **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0003-forecast-error-foundation.md` (frozen 2026-07-22, before any forecast-error statistic was computed for any station/variable/bucket). Elaborates this entry to full mechanical precision without altering the hypothesis/rationale/metrics/decision-rule below (verbatim, §1.1 of that document); additively registers a broader descriptive/inferential layer (§1.2) — multi-station/multi-variable bias/MAE/RMSE/dispersion (Tier 1) plus two single pre-specified inferential questions, horizon degradation and first-half-vs-second-half stability (Tier 2) — evaluated on an independent decision track (Track A) alongside this entry's original NYC/tmax PIT-vs-climatology claim (Track B, unchanged, still gated at ≥90 settled days/bucket).
 
 **Hypothesis.** The error of the latest NWS point forecast for NYC daily tmax (forecast − settled), grouped by forecast horizon bucket (e.g. 0-12h, 12-24h, 24-48h, 48h+), has a distribution stable enough that an empirical CDF estimated on one time window transfers to a later window — specifically, out-of-sample PIT (probability integral transform) values are approximately uniform.
 

@@ -177,8 +177,7 @@ async def load_source_frames(
     """Read the source tables into Polars frames. ``start``/``end`` bound the
     weather target dates and market snapshot dates (inclusive) when given."""
     stations = {
-        s.station_id: s.timezone
-        for s in (await session.scalars(select(WeatherStation))).all()
+        s.station_id: s.timezone for s in (await session.scalars(select(WeatherStation))).all()
     }
     stations_frame = pl.DataFrame(
         [{"station_id": sid, "timezone": tz} for sid, tz in stations.items()],
@@ -344,6 +343,50 @@ def _forecast_issue_high_low(forecasts: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def build_forecast_horizon_frame(forecasts: pl.DataFrame) -> pl.DataFrame:
+    """One row per (station_id, variable, target_date, issue_time): the same
+    high/low aggregation `_forecast_issue_high_low` computes (kept in sync
+    deliberately -- both group by the identical key and take the identical
+    max/min of `point_estimate`), unpivoted into `tmax_f`/`tmin_f` rows and
+    extended with `valid_start` = the earliest period `valid_start` in the
+    group -- the lead-time reference point `kalshi_weather.verification`
+    needs and `_forecast_issue_high_low`'s callers (`build_weather_panel`)
+    have no reason to carry. Second consumer, alongside
+    `scripts/build_h0003_forecast_extract.py` (which independently
+    implements the identical grouping over its own pinned, frozen extract --
+    that script is a closed experiment's artifact and is not refactored to
+    call this; this is the shared, canonical form for new callers)."""
+    groups = (
+        forecasts.group_by(["station_id", "target_date", "issue_time"])
+        .agg(
+            forecast_high_f=pl.col("point_estimate").max(),
+            forecast_low_f=pl.col("point_estimate").min(),
+            valid_start=pl.col("valid_start").min(),
+        )
+        .sort(["station_id", "target_date", "issue_time"])
+    )
+    return pl.concat(
+        [
+            groups.select(
+                "station_id",
+                "target_date",
+                "issue_time",
+                "valid_start",
+                variable=pl.lit("tmax_f"),
+                forecast_value="forecast_high_f",
+            ),
+            groups.select(
+                "station_id",
+                "target_date",
+                "issue_time",
+                "valid_start",
+                variable=pl.lit("tmin_f"),
+                forecast_value="forecast_low_f",
+            ),
+        ]
+    ).sort(["station_id", "variable", "target_date", "issue_time"])
+
+
 def _settled_observations(observations: pl.DataFrame) -> pl.DataFrame:
     """One row per (station, observation_date): the settled tmax/tmin (the
     value from the *latest* issuance, since later CLI reports supersede
@@ -358,9 +401,7 @@ def _settled_observations(observations: pl.DataFrame) -> pl.DataFrame:
             n_issuances=pl.len(),
         )
     )
-    pivoted = latest.pivot(
-        on="variable", index=["station_id", "observation_date"], values="value"
-    )
+    pivoted = latest.pivot(on="variable", index=["station_id", "observation_date"], values="value")
     for col in ("tmax_f", "tmin_f"):
         if col not in pivoted.columns:
             pivoted = pivoted.with_columns(pl.lit(None, dtype=pl.Float64).alias(col))
@@ -424,9 +465,7 @@ def _market_map_frame(mappings: list[MarketMapping]) -> pl.DataFrame:
     )
 
 
-def build_market_weather(
-    sources: SourceFrames, mappings: list[MarketMapping]
-) -> pl.DataFrame:
+def build_market_weather(sources: SourceFrames, mappings: list[MarketMapping]) -> pl.DataFrame:
     """Per market snapshot, the weather/order-book/trade facts knowable as of
     that snapshot's timestamp, plus the settled outcome as a labelled target.
 
@@ -511,16 +550,12 @@ def build_market_weather(
             variable_name="settled_variable",
             value_name="settled_value",
         )
-        .with_columns(
-            pl.col("settled_variable").str.replace("settled_", "").alias("variable")
-        )
+        .with_columns(pl.col("settled_variable").str.replace("settled_", "").alias("variable"))
         .select(
             ["station_id", "target_date", "variable", "settled_value", "settlement_issuance_time"]
         )
     )
-    result = result.join(
-        settled_long, on=["station_id", "target_date", "variable"], how="left"
-    )
+    result = result.join(settled_long, on=["station_id", "target_date", "variable"], how="left")
     result = result.with_columns(
         forecast_age_seconds=(
             pl.col("observed_at") - pl.col("forecast_issue_time")
@@ -571,8 +606,12 @@ def _market_metadata(sources: SourceFrames) -> pl.DataFrame:
     assuming the very last snapshot row has everything populated."""
     if sources.markets.height == 0:
         return sources.markets.select(
-            "market_ticker", "event_ticker", "close_time",
-            "floor_strike", "cap_strike", "strike_type",
+            "market_ticker",
+            "event_ticker",
+            "close_time",
+            "floor_strike",
+            "cap_strike",
+            "strike_type",
         )
     return (
         sources.markets.sort("observed_at")
@@ -598,12 +637,8 @@ def build_market_prices(sources: SourceFrames) -> pl.DataFrame:
     the same labels frame market_weather already builds -- see
     docs/adr/0007-price-ingestion.md."""
     if sources.candlesticks.height == 0:
-        return sources.candlesticks.join(
-            _market_metadata(sources), on="market_ticker", how="left"
-        )
-    result = sources.candlesticks.join(
-        _market_metadata(sources), on="market_ticker", how="left"
-    )
+        return sources.candlesticks.join(_market_metadata(sources), on="market_ticker", how="left")
+    result = sources.candlesticks.join(_market_metadata(sources), on="market_ticker", how="left")
     return result.with_columns(
         data_quality_status=pl.when(pl.col("volume") == 0)
         .then(pl.lit("zero_volume"))

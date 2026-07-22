@@ -158,6 +158,14 @@ Implemented in `verification/` (`docs/runbooks/forecast_verification.md`). Reusa
 
 The already-executed H0003 script and its frozen pre-registration remain unmodified; this package is what a future retry (or M-01/H0006) should import instead of reimplementing the logic inline.
 
+### Data quality observatory
+
+Implemented in `observatory/` (`docs/runbooks/data_quality_observatory.md`). Continuous, deterministic certification — across all five collection streams (forecasts, observations, Kalshi markets, trades, candles) — that already-collected data remain scientifically usable. Computes no research statistic and performs no statistical inference; detection only, no automatic fixes. Every finding (`severity.py`'s `Finding`) is classified `info`/`warning`/`critical`; the report's overall status is the highest severity present.
+
+Reuses, never reimplements, three existing reports — schema drift/staleness/duplicates/settlement failures (`ops/quality.py`), forecast issuance cadence (`ops/forecast_cadence.py`), collector liveness/dataset completeness (`ops/health.py`) — each computed exactly once per run and folded into the unified `Finding` type via adapters in `drift.py`/`pit_consistency.py`. New in this package: archive continuity and missed collection cycles across all five streams (`continuity.py`); duplicate detection extended to markets/candles/forecasts and insertion-order timestamp monotonicity (`integrity.py`); unexpected station drift (`drift.py`); weather-parser failure trends mined from existing `collector_runs.stats_json` (`parsing.py`); point-in-time integrity and forecast eligibility rate, built directly on `kalshi_weather.verification` (`pit_consistency.py`) — the exact H0003 G2c leakage scenario, generalized and run continuously.
+
+No new persisted table: "historical trends" come from windows over data the platform already stores append-only, not a new `observatory_runs` table. `ops observatory`/`ops observatory --json` is the CLI entry point; exit code is non-zero iff any finding is CRITICAL.
+
 ### Research operations
 
 Implemented in `ops/` and `ingestion/backfill.py` (Phase 6, `docs/runbooks/operations.md`). Makes the platform run unattended for months:

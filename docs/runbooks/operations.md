@@ -167,6 +167,23 @@ outage from `collector_runs`). Deterministic alerts (`missing_issuance`,
 observed state, and a recommended action; there is no notification
 transport -- wire the JSON output into whatever alerting exists.
 
+## Monitoring data quality (observatory)
+
+```bash
+uv run kalshi-weather ops observatory          # human-readable summary (WARNING/CRITICAL only)
+uv run kalshi-weather ops observatory --json   # full machine-readable report, including INFO
+```
+
+Continuous, deterministic certification -- across all five collection
+streams -- that stored data remain scientifically usable: archive
+continuity, missed collection cycles, duplicate records, timestamp
+monotonicity, point-in-time integrity, station/schedule drift, parser
+failures, forecast eligibility, and observation completeness. Reuses `ops
+health`/`ops quality`/`ops forecast-cadence` rather than recomputing their
+checks. Computes no research statistic; detection only, no automatic
+fixes. Exit code is non-zero iff any finding is CRITICAL. See
+`docs/runbooks/data_quality_observatory.md` for the full rule reference.
+
 ## Performing backfills
 
 Deep historical observation backfill (IEM archive), chunked and resumable:

@@ -32,6 +32,11 @@ from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.logging import configure_logging, get_logger
+from kalshi_weather.observatory import (
+    ObservatoryConfig,
+    Severity,
+    build_observatory_report,
+)
 from kalshi_weather.ops import restart_policy
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
@@ -1006,6 +1011,52 @@ def ops_health(
             f"quality: {'OK' if report.quality_ok else 'ERRORS'} "
             + json.dumps(report.quality_counts)
         )
+
+    asyncio.run(run())
+
+
+@ops_app.command("observatory")
+def ops_observatory(
+    as_json: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),
+) -> None:
+    """Data quality observatory: continuous verification, across all five
+    collection streams, that incoming data remain scientifically usable
+    -- archive continuity, missing collection cycles, duplicate records,
+    timestamp monotonicity, point-in-time consistency, schema drift,
+    station/issuance-schedule drift, parser failures, forecast
+    eligibility, and observation completeness. Detection only: no
+    automatic fixes, no research statistic, no hypothesis executed.
+    Findings are classified info/warning/critical; exit non-zero if any
+    critical finding fired."""
+
+    async def run() -> None:
+        settings = get_settings()
+        async with _open_session(settings) as session:
+            report = await build_observatory_report(
+                session,
+                ObservatoryConfig(
+                    kalshi_interval_seconds=settings.collector_interval_seconds,
+                    weather_interval_seconds=settings.weather_interval_seconds,
+                    price_sync_interval_seconds=settings.price_sync_interval_seconds,
+                    stale_after_intervals=settings.ops_stale_after_intervals,
+                ),
+            )
+        if as_json:
+            typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+        else:
+            typer.echo(f"generated: {report.generated_at}")
+            typer.echo(f"status: {report.status.value.upper()}")
+            for severity in (Severity.CRITICAL, Severity.WARNING, Severity.INFO):
+                findings = report.by_severity(severity)
+                if severity is Severity.INFO and not as_json:
+                    continue  # info-level findings are noisy for the terminal view
+                for f in findings:
+                    typer.echo(
+                        f"[{f.severity.value.upper():8s}] {f.domain:12s} {f.check:32s} "
+                        f"count={f.count}  {f.message}"
+                    )
+        if report.status is Severity.CRITICAL:
+            raise typer.Exit(code=1)
 
     asyncio.run(run())
 

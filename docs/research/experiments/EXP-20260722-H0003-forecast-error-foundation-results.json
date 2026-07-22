@@ -1,0 +1,103 @@
+{
+  "experiment": "EXP-20260722-H0003-forecast-error-foundation",
+  "hypothesis": "H0003",
+  "preregistration": {
+    "document": "docs/research/preregistrations/PREREG-20260722-H0003-forecast-error-foundation.md",
+    "frozen_date": "2026-07-22",
+    "provenance_note": "PREREG Sec 0: structural facts only (row counts, date ranges, precision) seen pre-freeze; no forecast-error statistic computed for any cell",
+    "original_hypotheses_entry": "HYPOTHESES.md H0003, opened 2026-07-21; frozen hypothesis text unaltered (Sec 1.1); this document adds an additive descriptive/inferential layer (Sec 1.2)",
+    "elaboration_flags_for_audit": [
+      "two_independent_decision_tracks_A_and_B (Sec 6)",
+      "horizon_definition_uses_valid_start_not_calendar_midnight (Sec 2/12 R2)",
+      "tier2c_station_comparison_non_decisional (Sec 4/5)",
+      "no_multiplicity_correction_two_declared_tests (Sec 5)",
+      "settled_truth_not_value_at_settlement (Sec 2)"
+    ]
+  },
+  "dataset": {
+    "version": "exp-20260722-h0003-forecast-extract",
+    "frame": "forecast_horizon_extract.parquet",
+    "content_hash": "f2d8b3e97354641587e077f1a1943fc58a11152552241418aec0489c9ff8a690",
+    "row_count_expected": 362,
+    "analysis_git_commit": "3a2c008473beee5da0713ebdcd984688ff033388"
+  },
+  "config": {
+    "stations_tier1_2": [
+      "CHI",
+      "DEN",
+      "LAX",
+      "NYC"
+    ],
+    "station_tier3": "NYC",
+    "variables": [
+      "tmax_f",
+      "tmin_f"
+    ],
+    "provider": "nws",
+    "truth_convention": "settled = latest-issuance CLI value per (station,variable,observation_date) -- _settled_observations convention",
+    "horizon_definition": "min(valid_start) over the (station,target_date,issue_time) period group used for the high/low aggregation, minus issue_time, hours",
+    "horizon_buckets": [
+      "[0,12)",
+      "[12,24)",
+      "[24,48)",
+      "[48,inf)"
+    ],
+    "quality_floor": "horizon_hours in (-1, 240]",
+    "selection_within_cell": "latest issuance per (station,variable,target_date,bucket)",
+    "tier1_floor": 20,
+    "tier2_floor": 30,
+    "tier3_floor": 90,
+    "ci_method": "z = 1.959963984540054, deterministic normal-approximation CI; Decimal precision-50; 1e-12 quantized decisions",
+    "multiplicity": "two declared Tier-2 tests (2a, 2b); Tier 2c non-decisional; no correction applied",
+    "random_seed": "not applicable -- fully deterministic",
+    "software_versions": "python 3.12.13; polars 1.42.1"
+  },
+  "eligibility_gates": {
+    "g1_hash_matches": true,
+    "g2a_key_unique_no_nulls": {
+      "key_unique": true,
+      "no_null_core_fields": true
+    },
+    "g2b_station_variable_sets_exact": {
+      "station_set_subset": true,
+      "variable_set_exact": true
+    },
+    "g2c_point_in_time_integrity": {
+      "violations": "present",
+      "pass": false
+    },
+    "all_integrity_gates_passed": false
+  },
+  "track_a_results": {
+    "cell_counts": {},
+    "decision": {
+      "outcome": "BLOCKED",
+      "evaluation_step": "step_0",
+      "reason": "an integrity gate failed; no interval computed",
+      "shortfall": {}
+    },
+    "tier1_tables": {},
+    "tier2a_horizon_curve": {},
+    "tier2b_stability": {},
+    "tier2c_station_comparison": {}
+  },
+  "track_b_results": {
+    "settled_day_counts_by_bucket": {},
+    "decision": {
+      "outcome": "BLOCKED",
+      "evaluation_step": "step_0",
+      "reason": "an integrity gate failed; no interval computed"
+    },
+    "pit_and_coverage": {}
+  },
+  "descriptive_results": {
+    "exclusions": {},
+    "sensitivity": {}
+  },
+  "reproducibility_verification": {
+    "rerun_byte_identical": true,
+    "config_matches_prereg": true,
+    "serialization_policy": "Every non-integer decision-relevant quantity is a JSON string: Decimal quantized to 1e-12 via ROUND_HALF_EVEN, fixed-point, 12 digits. Integer counts remain plain JSON integers."
+  },
+  "date_run": "2026-07-22"
+}

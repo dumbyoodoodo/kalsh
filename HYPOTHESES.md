@@ -111,9 +111,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0003 — NWS forecast error has a stable, estimable distribution by horizon
 
-- **Status:** Proposed
+- **Status:** Blocked (integrity gate; retry ≥ 2026-10-18, with an added eligibility-criterion amendment)
 - **Opened:** 2026-07-21
-- **Closed:**
+- **Closed:** 2026-07-22 (this execution only; the frozen hypothesis remains open for a future retry)
 - **Related:** H0001, STRATEGY_SPEC.md (baseline model), ROADMAP.md 0.5
 - **Pre-registration package:** `docs/research/preregistrations/PREREG-20260722-H0003-forecast-error-foundation.md` (frozen 2026-07-22, before any forecast-error statistic was computed for any station/variable/bucket). Elaborates this entry to full mechanical precision without altering the hypothesis/rationale/metrics/decision-rule below (verbatim, §1.1 of that document); additively registers a broader descriptive/inferential layer (§1.2) — multi-station/multi-variable bias/MAE/RMSE/dispersion (Tier 1) plus two single pre-specified inferential questions, horizon degradation and first-half-vs-second-half stability (Tier 2) — evaluated on an independent decision track (Track A) alongside this entry's original NYC/tmax PIT-vs-climatology claim (Track B, unchanged, still gated at ≥90 settled days/bucket).
 
@@ -137,9 +137,9 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Dependencies.** Accumulation (weather collector running continuously); H0002's revision-risk number for label-noise context; ideally registry expansion. Feeds H0006 and Phase 5 baselines directly — its conclusion *is* the evidence for the Phase 5 model progression.
 
-**Results.** Not yet run.
+**Results.** Run 2026-07-22 — [EXP-20260722-H0003-forecast-error-foundation](docs/research/experiments/EXP-20260722-H0003-forecast-error-foundation.md), extract `exp-20260722-h0003-forecast-extract` (hash `f2d8b3e9…`, 362 rows; analysis commit `3a2c008`; reruns byte-identical). **BLOCKED at gate G2c (point-in-time integrity)** on both decision tracks — 2 of 362 rows (DEN tmax_f/tmin_f, target_date = the day of execution, 2026-07-22) had a forecast issuance postdating their "settled" value, because the reused `_settled_observations` convention ("latest issuance so far") is unsound for a target date still in progress — the gate caught this correctly, before any statistic was computed; no fix was applied mid-run. Separately and independently (descriptive only): accrual was already far below every registered floor regardless — at most 5 of 362 rows per (station, variable) carried any settled truth at all, against a TIER1_FLOOR of 20 *per bucket*, and Track B's ≥90-settled-NYC-tmax-days-per-bucket floor was short by roughly two orders of magnitude.
 
-**Conclusion.** Not yet concluded.
+**Conclusion.** **Blocked** (step 0 of the frozen decision table — not a scientific outcome on either track; the original NYC/tmax PIT-vs-climatology hypothesis remains open, neither confirmed nor rejected). This execution surfaced a genuine, useful defect rather than a fabricated number: a target_date must be required to have received a genuinely final (post-midnight) report before it is eligible for scoring, not merely "the latest issuance seen so far" — a fix to be added explicitly to the next execution's pre-registration, not patched retroactively into this one. M-01 (Phase 5 baselines) remains blocked on H0003 reaching at least a PARTIAL-DESCRIPTIVE Track A outcome. Retry no earlier than **2026-10-18** (≈90 accrual days from forecast collection's 2026-07-20 start, per the roadmap's own estimate), with the eligibility-criterion fix named in the closeout. Full detail: `docs/research/postmortems/2026-07-22-h0003-closeout.md`.
 
 ### H0004 — Forecast error has exploitable structure (bias/persistence/season)
 

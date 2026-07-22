@@ -113,6 +113,17 @@ and climatology-beating log score, NYC tmax only, per §1.1.
 | Missing data | A (station, variable, target_date) with forecast issuances but no settled observation yet is excluded from all error computation and counted (`not_yet_settled`). A (station, variable, bucket) with zero forecast issuances is simply absent from that cell — reported as a coverage fact, not an error. |
 | Selection within a cell | For a given (station, variable, target_date, bucket), if multiple issuances fall in the same bucket, the **latest** such issuance is used (freshest information available at that horizon depth) — avoids pseudo-replication from near-duplicate same-bucket reissues inflating cell N. |
 
+**Amendment (2026-07-22, same day, before execution; added by addition, per
+the H0011 precedent — the table above is unedited).** The quality floor
+row leaves one implementation detail unspecified: a valid (non-excluded)
+horizon in the `(-1, 0)` slack has no bucket under the literal `[0,12)…`
+boundaries as written. Resolved: such values are classified into the
+`[0,12)` bucket (the nearest one; the reported `horizon_hours` value
+itself is never clamped or altered, only its bucket assignment). This
+affects only the handful of near-zero-lead-time rows the slack exists to
+tolerate in the first place; it changes no threshold, estimand, or
+decision rule.
+
 ## 3. Leakage rules (stated explicitly, per the task's requirement)
 
 - Every forecast is scored using only its own `point_estimate` and

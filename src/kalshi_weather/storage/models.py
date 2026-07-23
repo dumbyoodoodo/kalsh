@@ -128,6 +128,12 @@ class MarketSnapshot(Base):
     result: Mapped[str | None] = mapped_column(String(16))
     expiration_value: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
     settlement_ts: Mapped[datetime | None] = mapped_column(nullable=True)
+    # The venue's own finality marker (migration 0008, ADR 0011): Kalshi keeps
+    # revising `volume`, `open_interest` and occasionally `result` *after*
+    # publishing status="finalized" with a settlement_ts, up until this time
+    # -- observed ~7 days after close_time. A snapshot taken before it is
+    # provisional metadata, not final. NULL on every row written before 0008.
+    expiration_time: Mapped[datetime | None] = mapped_column(nullable=True)
     floor_strike: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
     cap_strike: Mapped[Any] = mapped_column(Numeric(10, 2), nullable=True)
     strike_type: Mapped[str | None] = mapped_column(String(16))
@@ -426,3 +432,44 @@ class MarketCandlestick(Base):
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class MarketMetadataVerification(Base):
+    """One post-finality verification attempt against a settled market.
+
+    Exists because "did we already re-check this market after the venue's
+    finality time?" cannot be answered from `market_snapshots` alone: a
+    verification that finds *nothing changed* correctly appends no snapshot
+    (content-hash dedup), so an unchanged verification would be
+    indistinguishable from never having checked, and the market would be
+    re-fetched forever. Recording the attempt separately keeps
+    `market_snapshots` meaning exactly one thing -- observed market state --
+    instead of overloading it with "we looked".
+
+    Append-only, like every other table here. A market may accumulate several
+    rows (a transient failure is simply not recorded, so it is retried; a
+    manual re-verification appends another row); the revision pass treats a
+    market as done when a row with a terminal outcome exists.
+    """
+
+    __tablename__ = "market_metadata_verifications"
+    __table_args__ = (
+        Index("ix_market_metadata_verifications_ticker", "market_ticker", "verified_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: When this verification ran (UTC).
+    verified_at: Mapped[datetime] = mapped_column(nullable=False)
+    #: The finality time this verification was gated on -- either the market's
+    #: own `expiration_time` or the documented close_time fallback. Stored so a
+    #: later audit can tell which rule admitted the market.
+    finality_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    #: unchanged | changed | market_removed | retention_expired
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)
+    #: True when this verification appended a new market_snapshots row.
+    snapshot_appended: Mapped[bool] = mapped_column(nullable=False, default=False)
+    #: Which fields the venue had revised (comma-separated), for observability.
+    changed_fields: Mapped[str | None] = mapped_column(String(128))
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")

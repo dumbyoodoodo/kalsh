@@ -27,6 +27,10 @@ from kalshi_weather.dataset.export import ExportFormat, default_version
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.backfill import run_backfill
 from kalshi_weather.ingestion.collector import run_collector_loop
+from kalshi_weather.ingestion.metadata_revision import (
+    run_metadata_revision,
+    run_metadata_revision_loop,
+)
 from kalshi_weather.ingestion.price_backfill import run_price_backfill, run_price_sync_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
@@ -917,6 +921,54 @@ def prices_backfill(
     asyncio.run(run())
 
 
+@ops_app.command("revision")
+def ops_revision(
+    ticker: str | None = typer.Option(
+        None, "--ticker", help="Revise only these market ticker(s), comma-separated."
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Cap the number of markets attempted this run."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Classify without writing snapshots or verifications."
+    ),
+) -> None:
+    """Post-expiration settled-metadata revision pass (ADR 0011).
+
+    Kalshi keeps revising volume/open_interest/result after publishing
+    status="finalized"; a market's own expiration_time (~7 days after close)
+    is when they stop. This re-checks settled markets past that point and
+    appends a snapshot only when something actually changed. Never rewrites a
+    historical row. See docs/runbooks/settled_metadata_revision.md."""
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        try:
+            client = _build_price_client(settings, session_factory)
+            async with client:
+                report = await run_metadata_revision(
+                    session_factory=session_factory,
+                    client=client,
+                    tickers=[t.strip() for t in ticker.split(",")] if ticker else None,
+                    limit=limit,
+                    retention_days=settings.price_observed_retention_days,
+                    dry_run=dry_run,
+                )
+        finally:
+            await engine.dispose()
+        typer.echo(json.dumps(report.totals(), indent=2))
+        for r in report.results:
+            if r.changed_fields:
+                typer.echo(f"CHANGED {r.market_ticker}: {','.join(r.changed_fields)}")
+            elif r.outcome in ("market_removed", "retention_expired"):
+                typer.echo(f"{r.outcome.upper()} {r.market_ticker}")
+
+    asyncio.run(run())
+
+
 @prices_app.command("coverage")
 def prices_coverage(
     resolution: int | None = typer.Option(
@@ -1260,6 +1312,7 @@ def ops_run(
             kalshi_interval=kalshi_interval or settings.collector_interval_seconds,
             weather_interval=weather_interval or settings.weather_interval_seconds,
             price_sync_interval=price_sync_interval or settings.price_sync_interval_seconds,
+            revision_interval=settings.revision_sync_interval_seconds,
         )
         try:
             await asyncio.gather(
@@ -1288,6 +1341,14 @@ def ops_run(
                     resolution_minutes=settings.price_candle_resolution_minutes,
                     limit_per_cycle=settings.price_sync_limit_per_cycle,
                     interval_seconds=price_sync_interval or settings.price_sync_interval_seconds,
+                    stop_event=stop_event,
+                ),
+                run_metadata_revision_loop(
+                    session_factory=session_factory,
+                    client_factory=lambda: _build_price_client(settings, session_factory),
+                    limit_per_cycle=settings.revision_sync_limit_per_cycle,
+                    retention_days=settings.price_observed_retention_days,
+                    interval_seconds=settings.revision_sync_interval_seconds,
                     stop_event=stop_event,
                 ),
             )

@@ -84,6 +84,7 @@ async def persist_market_snapshot(
         result=market.result,
         expiration_value=expiration_value,
         settlement_ts=market.settlement_ts,
+        expiration_time=market.expiration_time,
         floor_strike=(
             Decimal(str(market.floor_strike)) if market.floor_strike is not None else None
         ),

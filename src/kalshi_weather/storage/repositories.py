@@ -178,6 +178,7 @@ def _market_snapshot_content_hash(
     open_interest: int | None,
     result: str | None = None,
     expiration_value: Decimal | None = None,
+    expiration_time: datetime | None = None,
 ) -> str:
     """Hash of the fields that matter for "did this market actually change"
     -- deliberately excludes id/observed_at/raw_payload_id/event_ticker/
@@ -199,6 +200,12 @@ def _market_snapshot_content_hash(
             # settlement transition must produce a (final) snapshot
             "result": result,
             "expiration_value": str(expiration_value) if expiration_value is not None else None,
+            # Included deliberately (ADR 0011): if the venue moves a market's
+            # finality deadline that is a meaningful change and should append a
+            # snapshot. Note this changes the hash function itself, so the
+            # first poll after migration 0008 appends one extra snapshot per
+            # market -- additive, never a rewrite.
+            "expiration_time": expiration_time.isoformat() if expiration_time else None,
         }
     )
 
@@ -225,6 +232,7 @@ async def save_market_snapshot(
     result: str | None = None,
     expiration_value: Decimal | None = None,
     settlement_ts: datetime | None = None,
+    expiration_time: datetime | None = None,
     floor_strike: Decimal | None = None,
     cap_strike: Decimal | None = None,
     strike_type: str | None = None,
@@ -245,6 +253,7 @@ async def save_market_snapshot(
         open_interest=open_interest,
         result=result,
         expiration_value=expiration_value,
+        expiration_time=expiration_time,
     )
 
     latest = await session.scalar(
@@ -275,6 +284,7 @@ async def save_market_snapshot(
         result=result,
         expiration_value=expiration_value,
         settlement_ts=settlement_ts,
+        expiration_time=expiration_time,
         floor_strike=floor_strike,
         cap_strike=cap_strike,
         strike_type=strike_type,

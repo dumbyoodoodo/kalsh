@@ -142,6 +142,10 @@ class Market(KalshiModel):
     result: str | None = None
     expiration_value: str | None = None
     settlement_ts: datetime | None = None
+    # The venue's finality marker (ADR 0011), observed ~7 days after
+    # close_time. Kalshi keeps revising volume/open_interest/result after
+    # publishing status="finalized"; this is when those stop moving.
+    expiration_time: datetime | None = None
     floor_strike: float | None = None
     cap_strike: float | None = None
     strike_type: str | None = None

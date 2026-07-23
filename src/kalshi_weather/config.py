@@ -234,6 +234,16 @@ class Settings(BaseSettings):
     price_sync_limit_per_cycle: int = Field(default=50, alias="PRICE_SYNC_LIMIT_PER_CYCLE")
     price_sync_interval_seconds: float = Field(default=1800.0, alias="PRICE_SYNC_INTERVAL_SECONDS")
     price_observed_retention_days: int = Field(default=67, alias="PRICE_OBSERVED_RETENTION_DAYS")
+    # --- Post-expiration settled-metadata revision (ADR 0011) ---
+    # Kalshi revises volume/open_interest/result after publishing
+    # status="finalized"; `expiration_time` (~7 days after close) is when they
+    # stop. This bounded pass re-checks settled markets once past that point.
+    # Hourly by default: the eligible set only grows as markets cross their
+    # finality time, so a slower cadence than price sync is ample.
+    revision_sync_limit_per_cycle: int = Field(default=50, alias="REVISION_SYNC_LIMIT_PER_CYCLE")
+    revision_sync_interval_seconds: float = Field(
+        default=3600.0, alias="REVISION_SYNC_INTERVAL_SECONDS"
+    )
     price_retention_warning_buffer_days: int = Field(
         default=10, alias="PRICE_RETENTION_WARNING_BUFFER_DAYS"
     )

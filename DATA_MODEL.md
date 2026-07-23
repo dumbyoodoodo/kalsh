@@ -69,12 +69,40 @@ Upserted by `event_ticker`, same rationale as `series`.
 - `rules_secondary`
 - `source_updated_at` — Kalshi's own `updated_time` for this market
 - `result`, `expiration_value`, `settlement_ts`, `floor_strike`, `cap_strike`, `strike_type` — settlement fields (migration `0006`, `docs/adr/0006-settlement-labels.md`): the payout side, the underlying value Kalshi paid on, the exact determination time, and the structured strike definition; populated once a market settles
+- `expiration_time` — the venue's own finality marker (migration `0008`, `docs/adr/0011-settled-metadata-revision.md`), observed ~7 days after `close_time`. NULL on every row written before `0008`
 - `schema_version`
 - `content_hash` — hash of the fields above plus `result`/`expiration_value` (so a settlement transition appends one final snapshot); excludes id/observed_at/raw_payload_id and the immutable strike fields (see `docs/adr/0002-ingestion-collector.md`)
 - `raw_payload_id`
 - `observed_at`
 
 Append-only: a market's history is the full sequence of rows for its ticker, never overwritten. "Never overwritten" and "duplicate detection" are reconciled by content-hash-based skip-on-no-change, not by allowing every poll to insert a redundant identical row.
+
+#### Result-bearing is not metadata-final
+
+**A snapshot carrying `result` is not necessarily final.** Kalshi keeps revising `volume`, `open_interest`, and occasionally `result` itself *after* publishing `status="finalized"` with a `settlement_ts`, up to the market's own `expiration_time` (~7 days after `close_time`). Measured on 2026-07-23: three hours after close, one event reported `volume=0` for ten of eleven markets that had each traded 104–1,165 contracts, and one market's `result` contradicted its own strike arithmetic before the venue corrected it (`docs/adr/0011-settled-metadata-revision.md`).
+
+Consequences for analysis:
+
+- `volume`, `open_interest`, and `result` are **venue-mutable until `expiration_time`**. Treat a snapshot observed before that point as provisional metadata.
+- For normal analysis, **the latest snapshot for a ticker after its finality time is authoritative.** A `market_metadata_verifications` row with a terminal outcome confirms that point was reached and re-checked.
+- Earlier snapshots remain **valid provenance and genuine revision-history observations** — they record what the venue published at that moment, which is itself research signal (compare the settlement-label revision work in H0011/H0012). They are never rewritten or deleted.
+- Anything derived from provisional volume is provisional too — notably `data_quality_status = "zero_volume"` in the dataset builder, which was systematically wrong for same-day settlements before this capture existed.
+- **Frozen datasets are unchanged** by this mechanism. A dataset rebuilt after revisions have been captured will contain additional snapshot rows; that is a deliberate rebuild, never a silent mutation.
+
+### `market_metadata_verifications`
+
+Append-only record of post-finality re-checks (migration `0008`).
+
+- `id` PK
+- `market_ticker`
+- `verified_at` — when the check ran
+- `finality_at` — the finality time it was gated on (the market's `expiration_time`, or the documented `close_time + 7d` fallback for pre-`0008` rows), so an audit can tell which rule admitted it
+- `outcome` — `unchanged` | `changed` | `market_removed` | `retention_expired`
+- `snapshot_appended` — whether this check appended a `market_snapshots` row
+- `changed_fields` — which venue-mutable fields moved
+- `raw_payload_id`, `schema_version`
+
+This table exists because a verification that finds *nothing changed* correctly appends no snapshot, so "verified unchanged" would otherwise be indistinguishable from "never checked" and the market would be re-fetched forever. Keeping it separate leaves `market_snapshots` meaning exactly one thing — observed market state — rather than overloading it with "we looked".
 
 ### `orderbook_snapshots`
 

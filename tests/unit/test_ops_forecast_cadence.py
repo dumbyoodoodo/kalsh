@@ -324,14 +324,22 @@ def test_last_collection_and_run_fields() -> None:
     assert health.last_run_at == datetime(2026, 6, 1, 9, 0, tzinfo=UTC).isoformat()
     assert health.last_successful_run_at == datetime(2026, 6, 1, 8, 0, tzinfo=UTC).isoformat()
     assert health.run_attempts == 2
-    # longest outage: max(run-to-run gap 1h, tail gap 9:00 -> 21:00 = 12h)
-    assert health.longest_outage_hours == 12.0
+    # historical run-to-run gap (8:00 -> 9:00 = 1h) and the trailing gap
+    # (9:00 -> 21:00 = 12h) are reported SEPARATELY: the trailing gap is the
+    # active-outage signal, never folded into the historical maximum (the
+    # folding is what latched a healed outage CRITICAL forever -- 2026-07-23
+    # production-gap investigation).
+    assert health.longest_outage_hours == 1.0
+    assert health.trailing_gap_hours == 12.0
 
 
 # --- Alerts: outage and stalled ----------------------------------------------
 
 
-def test_collector_outage_alert_on_run_gap() -> None:
+def test_healed_run_gap_is_recovered_not_active() -> None:
+    """A 10h gap that ended (runs resumed, newest run is fresh) is a
+    RECOVERED historical incident -- `collector_outage_recovered`, not the
+    active `collector_outage` kind."""
     captures = _perfect_day_captures("NYC", date(2026, 6, 1), NY)
     runs = [
         RunAttempt(started_at=datetime(2026, 6, 1, 6, 0, tzinfo=UTC), success=True),
@@ -339,9 +347,26 @@ def test_collector_outage_alert_on_run_gap() -> None:
     ]
     now = datetime(2026, 6, 1, 16, 30, tzinfo=UTC)
     report = build_cadence_report(captures, runs, config=CONFIG, timezones=TIMEZONES, now=now)
-    outage_alerts = [a for a in report.alerts if a.kind == "collector_outage"]
-    assert len(outage_alerts) == 1
-    assert "10.0h" in outage_alerts[0].observed
+    assert [a for a in report.alerts if a.kind == "collector_outage"] == []
+    recovered = [a for a in report.alerts if a.kind == "collector_outage_recovered"]
+    assert len(recovered) == 1
+    assert "10.0h" in recovered[0].observed
+
+
+def test_overdue_now_is_active_collector_outage() -> None:
+    """The newest run being overdue NOW is the active-outage signal,
+    regardless of a clean in-window history."""
+    captures = _perfect_day_captures("NYC", date(2026, 6, 1), NY)
+    runs = [
+        RunAttempt(started_at=datetime(2026, 6, 1, 6, 0, tzinfo=UTC), success=True),
+        RunAttempt(started_at=datetime(2026, 6, 1, 6, 30, tzinfo=UTC), success=True),
+    ]
+    now = datetime(2026, 6, 1, 16, 30, tzinfo=UTC)  # 10h since the last run
+    report = build_cadence_report(captures, runs, config=CONFIG, timezones=TIMEZONES, now=now)
+    active = [a for a in report.alerts if a.kind == "collector_outage"]
+    assert len(active) == 1
+    assert "overdue now" in active[0].observed
+    assert [a for a in report.alerts if a.kind == "collector_outage_recovered"] == []
 
 
 def test_collector_outage_alert_when_no_runs_recorded() -> None:
@@ -486,7 +511,9 @@ def test_gap_breach_coexists_with_genuine_collector_outage() -> None:
     report = build_cadence_report(captures, runs, config=CONFIG, timezones=TIMEZONES, now=now)
     kinds = {a.kind for a in report.alerts}
     assert "issuance_gap" in kinds
-    assert "collector_outage" in kinds
+    # the run gap has healed (newest run is 30min old), so the collector-side
+    # signal is the recovered kind, coexisting with the data-side gap alert
+    assert "collector_outage_recovered" in kinds
 
 
 # --- expected_issuances_per_day clamp (architecture amendment) ---------------
@@ -542,3 +569,64 @@ def test_generate_alerts_sorted_and_complete_fields() -> None:
         assert alert.expected
         assert alert.observed
         assert alert.recommended_action
+
+
+# --- load_weather_runs window bound (the aging-out mechanism) ----------------
+
+
+async def test_load_weather_runs_respects_since_bound() -> None:
+    """The bounded loader is what lets a healed outage age out of the
+    cadence check: runs older than `since` are simply not loaded."""
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from kalshi_weather.ops.forecast_cadence import load_weather_runs
+    from kalshi_weather.storage.models import Base, CollectorRun
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(sa_text("SELECT 1"))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        for hours_ago in (100, 80, 10, 1):
+            started = datetime(2026, 7, 23, 12, 0) - timedelta(hours=hours_ago)
+            session.add(
+                CollectorRun(
+                    collector="weather",
+                    started_at=started,
+                    finished_at=started + timedelta(seconds=5),
+                    duration_seconds=5.0,
+                    success=True,
+                    requests_attempted=1,
+                    retries=0,
+                    stats_json={},
+                )
+            )
+        session.add(  # a different collector, must never load
+            CollectorRun(
+                collector="kalshi",
+                started_at=datetime(2026, 7, 23, 11, 0),
+                finished_at=datetime(2026, 7, 23, 11, 0, 5),
+                duration_seconds=5.0,
+                success=True,
+                requests_attempted=1,
+                retries=0,
+                stats_json={},
+            )
+        )
+        await session.commit()
+
+        unbounded = await load_weather_runs(session)
+        assert len(unbounded) == 4
+
+        bounded = await load_weather_runs(
+            session, since=datetime(2026, 7, 23, 12, 0) - timedelta(hours=72)
+        )
+        assert len(bounded) == 2  # only the 10h and 1h runs remain
+    await engine.dispose()

@@ -33,7 +33,11 @@ _CADENCE_ALERT_SEVERITY: dict[str, Severity] = {
     "duplicate_issuance": Severity.WARNING,
     "abnormal_cadence": Severity.WARNING,
     "issuance_gap": Severity.WARNING,
+    # Active outage (collector overdue *now*) pages; a healed gap that only
+    # exists in the bounded window's history is a recovered-incident record
+    # (2026-07-23 production-gap investigation).
     "collector_outage": Severity.CRITICAL,
+    "collector_outage_recovered": Severity.WARNING,
     "stalled_updates": Severity.CRITICAL,
 }
 

@@ -67,6 +67,9 @@ class ObservatoryConfig:
     stale_after_intervals: float
     continuity_window_days: int = DEFAULT_CONTINUITY_WINDOW_DAYS
     pit_window_days: int = pit_consistency.DEFAULT_WINDOW_DAYS
+    #: Forecast-cadence run-attempt window (hours) -- see
+    #: `CadenceConfig.run_window_hours`.
+    cadence_run_window_hours: float = 72.0
     #: `None` (the default) skips backup-health checks entirely -- no
     #: Finding at all, not even INFO -- so existing callers that never
     #: heard of PostgreSQL backups are unaffected. Set by
@@ -124,7 +127,9 @@ async def build_observatory_report(
 
     # --- Reused: forecast issuance cadence (missing/duplicate/out-of-order/
     # delayed/abnormal cadence, collector outage) -- ops/forecast_cadence.py.
-    cadence = await run_forecast_cadence(session, config=CadenceConfig())
+    cadence = await run_forecast_cadence(
+        session, config=CadenceConfig(run_window_hours=config.cadence_run_window_hours)
+    )
     for alert in cadence.alerts:
         findings.append(drift.adapt_cadence_alert(alert))
 
@@ -187,16 +192,35 @@ async def build_observatory_report(
         missed = continuity.find_missed_run_cycles(
             run_records, collector=collector, interval_seconds=interval, now=now
         )
+        # Active vs recovered (2026-07-23 production-gap investigation): a
+        # trailing window means the collector is overdue *now* (CRITICAL);
+        # purely historical windows inside the lookback are recovered
+        # incidents (WARNING) that age out of the window on their own.
+        active = [m for m in missed if m.trailing]
+        if active:
+            severity = Severity.CRITICAL
+            message = (
+                f"{collector} collector is overdue NOW ({active[0].hours:.1f}h since its "
+                f"last run), plus {len(missed) - 1} healed historical window(s) in the "
+                f"last {config.continuity_window_days} days"
+            )
+        elif missed:
+            severity = Severity.WARNING
+            message = (
+                f"{len(missed)} healed window(s) with no {collector} run well beyond its "
+                f"configured interval in the last {config.continuity_window_days} days; "
+                "current runs are on schedule"
+            )
+        else:
+            severity = Severity.INFO
+            message = f"no missed {collector} collection windows"
         findings.append(
             Finding(
                 domain="platform",
                 check=f"missed_collection_cycles_{collector}",
-                severity=Severity.CRITICAL if missed else Severity.INFO,
+                severity=severity,
                 count=len(missed),
-                message=(
-                    f"{len(missed)} window(s) with no {collector} run recorded well "
-                    "beyond its configured interval"
-                ),
+                message=message,
                 samples=tuple(f"{m.gap_start} .. {m.gap_end}" for m in missed[:5]),
             )
         )

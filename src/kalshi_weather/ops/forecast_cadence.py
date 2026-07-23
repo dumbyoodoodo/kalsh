@@ -107,6 +107,11 @@ class CadenceConfig:
     outage_threshold_hours: float = 2.0
     stalled_threshold_hours: float = 24.0
     min_completeness_pct: float = 90.0
+    #: Run-attempt analysis window (hours). Bounding the collector-outage
+    #: scan is what lets a healed incident age out: an unbounded scan kept a
+    #: 2026-07-21 8.6h gap latched CRITICAL indefinitely (production-gap
+    #: investigation, 2026-07-23).
+    run_window_hours: float = 72.0
 
     def __post_init__(self) -> None:
         clamped = min(max(self.expected_issuances_per_day, 1), MAX_EXPECTED_ISSUANCES_PER_DAY)
@@ -166,7 +171,14 @@ class StationHealth:
     last_issue_time: str | None
     last_run_at: str | None
     last_successful_run_at: str | None
+    #: Largest gap between successive run attempts *within the bounded
+    #: analysis window* (config.run_window_hours) -- a recovered historical
+    #: incident, not proof of a current outage.
     longest_outage_hours: float | None
+    #: Gap between the newest run attempt and `now` -- the *active* outage
+    #: signal: if this exceeds the threshold, the collector is overdue right
+    #: now, regardless of any history.
+    trailing_gap_hours: float | None
     run_attempts: int
 
 
@@ -385,11 +397,16 @@ def _station_health(
 
     successful_runs = [r for r in runs if r.success]
     outage: float | None = None
+    trailing_gap: float | None = None
     if runs:
         run_times = sorted(r.started_at for r in runs)
-        run_gaps = [_hours(b - a) for a, b in pairwise(run_times)]
-        run_gaps.append(_hours(now - run_times[-1]))
-        outage = max(run_gaps)
+        historical_gaps = [_hours(b - a) for a, b in pairwise(run_times)]
+        trailing_gap = _hours(now - run_times[-1])
+        # Historical max within the window only -- the trailing gap is
+        # reported separately as the *active* signal, never folded into the
+        # historical maximum (that folding is what latched a healed outage
+        # CRITICAL forever).
+        outage = max(historical_gaps) if historical_gaps else None
 
     return StationHealth(
         expected_issuances_per_day=n,
@@ -404,6 +421,7 @@ def _station_health(
             _iso(max(r.started_at for r in successful_runs)) if successful_runs else None
         ),
         longest_outage_hours=outage,
+        trailing_gap_hours=trailing_gap,
         run_attempts=len(runs),
     )
 
@@ -557,7 +575,14 @@ def generate_alerts(
             )
         )
 
+    # Active vs recovered (2026-07-23 production-gap investigation): an
+    # overdue-now collector is an ACTIVE outage (collector_outage); a gap
+    # that exists only in the bounded window's history while current runs
+    # are healthy is a RECOVERED incident (collector_outage_recovered) --
+    # real, worth surfacing, but not a page-someone-now condition. The
+    # recovered kind ages out naturally as the gap leaves the window.
     outage = health.longest_outage_hours
+    trailing = health.trailing_gap_hours
     if health.run_attempts == 0:
         alerts.append(
             CadenceAlert(
@@ -566,10 +591,26 @@ def generate_alerts(
                 expected=(
                     f"weather-collector run attempts at most {config.outage_threshold_hours}h apart"
                 ),
-                observed="no weather-collector run attempts recorded at all",
+                observed=(
+                    f"no weather-collector run attempts recorded in the last "
+                    f"{config.run_window_hours}h"
+                ),
                 recommended_action=(
                     "Start (or verify) the weather collector runner — forecast history "
                     "has no backfill source; every uncollected window is permanent loss."
+                ),
+            )
+        )
+    elif trailing is not None and trailing > config.outage_threshold_hours:
+        alerts.append(
+            CadenceAlert(
+                station_id=station,
+                kind="collector_outage",
+                expected=f"run attempts at most {config.outage_threshold_hours}h apart",
+                observed=f"newest run attempt is {trailing}h old — the collector is overdue now",
+                recommended_action=(
+                    "Restart or fix the weather collector runner and check `ops health`; "
+                    "confirm the supervising process is scheduled continuously."
                 ),
             )
         )
@@ -577,12 +618,16 @@ def generate_alerts(
         alerts.append(
             CadenceAlert(
                 station_id=station,
-                kind="collector_outage",
+                kind="collector_outage_recovered",
                 expected=f"run attempts at most {config.outage_threshold_hours}h apart",
-                observed=f"longest gap between run attempts (or since the last run): {outage}h",
+                observed=(
+                    f"a healed {outage}h gap within the last {config.run_window_hours}h; "
+                    "current runs are on schedule"
+                ),
                 recommended_action=(
-                    "Restart or fix the weather collector runner and check `ops health`; "
-                    "confirm the supervising process is scheduled continuously."
+                    "No action required now — a recovered incident record. Any forecast "
+                    "issuances missed inside the gap are permanent (no backfill source); "
+                    "this finding ages out of the window on its own."
                 ),
             )
         )
@@ -685,14 +730,18 @@ async def load_forecast_captures(session: AsyncSession) -> list[ForecastCapture]
     ]
 
 
-async def load_weather_runs(session: AsyncSession) -> list[RunAttempt]:
-    rows = (
-        await session.execute(
-            select(CollectorRun.started_at, CollectorRun.success).where(
-                CollectorRun.collector == "weather"
-            )
-        )
-    ).all()
+async def load_weather_runs(
+    session: AsyncSession, *, since: datetime | None = None
+) -> list[RunAttempt]:
+    """Weather-collector run attempts, optionally bounded to `since` (naive
+    UTC). The bound is what lets a healed outage age out of the cadence
+    check -- an unbounded load makes the historical maximum gap permanent."""
+    stmt = select(CollectorRun.started_at, CollectorRun.success).where(
+        CollectorRun.collector == "weather"
+    )
+    if since is not None:
+        stmt = stmt.where(CollectorRun.started_at >= since)
+    rows = (await session.execute(stmt)).all()
     return [RunAttempt(started_at=_ensure_utc(row.started_at), success=row.success) for row in rows]
 
 
@@ -709,7 +758,10 @@ async def run_forecast_cadence(
     resolved_config = config or CadenceConfig()
     resolved_now = _ensure_utc(now) if now is not None else utc_now()
     captures = await load_forecast_captures(session)
-    runs = await load_weather_runs(session)
+    run_since = (resolved_now - timedelta(hours=resolved_config.run_window_hours)).replace(
+        tzinfo=None
+    )
+    runs = await load_weather_runs(session, since=run_since)
     timezones = {s.station_id: s.timezone for s in list_stations()}
     return build_cadence_report(
         captures, runs, config=resolved_config, timezones=timezones, now=resolved_now

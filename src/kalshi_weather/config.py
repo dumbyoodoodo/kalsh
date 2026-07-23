@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     # A collector whose most recent recorded run is older than this many
     # multiples of its interval is reported stale by `ops health`.
     ops_stale_after_intervals: float = Field(default=3.0, alias="OPS_STALE_AFTER_INTERVALS")
+    # Forecast-cadence run-attempt analysis window (hours). Bounding this is
+    # what lets a healed outage age out of the cadence check: an unbounded
+    # scan kept a Jul 21 8.6h gap CRITICAL forever (2026-07-23 investigation).
+    cadence_run_window_hours: float = Field(default=72.0, alias="CADENCE_RUN_WINDOW_HOURS")
 
     # --- Monitoring & alerting (docs/runbooks/monitoring_alerting.md) ---
     # Transport `ops monitor` uses to deliver an alert on a WARNING/CRITICAL

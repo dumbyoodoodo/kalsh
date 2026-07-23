@@ -1072,6 +1072,7 @@ def ops_observatory(
                     weather_interval_seconds=settings.weather_interval_seconds,
                     price_sync_interval_seconds=settings.price_sync_interval_seconds,
                     stale_after_intervals=settings.ops_stale_after_intervals,
+                    cadence_run_window_hours=settings.cadence_run_window_hours,
                     backup_health=_backup_health_config(settings),
                 ),
             )
@@ -1128,6 +1129,7 @@ def ops_monitor(
                     weather_interval_seconds=settings.weather_interval_seconds,
                     price_sync_interval_seconds=settings.price_sync_interval_seconds,
                     stale_after_intervals=settings.ops_stale_after_intervals,
+                    cadence_run_window_hours=settings.cadence_run_window_hours,
                     backup_health=_backup_health_config(settings),
                 ),
             )

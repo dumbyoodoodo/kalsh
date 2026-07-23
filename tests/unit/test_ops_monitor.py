@@ -302,3 +302,29 @@ def test_try_acquire_lock_available_again_after_release(tmp_path) -> None:  # ty
     second = try_acquire_lock(lock_path)
     assert second is not None
     second.close()
+
+
+def test_deescalation_sequence_alerts_exactly_once() -> None:
+    """The production-gap deployment path: a latched CRITICAL de-escalates
+    to WARNING when healed history is reclassified -- exactly one alert
+    fires, then repeats at WARNING are suppressed, and a later recovery to
+    INFO fires exactly one more."""
+    prior = MonitorState(
+        severity=Severity.CRITICAL,
+        since="2026-07-21T00:00:00+00:00",
+        last_alert_at="2026-07-21T00:00:00+00:00",
+    )
+    first = decide_alert(Severity.WARNING, prior, now=NOW)
+    assert first.should_alert is True
+    assert first.transition == TRANSITION_SEVERITY_CHANGED
+
+    second = decide_alert(Severity.WARNING, first.new_state, now=NOW)
+    assert second.should_alert is False
+    assert second.transition == TRANSITION_NO_CHANGE
+
+    third = decide_alert(Severity.INFO, second.new_state, now=NOW)
+    assert third.should_alert is True
+    assert third.transition == TRANSITION_RECOVERED
+
+    fourth = decide_alert(Severity.INFO, third.new_state, now=NOW)
+    assert fourth.should_alert is False

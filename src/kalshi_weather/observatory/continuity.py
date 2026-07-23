@@ -89,6 +89,10 @@ class MissedCycleWindow:
     gap_start: datetime
     gap_end: datetime
     expected_interval_seconds: float
+    #: True for the window between the newest run and `now` -- the collector
+    #: is overdue *right now* (active failure). Historical windows between
+    #: two recorded runs are recovered incidents (the collector came back).
+    trailing: bool = False
 
     @property
     def hours(self) -> float:
@@ -159,6 +163,7 @@ def find_missed_run_cycles(
                     gap_start=ordered[-1].started_at,
                     gap_end=now,
                     expected_interval_seconds=interval_seconds,
+                    trailing=True,
                 )
             )
     return windows

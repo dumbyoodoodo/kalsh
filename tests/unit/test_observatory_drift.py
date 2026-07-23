@@ -67,6 +67,8 @@ def test_adapt_quality_finding_stringifies_samples() -> None:
         ("abnormal_cadence", Severity.WARNING),
         ("issuance_gap", Severity.WARNING),
         ("collector_outage", Severity.CRITICAL),
+        # a healed in-window gap is a recovered incident, never CRITICAL
+        ("collector_outage_recovered", Severity.WARNING),
         ("stalled_updates", Severity.CRITICAL),
     ],
 )

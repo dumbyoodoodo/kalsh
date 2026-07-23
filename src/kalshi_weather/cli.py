@@ -103,9 +103,12 @@ async def _open_session(settings: Settings) -> AsyncIterator[AsyncSession]:
 
 
 def _backup_dir(settings: Settings) -> Path:
-    """`<KALSHI_DATA_DIR>/backups/postgres` -- mirrors
-    `scripts/backup_postgres.sh`'s own resolution exactly (same relative/
-    absolute handling as `Settings.ensure_dataset_root`)."""
+    """Local backup destination -- `BACKUP_LOCAL_DIR` when set (the
+    launchd-writable internal-disk location; see `Settings.backup_local_dir`),
+    otherwise the original `<KALSHI_DATA_DIR>/backups/postgres` derivation.
+    Mirrors `scripts/backup_postgres.sh`'s own resolution exactly."""
+    if settings.backup_local_dir is not None:
+        return settings.backup_local_dir
     base = settings.data_dir if settings.data_dir.is_absolute() else Path.cwd() / settings.data_dir
     return base / "backups" / "postgres"
 

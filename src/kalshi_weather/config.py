@@ -105,6 +105,15 @@ class Settings(BaseSettings):
     # so leaving these unset changes no existing behavior.
     backup_db_user: str = Field(default="kalshi", alias="BACKUP_DB_USER")
     backup_db_name: str = Field(default="kalshi_weather", alias="BACKUP_DB_NAME")
+    # Local backup destination override. Unset (default): derive
+    # `<KALSHI_DATA_DIR>/backups/postgres` as before. Set explicitly (an
+    # absolute path) when the derived location is not writable from the
+    # launchd execution context -- macOS TCC denies launchd agents access to
+    # removable volumes, which silently broke every scheduled backup run
+    # (2026-07-23 production-gap investigation). An internal-disk local
+    # backup plus the S3 off-machine copy is the supported layout for that
+    # case; S3 is never a substitute for a successfully created local backup.
+    backup_local_dir: Path | None = Field(default=None, alias="BACKUP_LOCAL_DIR")
     # Off-machine copy destination. "none" (default): local backups only --
     # the audit finding stays PARTIALLY CLOSED, not CLOSED, until one of
     # these is configured. filesystem | s3 | none.

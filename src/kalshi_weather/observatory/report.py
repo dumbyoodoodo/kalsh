@@ -36,7 +36,14 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from kalshi_weather.domain.time import utc_now
-from kalshi_weather.observatory import continuity, drift, integrity, parsing, pit_consistency
+from kalshi_weather.observatory import (
+    backup_health,
+    continuity,
+    drift,
+    integrity,
+    parsing,
+    pit_consistency,
+)
 from kalshi_weather.observatory.severity import Finding, Severity, overall_severity
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
@@ -60,6 +67,11 @@ class ObservatoryConfig:
     stale_after_intervals: float
     continuity_window_days: int = DEFAULT_CONTINUITY_WINDOW_DAYS
     pit_window_days: int = pit_consistency.DEFAULT_WINDOW_DAYS
+    #: `None` (the default) skips backup-health checks entirely -- no
+    #: Finding at all, not even INFO -- so existing callers that never
+    #: heard of PostgreSQL backups are unaffected. Set by
+    #: `cli.py`'s `ops observatory`/`ops monitor` from `Settings`.
+    backup_health: backup_health.BackupHealthConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,5 +265,11 @@ async def build_observatory_report(
     findings.append(
         pit_consistency.summarize_point_in_time_integrity(pit_forecasts, pit_observations)
     )
+
+    # --- New: PostgreSQL backup health (docs/runbooks/backup_recovery.md).
+    # Reuses ops/monitor.py's exactly-once alert-transition semantics --
+    # folding these into the same report means no new alerting code.
+    if config.backup_health is not None:
+        findings.extend(backup_health.build_backup_findings(config.backup_health, now=now))
 
     return ObservatoryReport(generated_at=utc_now().isoformat(), findings=tuple(findings))

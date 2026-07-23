@@ -40,7 +40,8 @@ def highest(severities: list[Severity]) -> Severity:
 
 
 #: The five collection streams this observatory monitors, plus "platform"
-#: for cross-cutting checks (schema drift, station registry).
+#: for cross-cutting checks (schema drift, station registry) and "backup"
+#: for PostgreSQL backup/recovery health (docs/runbooks/backup_recovery.md).
 Domain = str
 DOMAINS: tuple[str, ...] = (
     "forecast",
@@ -49,6 +50,7 @@ DOMAINS: tuple[str, ...] = (
     "trade",
     "candle",
     "platform",
+    "backup",
 )
 
 

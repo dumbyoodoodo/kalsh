@@ -19,8 +19,16 @@ def test_highest_picks_max_rank_regardless_of_order() -> None:
     assert highest([Severity.INFO, Severity.INFO]) == Severity.INFO
 
 
-def test_domains_cover_five_streams_plus_platform() -> None:
-    assert set(DOMAINS) == {"forecast", "observation", "market", "trade", "candle", "platform"}
+def test_domains_cover_five_streams_plus_platform_and_backup() -> None:
+    assert set(DOMAINS) == {
+        "forecast",
+        "observation",
+        "market",
+        "trade",
+        "candle",
+        "platform",
+        "backup",
+    }
 
 
 def _finding(domain: str, severity: Severity, check: str = "x") -> Finding:

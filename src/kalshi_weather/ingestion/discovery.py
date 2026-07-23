@@ -17,8 +17,15 @@ from kalshi_weather.ingestion.validation import (
     validate_ticker,
 )
 from kalshi_weather.kalshi.client import KalshiClient
+from kalshi_weather.kalshi.models import Market
 from kalshi_weather.logging import get_logger
-from kalshi_weather.storage.repositories import save_event, save_market_snapshot, save_series
+from kalshi_weather.storage.models import MarketSnapshot
+from kalshi_weather.storage.repositories import (
+    SaveResult,
+    save_event,
+    save_market_snapshot,
+    save_series,
+)
 
 logger = get_logger(__name__)
 
@@ -29,6 +36,61 @@ class DiscoveryResult:
     market_snapshots_saved: int = 0
     market_snapshots_duplicate: int = 0
     invalid_items: int = 0
+
+
+async def persist_market_snapshot(
+    session: AsyncSession,
+    market: Market,
+    *,
+    raw_payload_id: int | None,
+) -> SaveResult[MarketSnapshot]:
+    """Persist one `Market` as a snapshot row -- the single shared mapping
+    from the wire model to `save_market_snapshot`, used by both open-market
+    discovery and settled-transition capture (ingestion/settlement_sync.py)
+    so the two paths can never drift apart.
+
+    Non-temperature climate markets can carry a non-numeric
+    expiration_value (e.g. empty string or a categorical outcome); a
+    malformed value is logged and stored as None, never raised -- one such
+    market must never abort the whole cycle (it did, pre-2026-07-21)."""
+    expiration_value: Decimal | None = None
+    if market.expiration_value is not None:
+        try:
+            expiration_value = Decimal(market.expiration_value)
+        except (InvalidOperation, ValueError):
+            logger.warning(
+                "discovery.market.expiration_value_not_numeric",
+                ticker=market.ticker,
+                value=market.expiration_value,
+            )
+
+    return await save_market_snapshot(
+        session,
+        market_ticker=market.ticker,
+        event_ticker=market.event_ticker,
+        market_type=market.market_type,
+        title=market.title,
+        subtitle=market.subtitle,
+        status=market.status,
+        yes_bid_cents=market.yes_bid,
+        yes_ask_cents=market.yes_ask,
+        last_price_cents=market.last_price,
+        volume=market.volume,
+        open_interest=market.open_interest,
+        close_time=market.close_time,
+        rules_primary=market.rules_primary,
+        rules_secondary=market.rules_secondary,
+        source_updated_at=market.updated_time,
+        result=market.result,
+        expiration_value=expiration_value,
+        settlement_ts=market.settlement_ts,
+        floor_strike=(
+            Decimal(str(market.floor_strike)) if market.floor_strike is not None else None
+        ),
+        cap_strike=(Decimal(str(market.cap_strike)) if market.cap_strike is not None else None),
+        strike_type=market.strike_type,
+        raw_payload_id=raw_payload_id,
+    )
 
 
 async def discover_and_snapshot_weather_markets(
@@ -112,54 +174,8 @@ async def discover_and_snapshot_weather_markets(
                     result.invalid_items += 1
                     continue
 
-                # Non-temperature climate markets can carry a non-numeric
-                # expiration_value (e.g. empty string or a categorical
-                # outcome). Per this module's own error-isolation contract, a
-                # malformed field is logged and stored as None -- one such
-                # market must never abort the whole discovery cycle (it did,
-                # pre-2026-07-21, which is why category-wide collection never
-                # got past the first malformed market).
-                expiration_value: Decimal | None = None
-                if market.expiration_value is not None:
-                    try:
-                        expiration_value = Decimal(market.expiration_value)
-                    except (InvalidOperation, ValueError):
-                        logger.warning(
-                            "discovery.market.expiration_value_not_numeric",
-                            ticker=market.ticker,
-                            value=market.expiration_value,
-                        )
-
-                save_result = await save_market_snapshot(
-                    session,
-                    market_ticker=market.ticker,
-                    event_ticker=market.event_ticker,
-                    market_type=market.market_type,
-                    title=market.title,
-                    subtitle=market.subtitle,
-                    status=market.status,
-                    yes_bid_cents=market.yes_bid,
-                    yes_ask_cents=market.yes_ask,
-                    last_price_cents=market.last_price,
-                    volume=market.volume,
-                    open_interest=market.open_interest,
-                    close_time=market.close_time,
-                    rules_primary=market.rules_primary,
-                    rules_secondary=market.rules_secondary,
-                    source_updated_at=market.updated_time,
-                    result=market.result,
-                    expiration_value=expiration_value,
-                    settlement_ts=market.settlement_ts,
-                    floor_strike=(
-                        Decimal(str(market.floor_strike))
-                        if market.floor_strike is not None
-                        else None
-                    ),
-                    cap_strike=(
-                        Decimal(str(market.cap_strike)) if market.cap_strike is not None else None
-                    ),
-                    strike_type=market.strike_type,
-                    raw_payload_id=client.last_raw_payload_id,
+                save_result = await persist_market_snapshot(
+                    session, market, raw_payload_id=client.last_raw_payload_id
                 )
                 if save_result.was_duplicate:
                     result.market_snapshots_duplicate += 1

@@ -371,6 +371,8 @@ def collector_run(
                 ),
                 stop_event=stop_event,
                 max_cycles=1 if once else None,
+                settle_check_limit=settings.collector_settle_check_limit,
+                settle_check_days=settings.collector_settle_check_days,
             )
         finally:
             await engine.dispose()
@@ -1256,6 +1258,8 @@ def ops_run(
                     trade_bootstrap_lookback_days=settings.initial_trade_bootstrap_lookback_days,
                     interval_seconds=kalshi_interval or settings.collector_interval_seconds,
                     stop_event=stop_event,
+                    settle_check_limit=settings.collector_settle_check_limit,
+                    settle_check_days=settings.collector_settle_check_days,
                 ),
                 run_weather_collector_loop(
                     session_factory=session_factory,

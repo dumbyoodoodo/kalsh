@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     initial_trade_bootstrap_lookback_days: int = Field(
         default=30, alias="INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS"
     )
+    # Settled-transition capture (ingestion/settlement_sync.py). The open-only
+    # discovery filter means a market leaves the discovery list the moment it
+    # closes -- before a final result-bearing snapshot exists -- which starves
+    # price sync, retention monitoring, and settlement labels (2026-07-23
+    # production-gap investigation). Each cycle re-checks a bounded number of
+    # recently-tracked tickers that vanished from the open list; the queue is
+    # data-derived (latest snapshot has no result yet) and self-draining.
+    collector_settle_check_limit: int = Field(default=25, alias="COLLECTOR_SETTLE_CHECK_LIMIT")
+    collector_settle_check_days: int = Field(default=7, alias="COLLECTOR_SETTLE_CHECK_DAYS")
     # Proactive client-side request spacing (seconds). Kalshi's default matches
     # its reference client (see kalshi/client.py); the weather value paces
     # NWS/IEM requests as a courtesy to free public APIs.

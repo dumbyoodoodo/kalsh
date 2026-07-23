@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.discovery import discover_and_snapshot_weather_markets
+from kalshi_weather.ingestion.settlement_sync import capture_settled_transitions
 from kalshi_weather.ingestion.validation import MalformedPayloadError, validate_price_cents
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.logging import get_logger
@@ -38,6 +39,9 @@ class CycleStats:
     trades_saved: int = 0
     trades_duplicate: int = 0
     trades_bootstrapped: int = 0
+    settle_checks: int = 0
+    settled_captured: int = 0
+    settle_errors: int = 0
     invalid_items: int = 0
     errors: int = 0
 
@@ -52,6 +56,8 @@ async def run_collection_cycle(
     category: str,
     market_status: str,
     trade_bootstrap_lookback_days: int,
+    settle_check_limit: int,
+    settle_check_days: int,
 ) -> CycleStats:
     """Run one full discovery + snapshot + trade collection pass.
 
@@ -71,6 +77,12 @@ async def run_collection_cycle(
     fetch for an un-checkpointed ticker is bounded to the last
     `trade_bootstrap_lookback_days` days; the checkpoint established from
     those trades makes every subsequent cycle incremental as before.
+
+    After the per-market pass, a bounded settled-transition capture
+    (ingestion/settlement_sync.py) re-checks up to `settle_check_limit`
+    recently-tracked tickers that vanished from the open list, so a
+    market's final result-bearing snapshot is recorded even though
+    discovery is open-status-filtered.
     """
     stats = CycleStats()
 
@@ -152,6 +164,23 @@ async def run_collection_cycle(
             logger.exception("collector.trades.failed", ticker=ticker)
             stats.errors += 1
 
+    # Settled-transition capture: isolated like everything else -- a failure
+    # here is logged and counted, never allowed to fail the cycle.
+    try:
+        settle_stats = await capture_settled_transitions(
+            client,
+            session,
+            open_tickers=set(discovery.market_tickers),
+            limit=settle_check_limit,
+            recent_days=settle_check_days,
+        )
+        stats.settle_checks = settle_stats.checked
+        stats.settled_captured = settle_stats.settled_captured
+        stats.settle_errors = settle_stats.errors
+    except Exception:
+        logger.exception("collector.settle_capture.pass_failed")
+        stats.errors += 1
+
     return stats
 
 
@@ -165,6 +194,8 @@ async def run_collector_loop(
     interval_seconds: float,
     stop_event: asyncio.Event,
     max_cycles: int | None = None,
+    settle_check_limit: int = 25,
+    settle_check_days: int = 7,
 ) -> None:
     """Run collection cycles until `stop_event` is set (or `max_cycles` is
     reached, for `--once`/testing). A fresh session and client are used per
@@ -189,6 +220,8 @@ async def run_collector_loop(
                         category=category,
                         market_status=market_status,
                         trade_bootstrap_lookback_days=trade_bootstrap_lookback_days,
+                        settle_check_limit=settle_check_limit,
+                        settle_check_days=settle_check_days,
                     )
                     run_stats = stats.as_dict()
                     run_requests, run_retries = client.requests_attempted, client.retries

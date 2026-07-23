@@ -180,9 +180,7 @@ def make_high_history_handler():  # type: ignore[no-untyped-def]
                 200, json={"markets": [_market(HIGH_HISTORY_TICKER)], "cursor": ""}
             )
         if path.endswith(f"/markets/{HIGH_HISTORY_TICKER}/orderbook"):
-            return httpx.Response(
-                200, json={"orderbook_fp": {"yes_dollars": [], "no_dollars": []}}
-            )
+            return httpx.Response(200, json={"orderbook_fp": {"yes_dollars": [], "no_dollars": []}})
         if path.endswith("/markets/trades"):
             if "min_ts" not in params:
                 # Simulates a market with >100,000 trades: every page returns
@@ -257,6 +255,8 @@ async def test_run_collection_cycle_saves_markets_orderbooks_and_trades(
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
 
     assert stats.markets_discovered == 2
@@ -287,6 +287,8 @@ async def test_run_collection_cycle_second_run_dedupes_and_uses_incremental_min_
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
     async with _client(handler) as client:
         stats = await run_collection_cycle(
@@ -295,6 +297,8 @@ async def test_run_collection_cycle_second_run_dedupes_and_uses_incremental_min_
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
 
     assert first_stats.trades_bootstrapped == 2
@@ -329,6 +333,8 @@ async def test_bootstrap_min_ts_reflects_configured_lookback_window(
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=lookback_days,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
     after = utc_now()
 
@@ -364,6 +370,8 @@ async def test_high_history_market_bootstraps_instead_of_full_history(
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
 
     assert stats.errors == 0
@@ -389,6 +397,8 @@ async def test_repeated_cycles_after_bootstrap_are_idempotent(session: AsyncSess
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
     async with _client(handler) as client:
         second = await run_collection_cycle(
@@ -397,6 +407,8 @@ async def test_repeated_cycles_after_bootstrap_are_idempotent(session: AsyncSess
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
     async with _client(handler) as client:
         third = await run_collection_cycle(
@@ -405,6 +417,8 @@ async def test_repeated_cycles_after_bootstrap_are_idempotent(session: AsyncSess
             category="Climate and Weather",
             market_status="open",
             trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
         )
 
     assert first.trades_bootstrapped == 2
@@ -517,3 +531,186 @@ async def test_run_collector_loop_records_run_metrics() -> None:
     assert all(r.success for r in runs)
     assert all(r.requests_attempted > 0 for r in runs)
     assert runs[0].stats_json["markets_discovered"] == 2
+
+
+# --- Settled-transition capture (ingestion/settlement_sync.py) ---------------
+
+
+def make_settling_handler(state: dict):  # type: ignore[no-untyped-def]
+    """Cycle-controllable handler: `state['open']` lists tickers the
+    open-market discovery returns; `state['settled']` maps ticker ->
+    settled market payload served by GET /markets/{ticker};
+    `state['get_market_calls']` counts per-ticker fetches."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+
+        if path.endswith("/series"):
+            return httpx.Response(
+                200,
+                json={
+                    "series": [
+                        {"ticker": "KXHIGHNY", "category": "Climate and Weather", "title": "t"}
+                    ],
+                    "cursor": "",
+                },
+            )
+        if path.endswith("/events"):
+            return httpx.Response(
+                200,
+                json={
+                    "events": [
+                        {
+                            "event_ticker": EVENT_TICKER,
+                            "series_ticker": "KXHIGHNY",
+                            "category": "Climate and Weather",
+                            "title": "t",
+                        }
+                    ],
+                    "cursor": "",
+                },
+            )
+        if path.endswith("/markets"):
+            return httpx.Response(
+                200,
+                json={"markets": [_market(t) for t in state["open"]], "cursor": ""},
+            )
+        if path.endswith("/orderbook"):
+            return httpx.Response(200, json={"orderbook_fp": {"yes_dollars": [], "no_dollars": []}})
+        if path.endswith("/markets/trades"):
+            return httpx.Response(200, json={"trades": [], "cursor": ""})
+        # GET /markets/{ticker} -- the settled-transition re-check
+        ticker = path.rsplit("/", 1)[-1]
+        state["get_market_calls"][ticker] = state["get_market_calls"].get(ticker, 0) + 1
+        if ticker in state["settled"]:
+            return httpx.Response(200, json={"market": state["settled"][ticker]})
+        if ticker in state.get("gone", set()):
+            return httpx.Response(404, json={"error": "not found"})
+        return httpx.Response(200, json={"market": _market(ticker)})
+
+    return handler
+
+
+def _settled_market(ticker: str) -> dict:
+    payload = _market(ticker)
+    payload["status"] = "finalized"
+    payload["result"] = "yes"
+    payload["expiration_value"] = "90.00"
+    payload["settlement_ts"] = "2026-07-22T13:00:00Z"
+    return payload
+
+
+async def _cycle(client: KalshiClient, session: AsyncSession, **overrides):  # type: ignore[no-untyped-def]
+    kwargs = dict(
+        category="Climate and Weather",
+        market_status="open",
+        trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+        settle_check_limit=25,
+        settle_check_days=7,
+    )
+    kwargs.update(overrides)
+    return await run_collection_cycle(client, session, **kwargs)
+
+
+async def test_recently_open_market_gets_final_settled_snapshot(
+    session: AsyncSession,
+) -> None:
+    """A market that leaves the open list is re-fetched and its final
+    result-bearing snapshot captured -- the exact starvation that stalled
+    settled-market/candle capture after Jul 21 (production-gap fix)."""
+    state = {
+        "open": [GOOD_TICKER, BAD_ORDERBOOK_TICKER],
+        "settled": {},
+        "get_market_calls": {},
+    }
+    async with _client(make_settling_handler(state)) as client:
+        first = await _cycle(client, session)
+    assert first.settle_checks == 0  # everything still open -> nothing pending
+
+    # market settles and vanishes from the open list
+    state["open"] = [GOOD_TICKER]
+    state["settled"][BAD_ORDERBOOK_TICKER] = _settled_market(BAD_ORDERBOOK_TICKER)
+    async with _client(make_settling_handler(state)) as client:
+        second = await _cycle(client, session)
+
+    assert second.settle_checks == 1
+    assert second.settled_captured == 1
+    assert second.settle_errors == 0
+
+    from sqlalchemy import select
+
+    from kalshi_weather.storage.models import MarketSnapshot
+
+    rows = (
+        await session.scalars(
+            select(MarketSnapshot)
+            .where(MarketSnapshot.market_ticker == BAD_ORDERBOOK_TICKER)
+            .order_by(MarketSnapshot.id)
+        )
+    ).all()
+    assert rows[-1].result == "yes"
+    assert rows[-1].settlement_ts is not None
+
+    # the settled market now qualifies as a price-backfill candidate --
+    # the exact hand-off that feeds candle sync
+    from kalshi_weather.ingestion.price_backfill import select_backfill_candidates
+
+    candidates = await select_backfill_candidates(session)
+    assert BAD_ORDERBOOK_TICKER in {c.market_ticker for c in candidates}
+
+
+async def test_settle_capture_is_idempotent_and_self_draining(
+    session: AsyncSession,
+) -> None:
+    """Once the final snapshot is captured, the ticker leaves the pending
+    queue: later cycles never re-fetch it, and no duplicate snapshot rows
+    appear."""
+    state = {
+        "open": [GOOD_TICKER, BAD_ORDERBOOK_TICKER],
+        "settled": {},
+        "get_market_calls": {},
+    }
+    async with _client(make_settling_handler(state)) as client:
+        await _cycle(client, session)
+    state["open"] = [GOOD_TICKER]
+    state["settled"][BAD_ORDERBOOK_TICKER] = _settled_market(BAD_ORDERBOOK_TICKER)
+    async with _client(make_settling_handler(state)) as client:
+        await _cycle(client, session)
+        third = await _cycle(client, session)
+
+    assert state["get_market_calls"][BAD_ORDERBOOK_TICKER] == 1  # fetched exactly once
+    assert third.settle_checks == 0
+
+    from sqlalchemy import func, select
+
+    from kalshi_weather.storage.models import MarketSnapshot
+
+    settled_rows = await session.scalar(
+        select(func.count())
+        .select_from(MarketSnapshot)
+        .where(
+            MarketSnapshot.market_ticker == BAD_ORDERBOOK_TICKER,
+            MarketSnapshot.result == "yes",
+        )
+    )
+    assert settled_rows == 1
+
+
+async def test_settle_capture_bound_and_404_isolation(session: AsyncSession) -> None:
+    """The per-cycle bound is respected, and a vanished (404) market is
+    counted as an error without aborting the cycle."""
+    state = {
+        "open": [GOOD_TICKER, BAD_ORDERBOOK_TICKER],
+        "settled": {},
+        "get_market_calls": {},
+        "gone": set(),
+    }
+    async with _client(make_settling_handler(state)) as client:
+        await _cycle(client, session)
+    state["open"] = []
+    state["gone"] = {GOOD_TICKER, BAD_ORDERBOOK_TICKER}
+    async with _client(make_settling_handler(state)) as client:
+        bounded = await _cycle(client, session, settle_check_limit=1)
+    assert bounded.settle_checks == 1  # bound respected
+    assert bounded.settle_errors == 1  # 404 counted, cycle survived
+    assert bounded.errors == 0  # not a cycle-level failure

@@ -714,3 +714,137 @@ async def test_settle_capture_bound_and_404_isolation(session: AsyncSession) -> 
     assert bounded.settle_checks == 1  # bound respected
     assert bounded.settle_errors == 1  # 404 counted, cycle survived
     assert bounded.errors == 0  # not a cycle-level failure
+
+
+# --- Malformed-Decimal item isolation (models per-item quarantine) -----------
+
+
+def make_malformed_market_handler():  # type: ignore[no-untyped-def]
+    """One market in the page carries an unparseable *_dollars value -- the
+    exact class of payload whose `decimal.InvalidOperation` escaped pydantic
+    and aborted the whole 2026-07-21 23:03 UTC collection cycle."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/series"):
+            return httpx.Response(
+                200,
+                json={
+                    "series": [
+                        {"ticker": "KXHIGHNY", "category": "Climate and Weather", "title": "t"}
+                    ],
+                    "cursor": "",
+                },
+            )
+        if path.endswith("/events"):
+            return httpx.Response(
+                200,
+                json={
+                    "events": [
+                        {
+                            "event_ticker": EVENT_TICKER,
+                            "series_ticker": "KXHIGHNY",
+                            "category": "Climate and Weather",
+                            "title": "t",
+                        }
+                    ],
+                    "cursor": "",
+                },
+            )
+        if path.endswith("/markets"):
+            bad = dict(_market(BAD_ORDERBOOK_TICKER))
+            del bad["yes_bid"]
+            bad["yes_bid_dollars"] = "not-a-number"  # InvalidOperation territory
+            return httpx.Response(200, json={"markets": [_market(GOOD_TICKER), bad], "cursor": ""})
+        if path.endswith("/orderbook"):
+            return httpx.Response(200, json={"orderbook_fp": {"yes_dollars": [], "no_dollars": []}})
+        if path.endswith("/markets/trades"):
+            return httpx.Response(200, json={"trades": [], "cursor": ""})
+        # settle-capture re-check of the quarantined ticker: still open
+        return httpx.Response(200, json={"market": _market(path.rsplit("/", 1)[-1])})
+
+    return handler
+
+
+async def test_malformed_decimal_market_is_quarantined_not_fatal(
+    session: AsyncSession,
+) -> None:
+    """One malformed monetary field quarantines only its own item: the cycle
+    completes, and the valid market from the same page is stored."""
+    async with _client(make_malformed_market_handler()) as client:
+        stats = await run_collection_cycle(
+            client,
+            session,
+            category="Climate and Weather",
+            market_status="open",
+            trade_bootstrap_lookback_days=DEFAULT_LOOKBACK_DAYS,
+            settle_check_limit=25,
+            settle_check_days=7,
+        )
+
+    assert stats.errors == 0  # the cycle did NOT abort
+    assert stats.markets_discovered == 1  # only the valid market survived
+    assert stats.market_snapshots_saved == 1
+
+    from sqlalchemy import select
+
+    from kalshi_weather.storage.models import MarketSnapshot
+
+    tickers = set((await session.scalars(select(MarketSnapshot.market_ticker))).all())
+    assert GOOD_TICKER in tickers
+    assert BAD_ORDERBOOK_TICKER not in tickers  # invalid value never coerced/stored
+
+
+def test_dollars_to_cents_raises_value_error_not_invalid_operation() -> None:
+    """The 2026-07-21 escape route: `decimal.InvalidOperation` is an
+    ArithmeticError, which pydantic does NOT wrap into ValidationError. The
+    helpers must raise ValueError so validation captures the failure at the
+    item level."""
+    from decimal import InvalidOperation
+
+    from kalshi_weather.kalshi.models import _dollars_to_cents, _fp_to_int
+
+    for fn in (_dollars_to_cents, _fp_to_int):
+        try:
+            fn("garbage")
+        except ValueError:
+            pass  # includes never being InvalidOperation
+        except InvalidOperation:  # pragma: no cover
+            raise AssertionError(f"{fn.__name__} leaked InvalidOperation") from None
+        else:  # pragma: no cover
+            raise AssertionError(f"{fn.__name__} accepted garbage")
+
+
+def test_malformed_trade_is_quarantined_valid_trade_stored() -> None:
+    """Per-item salvage on the trades list: the malformed trade is rejected
+    with a structured record; the valid one parses."""
+    from kalshi_weather.kalshi.models import TradeListResponse
+
+    payload = {
+        "trades": [
+            {
+                "trade_id": "ok-1",
+                "ticker": GOOD_TICKER,
+                "created_time": "2026-07-20T12:00:00Z",
+                "yes_price_dollars": "0.4200",
+                "no_price_dollars": "0.5800",
+                "count_fp": "2.00",
+                "taker_side": "yes",
+            },
+            {
+                "trade_id": "bad-1",
+                "ticker": GOOD_TICKER,
+                "created_time": "2026-07-20T12:00:01Z",
+                "yes_price_dollars": "NaN-garbage",
+                "no_price_dollars": "0.5800",
+                "count_fp": "2.00",
+                "taker_side": "yes",
+            },
+        ],
+        "cursor": "",
+    }
+    parsed = TradeListResponse.model_validate(payload)
+    assert [t.trade_id for t in parsed.trades] == ["ok-1"]
+    assert len(parsed.rejected_items) == 1
+    assert parsed.rejected_items[0]["index"] == 1
+    assert "malformed dollar amount" in parsed.rejected_items[0]["error"]

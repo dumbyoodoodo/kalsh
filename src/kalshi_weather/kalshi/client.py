@@ -32,6 +32,9 @@ from kalshi_weather.kalshi.models import (
     TradeListResponse,
 )
 from kalshi_weather.kalshi.pagination import paginate
+from kalshi_weather.logging import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RETRIES = 3
@@ -254,6 +257,17 @@ class KalshiClient:
                 params["cursor"] = cursor
             payload = await self._request("GET", "/markets", params=params)
             parsed = MarketListResponse.model_validate(payload)
+            for rejected in parsed.rejected_items:
+                # Structured parsing-failure record; the raw payload was
+                # already persisted verbatim by the sink before validation.
+                logger.warning(
+                    "kalshi.market_item_rejected",
+                    endpoint="/markets",
+                    index=rejected.get("index"),
+                    ticker=(rejected.get("item") or {}).get("ticker"),
+                    error=str(rejected.get("error"))[:300],
+                    raw_payload_id=self.last_raw_payload_id,
+                )
             return parsed.markets, parsed.cursor
 
         return [item async for item in paginate(fetch_page)]
@@ -284,6 +298,15 @@ class KalshiClient:
                 params["cursor"] = cursor
             payload = await self._request("GET", "/markets/trades", params=params)
             parsed = TradeListResponse.model_validate(payload)
+            for rejected in parsed.rejected_items:
+                logger.warning(
+                    "kalshi.trade_item_rejected",
+                    endpoint="/markets/trades",
+                    index=rejected.get("index"),
+                    trade_id=(rejected.get("item") or {}).get("trade_id"),
+                    error=str(rejected.get("error"))[:300],
+                    raw_payload_id=self.last_raw_payload_id,
+                )
             return parsed.trades, parsed.cursor
 
         return [item async for item in paginate(fetch_page)]

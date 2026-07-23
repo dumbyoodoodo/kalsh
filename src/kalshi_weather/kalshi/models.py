@@ -18,20 +18,55 @@ for later inspection instead of exceptions.
 """
 
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 
 def _dollars_to_cents(value: str) -> int:
-    """Convert a Kalshi decimal-dollar-string price (e.g. "0.4500") to integer cents."""
-    return int((Decimal(value) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    """Convert a Kalshi decimal-dollar-string price (e.g. "0.4500") to integer cents.
+
+    A malformed string raises ValueError (never `decimal.InvalidOperation`):
+    pydantic wraps ValueError into a per-field ValidationError, whereas
+    InvalidOperation -- an ArithmeticError subclass -- escapes validation
+    entirely and aborted a whole collection cycle on 2026-07-21. Invalid
+    monetary values are rejected, never coerced."""
+    try:
+        return int((Decimal(value) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    except InvalidOperation as exc:
+        raise ValueError(f"malformed dollar amount: {value!r}") from exc
 
 
 def _fp_to_int(value: str) -> int:
-    """Convert a Kalshi fixed-point quantity string (e.g. "2.00") to an int."""
-    return int(Decimal(value).to_integral_value(rounding=ROUND_HALF_UP))
+    """Convert a Kalshi fixed-point quantity string (e.g. "2.00") to an int.
+    Malformed input raises ValueError -- see `_dollars_to_cents`."""
+    try:
+        return int(Decimal(value).to_integral_value(rounding=ROUND_HALF_UP))
+    except InvalidOperation as exc:
+        raise ValueError(f"malformed fixed-point quantity: {value!r}") from exc
+
+
+def _salvage_items(
+    items: Any, item_model: type["KalshiModel"]
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Validate list items individually; return (valid, rejected).
+
+    One malformed item (e.g. an unparseable `*_dollars` field) must
+    quarantine only itself, never the rest of the page or the cycle. The
+    rejected raw item and its error are surfaced so the caller can log a
+    structured parsing failure; the raw payload has already been persisted
+    verbatim by the client's raw-payload sink before validation runs."""
+    if not isinstance(items, list):
+        return items, []
+    valid: list[Any] = []
+    rejected: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        try:
+            valid.append(item_model.model_validate(item))
+        except (ValidationError, ValueError) as exc:
+            rejected.append({"index": index, "error": str(exc), "item": item})
+    return valid, rejected
 
 
 def _apply_dollar_field_map(data: dict[str, Any], field_map: dict[str, str]) -> None:
@@ -134,6 +169,17 @@ class Market(KalshiModel):
 class MarketListResponse(KalshiModel):
     markets: list[Market] = []
     cursor: str | None = None
+    #: Raw items that failed per-item validation (with index + error),
+    #: populated by `_quarantine_invalid` -- callers log and count these.
+    rejected_items: list[dict[str, Any]] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _quarantine_invalid(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "markets" in data:
+            data = dict(data)
+            data["markets"], data["rejected_items"] = _salvage_items(data["markets"], Market)
+        return data
 
 
 class MarketResponse(KalshiModel):
@@ -202,6 +248,16 @@ class Trade(KalshiModel):
 class TradeListResponse(KalshiModel):
     trades: list[Trade] = []
     cursor: str | None = None
+    #: See `MarketListResponse.rejected_items`.
+    rejected_items: list[dict[str, Any]] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _quarantine_invalid(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "trades" in data:
+            data = dict(data)
+            data["trades"], data["rejected_items"] = _salvage_items(data["trades"], Trade)
+        return data
 
 
 class CandlestickPriceBlock(KalshiModel):

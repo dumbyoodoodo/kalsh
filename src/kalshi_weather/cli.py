@@ -134,8 +134,16 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
     key_id: str | None = None
     private_key: rsa.RSAPrivateKey | None = None
     if settings.kalshi_env == Environment.DEMO and settings.kalshi_demo_private_key:
-        key_id = settings.kalshi_demo_api_key_id
-        private_key = load_private_key_from_setting(settings.kalshi_demo_private_key)
+        # Unwrapped here and nowhere else: this is the Kalshi signing boundary.
+        # Neither value is stored, logged, or re-raised beyond this call.
+        key_id = (
+            settings.kalshi_demo_api_key_id.get_secret_value()
+            if settings.kalshi_demo_api_key_id
+            else None
+        )
+        private_key = load_private_key_from_setting(
+            settings.kalshi_demo_private_key.get_secret_value()
+        )
 
     raw_payload_sink = None
     if session is not None:
@@ -1141,8 +1149,11 @@ def ops_monitor(
         if decision.should_alert:
             telegram = None
             if settings.alert_telegram_bot_token and settings.alert_telegram_chat_id:
+                # Unwrapped here and nowhere else: TelegramConfig is consumed
+                # immediately by send_alert, which puts the token only in the
+                # request URL (ops/alerting.py) and never in a log or result.
                 telegram = alerting.TelegramConfig(
-                    bot_token=settings.alert_telegram_bot_token,
+                    bot_token=settings.alert_telegram_bot_token.get_secret_value(),
                     chat_id=settings.alert_telegram_chat_id,
                 )
             message = monitor.format_alert_message(report, decision)

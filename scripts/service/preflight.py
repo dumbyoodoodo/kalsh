@@ -16,9 +16,13 @@ Exit 0 = safe to start. Exit 1 = do not start (launchd will retry).
 """
 
 import sys
+from typing import NoReturn
 
 
-def fail(msg: str) -> None:
+def fail(msg: str) -> NoReturn:
+    """Always exits. Typed `NoReturn` so type checkers narrow the optional
+    settings guarded by it -- e.g. `kalshi_demo_private_key` is provably
+    non-None at the `.get_secret_value()` call below."""
     print(f"PREFLIGHT FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -46,7 +50,10 @@ def main() -> None:
     try:
         from kalshi_weather.kalshi.auth import load_private_key_from_setting
 
-        load_private_key_from_setting(settings.kalshi_demo_private_key)
+        # Unwrapped here and nowhere else: the path-or-inline PEM parser is
+        # the only thing in preflight that needs plaintext. The failure branch
+        # below reports the exception *type* only, never the value.
+        load_private_key_from_setting(settings.kalshi_demo_private_key.get_secret_value())
     except Exception as exc:
         # Never echo key material or paths derived from it beyond the setting name.
         fail(f"KALSHI_DEMO_PRIVATE_KEY did not load: {type(exc).__name__}")

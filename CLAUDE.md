@@ -94,6 +94,18 @@ The off-machine S3 backup destination (`docs/runbooks/backup_recovery.md`) relie
 - **Never run any command whose purpose is to reveal credential contents** — this includes but is not limited to `cat`/`less`/`head`/`tail`/`grep`/`sed`/`awk` against a credential file, `cp` or `base64` of a credential file, or any equivalent achieved through a different tool, a pipe, a here-doc, or a scripting language's file-read call.
 - **Never use `--dangerously-skip-permissions` for this repository.** This bypasses the permission system (including the `.claude/settings.json` deny rules below) entirely, so it is a human-only policy control — nothing in `.claude/settings.json` can technically block a flag that disables `.claude/settings.json`.
 
+### Never handle whole `Settings` objects loosely
+
+On 2026-07-23 a SQLAlchemy `ArgumentError` formatted an entire `Settings` instance into its own message ("AsyncEngine expected, got Settings(...)") after a mistyped argument in an ad-hoc diagnostic script, disclosing a live Telegram bot token. The call that triggered it looked completely benign; the disclosure happened in a *library's failure path*. No path-based deny rule could have prevented it, because nothing read a credential file — the value was already in process memory.
+
+The primary defence is therefore type-level, in `config.py`: credential-bearing fields are `SecretStr`, `Settings.__repr_args__` redacts anything credential-shaped by name, and `hide_input_in_errors=True` stops pydantic echoing rejected values. The rules below are defence-in-depth on top of that, **not a substitute for it** — a new sensitive field must still be typed `SecretStr`.
+
+- **Never print, log, serialize, interpolate, or f-string a whole `Settings` object**, and never pass one into an ad-hoc diagnostic script where an unexpected exception could format it. Request only the specific non-sensitive fields needed.
+- **Never call `.get_secret_value()` for inspection, debugging, or verification.** It exists solely to hand plaintext to the API client or parser that requires it, at the narrowest possible boundary (Telegram send, Kalshi signing setup, PEM path-or-inline parsing). Never assign its result to a long-lived variable, log it, or include it in an exception.
+- **Never add a credential, token, key, or account identifier as a plain `str` field.** Type it `SecretStr` and unwrap at the point of use. The `__repr_args__` name-pattern guard is a backstop for mistakes, not the design.
+- **Never read `.env`, `.env.*` (other than `.env.example`), `secrets/`, or any `*.pem`/`*.key` file**, by any tool or command, for any reason — mechanically enforced by `.claude/settings.json` deny rules alongside the AWS rules above.
+- When a secret is disclosed anyway, **say so plainly and recommend rotation** rather than quietly moving on. Hardening does not un-leak a value that already reached a transcript or log.
+
 ## Storage philosophy
 
 Source code and historical datasets are separate assets with separate lifecycles: code is disposable and rebuildable from git; collected data is not. Storage locations follow from that split:

@@ -37,9 +37,9 @@ def test_env_file_supports_multiline_quoted_pem_value(tmp_path, monkeypatch) -> 
     settings = Settings(_env_file=env_path)  # type: ignore[call-arg]
 
     assert settings.kalshi_demo_private_key is not None
-    assert settings.kalshi_demo_private_key.strip() == pem_text.strip()
+    assert settings.kalshi_demo_private_key.get_secret_value().strip() == pem_text.strip()
 
-    loaded = load_private_key_from_setting(settings.kalshi_demo_private_key)
+    loaded = load_private_key_from_setting(settings.kalshi_demo_private_key.get_secret_value())
     assert isinstance(loaded, rsa.RSAPrivateKey)
 
 

@@ -5,13 +5,44 @@ value must be supplied explicitly to select ``production``. Live order
 submission additionally requires ``enable_live_trading`` and
 ``live_trading_confirm`` to both be true, on top of it not existing as code
 yet in this milestone.
+
+**Secret handling.** Credential-bearing fields are typed `SecretStr`, so they
+render as ``**********`` in ``repr()``/``str()``, pydantic validation errors,
+structured logs, and any third-party formatting of this object. That last case
+is the one that matters most and the reason a type-level fix was chosen over a
+convention: on 2026-07-23 a SQLAlchemy ``ArgumentError`` formatted a whole
+``Settings`` instance into its message ("AsyncEngine expected, got
+Settings(...)") after a mistyped call argument, disclosing a live Telegram bot
+token. No call-site rule could have prevented that -- the leak was in a
+library's *failure* path, from a call that looked entirely benign. Only making
+the values unprintable at the source closes it.
+
+Read a secret with ``.get_secret_value()``, and only at the narrowest possible
+boundary (immediately before the API call or parser that needs plaintext).
+Never unwrap for inspection, logging, or debugging.
 """
 
+import re
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Defence-in-depth for `Settings.__repr_args__`. `SecretStr` protects the
+#: fields we have classified; this catches a *future* field that carries a
+#: credential but was declared a plain `str` -- the failure mode that produced
+#: the 2026-07-23 disclosure in the first place. It also covers `database_url`,
+#: which embeds a password but is deliberately left `str` (38 call sites,
+#: including `alembic/env.py` and public `database_url: str` signatures in
+#: `dataset/pipeline.py` and `ops/snapshot.py`); masking it here fixes the
+#: actual leak vector without pushing `SecretStr` into public APIs.
+_SENSITIVE_NAME_PATTERN = re.compile(
+    r"token|secret|password|passwd|private_key|api_key|credential|database_url|dsn",
+    re.IGNORECASE,
+)
+_REDACTED = "**********"
 
 
 class Environment(StrEnum):
@@ -31,6 +62,11 @@ class Settings(BaseSettings):
         # `KALSHI_DATA_DIR=` (the .env.example placeholder style) would parse
         # to Path(".") and count as explicitly configured.
         env_ignore_empty=True,
+        # Pydantic embeds the rejected `input_value` in ValidationError text by
+        # default, which for a *secret* field means the raw value is echoed on
+        # a type failure. Suppressed model-wide: an error here should say which
+        # setting is wrong, never what was supplied.
+        hide_input_in_errors=True,
     )
 
     kalshi_env: Environment = Field(default=Environment.DEMO, alias="KALSHI_ENV")
@@ -49,10 +85,15 @@ class Settings(BaseSettings):
         alias="KALSHI_DEMO_BASE_URL",
     )
 
-    kalshi_demo_api_key_id: str | None = Field(default=None, alias="KALSHI_DEMO_API_KEY_ID")
+    # SecretStr: an account identifier, which CLAUDE.md's "Data and credential
+    # safety" names alongside credentials as never-to-be-exposed. It also
+    # unwraps at the same boundary as the private key below.
+    kalshi_demo_api_key_id: SecretStr | None = Field(default=None, alias="KALSHI_DEMO_API_KEY_ID")
     # Either raw PEM text pasted directly into .env, or a path to a PEM file
-    # on disk -- see kalshi.auth.load_private_key_from_setting.
-    kalshi_demo_private_key: str | None = Field(default=None, alias="KALSHI_DEMO_PRIVATE_KEY")
+    # on disk -- see kalshi.auth.load_private_key_from_setting. SecretStr
+    # because of the inline case: a pasted PEM would otherwise appear in full
+    # in any repr of this object. The path case is harmless to mask.
+    kalshi_demo_private_key: SecretStr | None = Field(default=None, alias="KALSHI_DEMO_PRIVATE_KEY")
 
     # Non-negotiable per CLAUDE.md: both flags default false, and a second
     # explicit runtime confirmation is required beyond this settings object.
@@ -109,7 +150,14 @@ class Settings(BaseSettings):
     # observatory status. "none" (default) disables delivery entirely -- the
     # monitor still runs, decides, and logs history; it just never calls out.
     alert_transport: str = Field(default="none", alias="ALERT_TRANSPORT")
-    alert_telegram_bot_token: str | None = Field(default=None, alias="ALERT_TELEGRAM_BOT_TOKEN")
+    # SecretStr: full control of the bot. Disclosed on 2026-07-23 via a
+    # third-party exception that formatted this whole object; see the module
+    # docstring. The chat id is deliberately NOT secret -- it is a delivery
+    # destination, useless without the token, and keeping it readable makes
+    # alert-routing problems diagnosable.
+    alert_telegram_bot_token: SecretStr | None = Field(
+        default=None, alias="ALERT_TELEGRAM_BOT_TOKEN"
+    )
     alert_telegram_chat_id: str | None = Field(default=None, alias="ALERT_TELEGRAM_CHAT_ID")
 
     # --- PostgreSQL backup & recovery (docs/runbooks/backup_recovery.md) ---
@@ -213,6 +261,26 @@ class Settings(BaseSettings):
     # pydantic v2 adds a field to model_fields_set on assignment, so the
     # "was this explicitly configured?" question must be answered first.
     _storage_explicitly_configured: bool = PrivateAttr(default=False)
+
+    def __repr_args__(self) -> Any:
+        """Redact credential-shaped fields from ``repr()``/``str()``.
+
+        `SecretStr` already masks the fields we have classified; this is the
+        backstop for the ones we have not. A future contributor adding
+        ``FOO_API_TOKEN`` as a plain ``str`` gets masked output by default
+        rather than a silent regression of the 2026-07-23 disclosure, and
+        ``database_url`` (which embeds a password but stays ``str`` for
+        call-site compatibility) is covered without any signature change.
+
+        Only display is affected. Attribute access, ``model_dump()``, and every
+        consumer of an actual value behave exactly as before -- this masks
+        output, it does not restrict use.
+        """
+        for name, value in super().__repr_args__():
+            if name is not None and value is not None and _SENSITIVE_NAME_PATTERN.search(name):
+                yield name, _REDACTED
+            else:
+                yield name, value
 
     @model_validator(mode="after")
     def _derive_dataset_root(self) -> "Settings":

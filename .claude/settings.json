@@ -33,7 +33,43 @@
       "Bash(base64 ~/.aws/config)",
       "Bash(base64 ~/.aws/*)",
       "Bash(*~/.aws/credentials*)",
-      "Bash(*~/.aws/config*)"
+      "Bash(*~/.aws/config*)",
+
+      "Read(.env)",
+      "Read(./.env)",
+      "Read(.env.bak*)",
+      "Read(.env.local)",
+      "Read(.env.demo)",
+      "Read(.env.development)",
+      "Read(.env.production)",
+      "Read(.env.test)",
+      "Edit(.env)",
+      "Edit(./.env)",
+      "Edit(.env.bak*)",
+      "Edit(.env.local)",
+      "Edit(.env.demo)",
+      "Edit(.env.development)",
+      "Edit(.env.production)",
+      "Edit(.env.test)",
+
+      "Read(secrets/**)",
+      "Edit(secrets/**)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ed25519)",
+
+      "Bash(*.env)",
+      "Bash(*.env.bak*)",
+      "Bash(* .env *)",
+      "Bash(*secrets/*)",
+      "Bash(*.pem*)",
+      "Bash(*id_rsa*)",
+      "Bash(*id_ed25519*)"
     ]
   }
 }

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.aws/credentials)",
+      "Read(~/.aws/config)",
+      "Edit(~/.aws/credentials)",
+      "Edit(~/.aws/config)",
+      "Bash(cat ~/.aws/credentials)",
+      "Bash(cat ~/.aws/config)",
+      "Bash(cat ~/.aws/*)",
+      "Bash(less ~/.aws/credentials)",
+      "Bash(less ~/.aws/config)",
+      "Bash(less ~/.aws/*)",
+      "Bash(head ~/.aws/credentials)",
+      "Bash(head ~/.aws/config)",
+      "Bash(head ~/.aws/*)",
+      "Bash(tail ~/.aws/credentials)",
+      "Bash(tail ~/.aws/config)",
+      "Bash(tail ~/.aws/*)",
+      "Bash(grep * ~/.aws/credentials)",
+      "Bash(grep * ~/.aws/config)",
+      "Bash(grep * ~/.aws/*)",
+      "Bash(sed * ~/.aws/credentials)",
+      "Bash(sed * ~/.aws/config)",
+      "Bash(sed * ~/.aws/*)",
+      "Bash(awk * ~/.aws/credentials)",
+      "Bash(awk * ~/.aws/config)",
+      "Bash(awk * ~/.aws/*)",
+      "Bash(cp ~/.aws/credentials*)",
+      "Bash(cp ~/.aws/config*)",
+      "Bash(cp ~/.aws/* *)",
+      "Bash(base64 ~/.aws/credentials)",
+      "Bash(base64 ~/.aws/config)",
+      "Bash(base64 ~/.aws/*)",
+      "Bash(*~/.aws/credentials*)",
+      "Bash(*~/.aws/config*)"
+    ]
+  }
+}

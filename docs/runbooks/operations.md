@@ -184,6 +184,33 @@ checks. Computes no research statistic; detection only, no automatic
 fixes. Exit code is non-zero iff any finding is CRITICAL. See
 `docs/runbooks/data_quality_observatory.md` for the full rule reference.
 
+This report is now also **scheduled and alerted on**, not just runnable by
+hand: `scripts/service/install.sh` registers a `com.kalshi-weather.monitor`
+launchd agent that runs `ops monitor` every 15 minutes by default, sending
+a Telegram alert on a WARNING/CRITICAL transition (suppressing repeats,
+notifying on recovery). See `docs/runbooks/monitoring_alerting.md`.
+
+## Backing up and restoring PostgreSQL
+
+```bash
+scripts/backup_postgres.sh                              # manual backup, any time
+uv run kalshi-weather ops backup status                 # last outcome + local inventory
+uv run kalshi-weather ops backup prune                   # dry-run retention preview
+uv run python scripts/backup_restore_drill.py            # prove a backup actually restores
+```
+
+Scheduled once/day via the `com.kalshi-weather.backup` launchd agent
+(03:00 local by default), verified with `pg_restore --list` at creation
+and, if an off-machine destination is configured, with an independent
+checksum round-trip after copying. Backup health is folded into `ops
+observatory`/`ops monitor` as the `"backup"` domain (freshness, command
+failure, remote-copy failure, disk space, lock contention) -- same
+exactly-once alert semantics as everything else. **As of this writing, no
+off-machine destination is configured** (`BACKUP_REMOTE_TYPE=none`) --
+local backups are scheduled and restore-proven, but true off-machine
+redundancy is not yet in place. Full detail, configuration, retention
+policy, and the disaster-recovery procedure: `docs/runbooks/backup_recovery.md`.
+
 ## Performing backfills
 
 Deep historical observation backfill (IEM archive), chunked and resumable:
@@ -239,3 +266,6 @@ Snapshots embed both reports.
 | backfill exits non-zero | some chunks failed (network/IEM outage) | re-run the identical command; only failed chunks re-fetch |
 | observation gap days persist | source had no CLI report those days, or backfill range never covered them | backfill the specific range; if IEM has nothing, the gap is real and stays visible (never papered over) |
 | snapshot fails: version exists | one snapshot per version, immutable | pass a new `--version` |
+| `backup_command` finding is CRITICAL | `pg_dump` or `pg_restore --list` verification failed | check `backup.err.log`; a `.dump.partial` file (if left behind) is the failed attempt's forensic artifact, not a usable backup |
+| backup destination filesystem full | disk-space check went WARNING/CRITICAL before this, or was missed | free space (`ops backup prune`) or point `KALSHI_DATA_DIR` at more room; see `docs/runbooks/backup_recovery.md` "Disk-full recovery" |
+| need to actually recover from data loss | disk/DB failure, not a routine check | `docs/runbooks/backup_recovery.md` "Disaster-recovery procedure" -- do not improvise a restore against a live database |

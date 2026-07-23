@@ -84,6 +84,16 @@ Historical market data, weather data, databases, experiment outputs, and credent
 - Tests should use temporary directories and databases whenever practical (see `tests/unit/test_repositories.py`'s in-memory SQLite pattern) rather than touching real project storage.
 - Never modify production or real collected datasets during testing — a test's database must be disposable by construction, not by discipline.
 
+### AWS credential access (off-machine backup)
+
+The off-machine S3 backup destination (`docs/runbooks/backup_recovery.md`) relies on the `aws` CLI's own credential chain (`~/.aws/credentials`, `~/.aws/config`, or environment variables) so that no AWS secret ever needs to be stored in this repository. That design only holds if the assistant never inspects those files directly. This policy is enforced procedurally here *and* mechanically via `.claude/settings.json` deny rules — neither is sufficient alone.
+
+- **Never read, print, copy, modify, grep, cat, summarize, expose, or inspect** `~/.aws/credentials` or `~/.aws/config` (or any AWS credential file), by any tool or command, for any reason.
+- **Never print AWS credential environment variables** (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, or equivalents) — not in command output, logs, error messages, commit messages, or reports.
+- `aws` CLI commands (`aws s3 cp`, `aws sts get-caller-identity`, etc.) may be run and may use the standard credential chain **indirectly** — the CLI resolving its own credentials internally is expected and fine; the assistant reading or printing the credential material itself is not.
+- **Never run any command whose purpose is to reveal credential contents** — this includes but is not limited to `cat`/`less`/`head`/`tail`/`grep`/`sed`/`awk` against a credential file, `cp` or `base64` of a credential file, or any equivalent achieved through a different tool, a pipe, a here-doc, or a scripting language's file-read call.
+- **Never use `--dangerously-skip-permissions` for this repository.** This bypasses the permission system (including the `.claude/settings.json` deny rules below) entirely, so it is a human-only policy control — nothing in `.claude/settings.json` can technically block a flag that disables `.claude/settings.json`.
+
 ## Storage philosophy
 
 Source code and historical datasets are separate assets with separate lifecycles: code is disposable and rebuildable from git; collected data is not. Storage locations follow from that split:

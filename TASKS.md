@@ -211,6 +211,22 @@ Acceptance criteria:
 - [x] `ruff check .`, `mypy src`, `pytest -v` all pass; migration `0005` round-trips.
 - [x] Verified live: `weather backfill` extended NYC history with per-chunk commits and correct resume; `ops health`/`ops quality`/`ops snapshot` all produce correct reports against the real database (a live-only cross-transaction FK bug in the backfill sink was caught by this verification and fixed).
 
+### Milestone 4f — Forecast verification, data quality observatory, monitoring/alerting, and backup/recovery (complete)
+
+Post-H0003 infrastructure hardening, driven by a 2026-07-22 Research Program Audit: forecast verification framework (leakage-free point-in-time joins, `docs/runbooks/forecast_verification.md`), a continuous Data Quality Observatory (all five collection streams + platform + backup, `docs/runbooks/data_quality_observatory.md`), scheduled monitoring with exactly-once Telegram alerting (`docs/runbooks/monitoring_alerting.md`), and scheduled/verified/off-machine-capable PostgreSQL backups with a proven restore drill (`docs/runbooks/backup_recovery.md`).
+
+- [x] `verification/` package: eligibility, forecast/observation matching, metrics, reporting — reusable across future H0003 retries, M-01, H0006.
+- [x] `observatory/` package: archive continuity, missed collection cycles, duplicate/monotonicity checks, station drift, parser failures, point-in-time integrity, forecast eligibility, backup health — one deterministic report, reusing (not duplicating) `ops/quality.py`/`ops/forecast_cadence.py`/`ops/health.py`.
+- [x] `ops/monitor.py` + `ops/alerting.py`: pure exactly-once alert-transition state machine + Telegram delivery; `com.kalshi-weather.monitor` launchd agent (15 min default).
+- [x] `ops/backup.py` + `ops/backup_retention.py`: atomic-write backup finalization, off-machine copy (filesystem/S3) with independent checksum verification, grandfather-father-son retention (opt-in auto-prune, preserving the original script's manual-pruning policy); `com.kalshi-weather.backup` launchd agent (daily); `scripts/backup_restore_drill.py` proves actual restorability against a disposable container.
+- [x] `scripts/service/install.sh` changed to reload launchd agents per-agent (only what changed) rather than unconditionally — verified live: adding the backup agent did not restart the running collector.
+
+Acceptance criteria:
+
+- [x] `ruff check .`, `mypy src --strict`, full `pytest` suite all pass.
+- [x] Verified live: a real backup ran, verified, and finalized correctly; a real restore drill succeeded against a disposable container (schema, representative tables across every stream, row counts, timestamp/numeric fidelity all confirmed); `ops observatory`/`ops monitor` correctly picked up backup health as a new domain with zero new alerting code.
+- [x] Known gap, explicitly not overclaimed: no off-machine backup destination is configured yet (`BACKUP_REMOTE_TYPE=none`) — the audit's backup finding is PARTIALLY CLOSED, not CLOSED.
+
 ---
 
 ## Phase 3 — Research Framework

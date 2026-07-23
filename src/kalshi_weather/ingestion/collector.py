@@ -6,7 +6,7 @@ graceful shutdown. See docs/runbooks/collector.md for start/stop procedure.
 import asyncio
 import contextlib
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -44,9 +44,15 @@ class CycleStats:
     settle_errors: int = 0
     invalid_items: int = 0
     errors: int = 0
+    #: Per-outcome settlement metrics (ADR 0012). Flattened into as_dict so
+    #: `collector_runs.stats_json` stays a flat int map for `ops health`.
+    settle_detail: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, int]:
-        return asdict(self)
+        data = asdict(self)
+        detail = data.pop("settle_detail", {}) or {}
+        data.update(detail)
+        return data
 
 
 async def run_collection_cycle(
@@ -58,6 +64,7 @@ async def run_collection_cycle(
     trade_bootstrap_lookback_days: int,
     settle_check_limit: int,
     settle_check_days: int,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> CycleStats:
     """Run one full discovery + snapshot + trade collection pass.
 
@@ -173,10 +180,12 @@ async def run_collection_cycle(
             open_tickers=set(discovery.market_tickers),
             limit=settle_check_limit,
             recent_days=settle_check_days,
+            session_factory=session_factory,
         )
         stats.settle_checks = settle_stats.checked
         stats.settled_captured = settle_stats.settled_captured
         stats.settle_errors = settle_stats.errors
+        stats.settle_detail = settle_stats.as_stats()
     except Exception:
         logger.exception("collector.settle_capture.pass_failed")
         stats.errors += 1
@@ -222,6 +231,7 @@ async def run_collector_loop(
                         trade_bootstrap_lookback_days=trade_bootstrap_lookback_days,
                         settle_check_limit=settle_check_limit,
                         settle_check_days=settle_check_days,
+                        session_factory=session_factory,
                     )
                     run_stats = stats.as_dict()
                     run_requests, run_retries = client.requests_attempted, client.retries

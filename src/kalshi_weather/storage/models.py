@@ -473,3 +473,49 @@ class MarketMetadataVerification(Base):
     changed_fields: Mapped[str | None] = mapped_column(String(128))
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+
+
+class SettlementAttempt(Base):
+    """One settlement-capture attempt against one market (migration 0009).
+
+    Exists because the settlement queue had no memory. A market checked and
+    found *still unsettled* (HTTP 200, empty `result`) stayed eligible at
+    identical priority, so with `ORDER BY close_time ASC` the oldest
+    permanently-unsettled markets occupied every slot of the bounded batch
+    forever. On 2026-07-23 that was 80 pending `KXRAIN` markets holding all 25
+    head slots across 20+ consecutive cycles while 1,476 other pending
+    markets -- 10 of 10 sampled being `finalized` with real results -- were
+    never reached. See ADR 0012.
+
+    Append-only: a market accumulates one row per attempt, never updated. The
+    queue reads only the *latest* row per ticker to decide eligibility, so the
+    full attempt history stays auditable (why a market was deferred, when, and
+    for how long) without any mutable state.
+
+    Retry state deliberately lives here rather than on `market_snapshots`,
+    which is append-only observation data and must not carry operational
+    bookkeeping.
+    """
+
+    __tablename__ = "settlement_attempts"
+    __table_args__ = (
+        Index("ix_settlement_attempts_latest", "market_ticker", "attempted_at"),
+        Index("ix_settlement_attempts_retry", "retryable", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    attempted_at: Mapped[datetime] = mapped_column(nullable=False)
+    #: One of ingestion.settlement_sync.SettlementOutcome.
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    #: False marks a terminal outcome -- the market leaves the queue for good.
+    retryable: Mapped[bool] = mapped_column(nullable=False, default=True)
+    #: Earliest time this market may be re-attempted. NULL when terminal.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    #: Bounded, sanitized detail -- never a full payload or credential.
+    detail: Mapped[str | None] = mapped_column(String(300))
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    snapshot_id: Mapped[int | None] = mapped_column(ForeignKey("market_snapshots.id"))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")

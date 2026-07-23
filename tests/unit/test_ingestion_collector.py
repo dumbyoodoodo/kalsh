@@ -698,7 +698,15 @@ async def test_settle_capture_is_idempotent_and_self_draining(
 
 async def test_settle_capture_bound_and_404_isolation(session: AsyncSession) -> None:
     """The per-cycle bound is respected, and a vanished (404) market is
-    counted as an error without aborting the cycle."""
+    classified and isolated without aborting the cycle.
+
+    Since ADR 0012 a 404 is no longer folded into the generic
+    ``settle_errors`` counter: the venue definitively no longer serves the
+    ticker, which is a *terminal* classification (``market_removed``), not a
+    failure to retry. Collapsing the two is what let the original queue hide
+    its own starvation. The isolation guarantee this test was written for --
+    bound respected, cycle survives -- is asserted unchanged.
+    """
     state = {
         "open": [GOOD_TICKER, BAD_ORDERBOOK_TICKER],
         "settled": {},
@@ -711,8 +719,10 @@ async def test_settle_capture_bound_and_404_isolation(session: AsyncSession) -> 
     state["gone"] = {GOOD_TICKER, BAD_ORDERBOOK_TICKER}
     async with _client(make_settling_handler(state)) as client:
         bounded = await _cycle(client, session, settle_check_limit=1)
+    stats = bounded.as_dict()
     assert bounded.settle_checks == 1  # bound respected
-    assert bounded.settle_errors == 1  # 404 counted, cycle survived
+    assert stats["settle_outcome_market_removed"] == 1  # 404 classified terminal
+    assert bounded.settle_errors == 0  # a removed market is not a retryable error
     assert bounded.errors == 0  # not a cycle-level failure
 
 

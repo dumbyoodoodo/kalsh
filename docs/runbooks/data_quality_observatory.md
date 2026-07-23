@@ -57,7 +57,7 @@ collector-cycle liveness, point-in-time integrity).
 | Source | What it contributes | Adapter |
 |---|---|---|
 | `ops/quality.py` (`run_quality_checks`) | schema drift, observation/forecast/market staleness, natural-key duplicates (observations, settlement specs), future-dated rows, settlement resolution failures | `drift.adapt_quality_finding` |
-| `ops/forecast_cadence.py` (`run_forecast_cadence`) | forecast issuance cadence: missing/duplicate/out-of-order/delayed issuances, abnormal cadence, collector outage, stalled updates | `drift.adapt_cadence_alert` |
+| `ops/forecast_cadence.py` (`run_forecast_cadence`) | forecast issuance cadence: missing/duplicate/out-of-order/delayed issuances, abnormal cadence, collector outage (active vs. recovered -- see below), stalled updates | `drift.adapt_cadence_alert` |
 | `ops/health.py` (`build_health_report`) | collector liveness, per-station observation completeness (`dataset_completeness`) | `pit_consistency.adapt_completeness` |
 
 Each existing report is computed **exactly once** per observatory run
@@ -96,9 +96,27 @@ Two distinct, schedule-agnostic questions per stream:
    trailing gap to now. A collector can run successfully every cycle while
    upstream has nothing new -- that is stream silence (check 1), not a
    missed cycle (check 2); conflating them would misattribute an upstream
-   lull as a collector outage. Severity: **CRITICAL** if any missed window
-   (a dead collector process is always worth waking someone up for), else
-   INFO.
+   lull as a collector outage.
+
+   **Active vs. recovered (2026-07-23).** Severity distinguishes an
+   *active* failure from a *recovered historical incident* (each missed
+   window carries a `trailing` flag -- true only for the window between the
+   newest run and now):
+
+   - **CRITICAL** -- a *trailing* window exists: the collector is overdue
+     **right now**. A dead collector process is always worth waking someone
+     up for.
+   - **WARNING** -- one or more missed windows exist but all are purely
+     historical (between two recorded runs) and current runs are on
+     schedule: a healed incident, real and worth surfacing, that **ages out
+     of the lookback on its own** as the gap leaves the window. It must not
+     stay CRITICAL forever.
+   - **INFO** -- no missed windows.
+
+   Before this, *any* missed window (even a long-healed one) was CRITICAL,
+   which latched a 2026-07-21 8.6h collector-outage gap CRITICAL
+   indefinitely even after production had fully recovered -- the defect this
+   change closes.
 
 Both are pure functions over in-memory timestamp/run sequences
 (`find_continuity_gaps`, `find_missed_run_cycles`); thin async loaders
@@ -147,6 +165,23 @@ check does not:
 - Issuance-schedule anomalies are **not** reimplemented here --
   `ops/forecast_cadence.py`'s alerts already cover this and are folded in
   via `adapt_cadence_alert` (see "What's reused vs. new").
+
+**Forecast-collector outage: active vs. recovered.** `ops/forecast_cadence.py`
+applies the same active-vs-recovered distinction as the missed-cycle check,
+bounded to a configurable window `CADENCE_RUN_WINDOW_HOURS` (default 72; the
+`CadenceConfig.run_window_hours` field, wired through `ObservatoryConfig`):
+
+- `collector_outage` (CRITICAL via `adapt_cadence_alert`) -- the newest
+  weather-collector run attempt is older than the threshold *now*: the
+  collector is overdue, an active failure.
+- `collector_outage_recovered` (WARNING) -- a healed gap exists only inside
+  the bounded window's history while current runs are on schedule: a recovered
+  incident that ages out of the window naturally.
+
+Bounding the run-attempt scan to `CADENCE_RUN_WINDOW_HOURS` is what lets a
+healed outage age out; an *unbounded* scan kept the largest gap in all history
+as the reported outage forever (the same latching defect the missed-cycle
+check fixed).
 
 ### Parser failures (`parsing.py`)
 
@@ -231,7 +266,8 @@ H-series experiment scripts.
 | Finding | Likely cause | Action |
 |---|---|---|
 | `archive_continuity_<stream>` WARNING | upstream provider outage, or a still-provisional window (check before alerting on the newest day) | inspect the named gap window; if genuine, treat as `ops health` STALE would be |
-| `missed_collection_cycles_<collector>` CRITICAL | collector process died or wedged | restart it (`ops run`); no data repair needed -- see `docs/runbooks/operations.md`'s "Restart recovery" |
+| `missed_collection_cycles_<collector>` / `collector_outage` **CRITICAL** (active: overdue now) | collector process died or wedged | restart it (`ops run`); no data repair needed -- see `docs/runbooks/operations.md`'s "Restart recovery" |
+| `missed_collection_cycles_<collector>` / `collector_outage_recovered` **WARNING** (recovered historical gap) | a past outage that has since healed; current runs on schedule | no action needed -- it ages out of the lookback window on its own. Do **not** manually clear `monitor_state.json` to "force recovery"; let the next monitor cycle de-escalate naturally (see `docs/runbooks/monitoring_alerting.md`) |
 | `duplicate_market_snapshots` / `duplicate_candlesticks` / `duplicate_forecasts` CRITICAL | a DB unique constraint was bypassed (raw SQL, a migration gap) | stop and investigate immediately; this should be structurally impossible |
 | `timestamp_monotonicity_<stream>` WARNING | collector clock skew, or a backfill replay | inspect the flagged rows; confirm the affected timestamps are still correct, don't delete/reorder anything (data is append-only) |
 | `unexpected_stations_*` WARNING | a station was renamed/removed from the registry, or a data-entry bug bypassed it | reconcile the registry (`weather/stations.py`) against the orphan ids; do not delete historical rows |

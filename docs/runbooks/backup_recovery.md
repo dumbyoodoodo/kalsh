@@ -29,6 +29,17 @@ truth against the bucket's own newest object) report healthy. `BACKUP_AUTO_PRUNE
 remains `false` -- unchanged, deliberate. See the S3 handoff verification
 record for the exact object path and hashes.
 
+The same 2026-07-23 production-gap investigation found the *scheduled* (launchd)
+backup had been failing silently -- macOS TCC denied the launchd agent access
+to the removable volume holding `KALSHI_DATA_DIR`, and launchd's minimal PATH
+lacked `docker`. Both are fixed: the local destination now defaults to an
+internal-disk path via `BACKUP_LOCAL_DIR`, the script recovers Docker's PATH,
+and a pre-finalize `ERR` trap makes any early abort visible. A real backup run
+through the launchd path has since succeeded end-to-end (local archive +
+`pg_restore --list` + verified S3 upload). See "Local storage" for the details.
+This dimension (scheduled backup reliability) is now **CLOSED** too, distinct
+from the off-machine-copy dimension above.
+
 ## Architecture
 
 - `scripts/backup_postgres.sh` (existing, minimally modified) -- the
@@ -89,6 +100,7 @@ section):
 | Variable | Default | Meaning |
 |---|---|---|
 | `BACKUP_DB_USER` / `BACKUP_DB_NAME` | `kalshi` / `kalshi_weather` | Match `docker-compose.yml`'s hardcoded values exactly -- unset changes nothing. |
+| `BACKUP_LOCAL_DIR` | unset | Absolute path for the local backup destination. Unset (repo default): derive `<KALSHI_DATA_DIR>/backups/postgres` as before. Set it to an **internal-disk** directory when the scheduled (launchd) backup cannot write the derived location -- see "Local storage" for why this is required when `KALSHI_DATA_DIR` is on a removable volume. |
 | `BACKUP_SCHEDULE_HOUR` / `BACKUP_SCHEDULE_MINUTE` | `3` / `0` | Once-daily local time launchd runs the backup. Read at **install time** -- changing requires `scripts/service/install.sh`, not `restart.sh`. |
 | `BACKUP_REMOTE_TYPE` | `none` | `filesystem` \| `s3` \| `none`. |
 | `BACKUP_REMOTE_PATH` | unset | A filesystem destination -- **must be a different physical disk** than `KALSHI_DATA_DIR`. |
@@ -108,13 +120,52 @@ brief `docker compose exec` load never coincides with either.
 
 ## Local storage
 
-Unchanged from the original script: `<KALSHI_DATA_DIR>/backups/postgres/`,
-custom-format (`pg_dump -Fc`), named `kalshi_weather-<UTC timestamp>.dump`.
+Custom-format (`pg_dump -Fc`), named `kalshi_weather-<UTC timestamp>.dump`.
 Never overwritten (refuses if the target name already exists). A dump
 in progress is named `<name>.dump.partial` and is renamed to the final
 name only after `pg_restore --list` verifies it -- so a crash or kill
 mid-dump leaves an unambiguous `.partial`, never a corrupt file at a name
 future runs would trust.
+
+**Destination** (`scripts/backup_postgres.sh` and `cli.py`'s `_backup_dir`
+resolve this identically): `BACKUP_LOCAL_DIR` when set, otherwise the original
+`<KALSHI_DATA_DIR>/backups/postgres/` derivation.
+
+**Why the destination was moved to an internal disk (2026-07-23).** On this
+machine `KALSHI_DATA_DIR` is a removable volume (`/Volumes/<external-drive>/...`).
+macOS TCC (Transparency, Consent & Control) **denies launchd agents access to
+removable volumes** unless a human grants Full Disk Access to the agent's
+executable in System Settings. The scheduled backup therefore failed *silently*
+every night -- the launchd context got `Operation not permitted` the moment it
+touched the external SSD, before any status was recorded, so nothing surfaced
+the failure. Rather than weaken system security by granting a shell binary Full
+Disk Access, the local destination was relocated to an internal-disk path via
+`BACKUP_LOCAL_DIR` (`~/Library/Application Support/kalshi-weather/backups/postgres`
+on this machine -- a location user launchd agents can write **without** any TCC
+grant), and the verified result is then uploaded off-machine to S3 (see
+"Off-machine copy"). The S3 copy is redundancy layered on top of a successfully
+created local backup -- **never a substitute for local creation**. If Full Disk
+Access is ever the preferred route instead, it is a **manual, human-only**
+System Settings action (Privacy & Security → Full Disk Access); nothing here
+attempts to bypass TCC.
+
+**launchd's minimal PATH.** A launchd agent runs with a bare
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin` that omits Docker's install locations, so
+`docker` was `command not found` from the scheduled context (a second failure
+that had been masked by the TCC failure killing the script even earlier). The
+script now appends the standard Homebrew/Docker-Desktop locations
+(`/usr/local/bin:/opt/homebrew/bin`) **only when `docker` is not already
+resolvable**, so an environment that deliberately fronts a different `docker`
+(e.g. tests stubbing it) is never overridden.
+
+**Pre-finalize failure visibility.** Once the backup directory is resolved, an
+`ERR` trap records a `failed`-outcome status for *any* unexpected abort -- not
+just the explicitly-handled `pg_dump`/verify failures -- so a run that dies
+early (as the TCC failure did) can never again be invisible to the observatory.
+The trap fires only on genuinely unexpected failures: the handled failure paths
+use `if !` + an explicit `finalize --outcome failed`, and `finalize` is
+best-effort (`|| true`) so it can never recurse or flip the script's own exit
+code.
 
 ## Off-machine copy
 
@@ -129,8 +180,8 @@ implemented and tested; `s3` is the one currently active:
   `KALSHI_DATA_DIR`. After copying, the destination file is read back and
   its SHA-256 compared against the source -- a genuine round-trip
   integrity check, not just "the copy command reported success."
-- **`s3`**: install the `aws` CLI (not installed on this machine as of
-  writing) and configure its own credentials (`aws configure`, or an
+- **`s3`** (active on this machine as of 2026-07-23): the `aws` CLI is
+  installed and configured with its own credentials (`aws configure`, or an
   environment/instance-role chain) -- entirely outside this project's
   `.env`, so no AWS secret is ever stored here. Set
   `BACKUP_REMOTE_TYPE=s3`, `BACKUP_S3_BUCKET=...`, `BACKUP_S3_PREFIX=...`.
@@ -268,10 +319,12 @@ action CLAUDE.md requires a human to explicitly decide on, not a script.
    `docker compose logs postgres`.
 2. Identify the newest verified backup: `ops backup status`, or read
    `<backup_dir>/last_backup_status.json` directly.
-3. If local backups are also lost (the disk itself failed), the
-   off-machine copy is the only remaining source -- this is exactly why
-   Phase 3 ("Off-machine copy") matters and why this system is currently
-   only PARTIALLY CLOSED without one configured.
+3. If local backups are also lost (the internal disk itself failed), the
+   off-machine S3 copy is the only remaining source -- this is exactly why
+   the "Off-machine copy" section matters. It is configured and verified on
+   this machine (`BACKUP_REMOTE_TYPE=s3`); a fresh checkout with the repo
+   defaults (`BACKUP_REMOTE_TYPE=none`) has no off-machine copy until one is
+   configured.
 4. Stop the collector service (`scripts/service/uninstall.sh`).
 5. Restore per "Complete restore procedure" above, into the *real*
    database this time (after standing up a fresh, empty `postgres`

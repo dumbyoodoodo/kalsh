@@ -14,7 +14,7 @@ All file-based data lives under a single configurable root, `KALSHI_DATA_DIR`
 subpath. To keep bulk data on an external drive:
 
 ```
-KALSHI_DATA_DIR=/Volumes/Extreme Pro/kalshi-weather-data
+KALSHI_DATA_DIR=/Volumes/<external-drive>/kalshi-weather-data
 ```
 
 When the root is explicitly configured, the CLI **fails early** if the

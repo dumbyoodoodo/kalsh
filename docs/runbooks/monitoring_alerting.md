@@ -39,12 +39,16 @@ scripts/service/install.sh
 ```
 
 This is the same installer that manages the collector and log-rotation
-agents -- idempotent, safe to re-run. It now also generates and bootstraps
-`~/Library/LaunchAgents/com.kalshi-weather.monitor.plist`. Because the
-installer reloads every registered agent (bootout + bootstrap) to stay
-idempotent, running it **also restarts the already-running collector**
-gracefully (current cycles finish first) -- expected, not a bug, but worth
-knowing before running it against a live collector.
+agents -- idempotent, safe to re-run. It generates and bootstraps
+`~/Library/LaunchAgents/com.kalshi-weather.monitor.plist`. The installer now
+performs a **per-agent conditional reload**: each freshly-generated plist is
+compared against what is already installed, and only an agent whose plist
+actually changed (or that isn't loaded yet) is bootout+bootstrapped. Running
+it therefore does **not** restart the already-running collector unless the
+collector's own plist changed. (Earlier versions reloaded every agent
+unconditionally, which is what briefly restarted the collector the first time
+the monitor agent was added; that class of problem is fixed for every agent --
+see `docs/runbooks/backup_recovery.md`'s "Installation".)
 
 `scripts/service/uninstall.sh` removes all three agents (collector,
 log-rotation, monitor) and leaves logs, `monitor_state.json`, and
@@ -87,6 +91,18 @@ state is stable, and a recovery notification when it clears. This is
 enforced structurally (comparing only `current` against `prior.severity`),
 not by any time-based cooldown or rate limit -- there is nothing to tune
 and nothing that can silently suppress a second, different problem.
+
+**Do not manually edit or delete `monitor_state.json` to force a recovery.**
+The state file is the *only* record of the prior severity; the exactly-once
+semantics are computed by comparing the current severity against it. Clearing
+it resets the baseline, so the next run treats whatever it finds as a fresh
+first-run problem (re-alerting) rather than a transition -- and it cannot
+manufacture a genuine `recovered` notification. The correct way to recover is
+to fix the underlying finding and let the next scheduled monitor cycle observe
+the severity drop and emit the de-escalation/recovery alert naturally. This is
+exactly how the 2026-07-23 observatory severity fix de-escalated: the next real
+monitor cycle recomputed CRITICAL→WARNING and sent exactly one alert, with no
+state-file surgery.
 
 State persists in `<KALSHI_LOG_DIR>/monitor_state.json`:
 

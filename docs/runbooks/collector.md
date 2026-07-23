@@ -16,6 +16,10 @@ no order submission -- see `docs/adr/0002-ingestion-collector.md` and
    with **no stored trade yet** (newly discovered, or never successfully
    collected) does not fetch its entire lifetime history -- see "Trade
    bootstrap window" below.
+4. **Settled-transition capture**: re-check a bounded number of
+   recently-tracked tickers that have left the open-discovery list without a
+   final result yet, and persist the settled snapshot when one appears -- see
+   "Settled-market transition capture" below.
 
 Market/order-book snapshots identical to the immediately-prior stored row
 for that ticker are skipped (not inserted) -- history is still append-only,
@@ -144,6 +148,59 @@ silent data loss), matching the existing precedent for `weather_backfill_days`.
 **Changing the window**: set `INITIAL_TRADE_BOOTSTRAP_LOOKBACK_DAYS` in
 `.env` (default: 30, mirroring `WEATHER_BACKFILL_DAYS`). No code change or
 migration is required.
+
+## Settled-market transition capture
+
+Discovery is open-status-filtered, so a market leaves the discovery list the
+moment Kalshi closes it -- *before* its final, result-bearing snapshot (the
+row carrying `result` ∈ {`yes`,`no`}, `expiration_value`, `settlement_ts`)
+exists. Everything downstream that keys off "the latest snapshot has a
+result" -- price-sync/candlestick candidacy, settlement-label generation
+(`settlement/labels.py`), retention monitoring -- would otherwise never see
+that market settle. This starved settlement capture for every market settling
+after 2026-07-21 until it was fixed (see
+`docs/adr/0009-settled-market-transition-capture.md`).
+
+Each Kalshi cycle, after the per-market pass, `capture_settled_transitions`
+(`ingestion/settlement_sync.py`) re-checks a **bounded** set of tickers that
+are:
+
+- **recently observed** -- their latest snapshot is within
+  `COLLECTOR_SETTLE_CHECK_DAYS` (default 7),
+- **absent from the current open discovery** -- gone from the open list, and
+- **not yet settled** -- their latest snapshot has no `result`.
+
+The pending queue is **derived purely from stored data** (that three-part
+predicate over `market_snapshots`), never from process state or a separate
+table -- so there is nothing to desync and no migration. It is bounded by
+`COLLECTOR_SETTLE_CHECK_LIMIT` (default 25) tickers per cycle, one `get_market`
+call each, oldest-`close_time` first; the recency window means a market that
+vanishes without ever settling (delisted/expired) ages out instead of being
+retried forever, and the full historical settled archive is never re-fetched.
+
+The pass is **idempotent and self-draining**: captured markets go through the
+same `persist_market_snapshot` helper open discovery uses (so the two paths
+cannot drift), which routes to `save_market_snapshot`'s content-hash
+deduplication. Capturing a settled snapshot removes the ticker from the queue
+on the next cycle (its latest snapshot now bears a result); re-checking an
+unchanged market is a content-hash no-op. **Per-ticker failures are isolated**
+-- a 404 for a delisted market or a transient API error is logged
+(`collector.settle_capture.failed`) and counted, never raised, matching the
+collector's whole-cycle error-isolation contract. Captured snapshots preserve
+**raw-payload provenance** exactly as any other snapshot.
+
+`collector.cycle_complete` reports `settle_checks`, `settled_captured`, and
+`settle_errors`. Steady-state `settled_captured=0` with `settle_checks>0` is
+normal (recent no-result tickers that have not settled yet); `settled_captured>0`
+is the queue draining a backlog. Tune with `COLLECTOR_SETTLE_CHECK_LIMIT` /
+`COLLECTOR_SETTLE_CHECK_DAYS` in `.env` -- no code change or migration.
+
+**Relation to candle sync and settlement labels**: this pass only records the
+settled *snapshot*. Once a market has a result-bearing snapshot it becomes a
+price-sync candidate normally (`docs/runbooks/price_ingestion.md`), and its
+settlement label can form (`docs/runbooks/settlement_labels.md`). Markets with
+zero lifetime volume (quote-only, no trades) legitimately have no candles --
+that is not a capture failure.
 
 ## Known limitations (see docs/API_VERIFICATION.md and the ADR)
 

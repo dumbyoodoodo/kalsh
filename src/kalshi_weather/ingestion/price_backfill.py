@@ -37,20 +37,20 @@ attempt's result (see docs/adr/0007-price-ingestion.md).
 
 import asyncio
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kalshi_weather.domain.time import to_naive_utc, utc_now
 from kalshi_weather.kalshi.client import KalshiAPIError, KalshiClient
 from kalshi_weather.logging import get_logger
 from kalshi_weather.storage.database import session_scope
-from kalshi_weather.storage.models import EventRecord, MarketSnapshot
+from kalshi_weather.storage.models import EventRecord, MarketCandlestick, MarketSnapshot
 from kalshi_weather.storage.repositories import (
     get_candlestick_coverage,
     get_latest_candlestick_period_end,
@@ -146,6 +146,33 @@ def _infer_series_ticker(
     return None
 
 
+def coverage_reaches_close(
+    latest_period_end: datetime | None,
+    close_time: datetime | None,
+    tolerance: timedelta = timedelta(seconds=COMPLETENESS_TOLERANCE_SECONDS),
+) -> bool:
+    """This project's single definition of "a market's candle coverage is
+    complete": the latest stored candle's ``period_end`` reaches the market's
+    ``close_time``, within tolerance.
+
+    Deliberately shared by `select_backfill_candidates` (which excludes
+    covered markets *before* LIMIT) and `backfill_one_market` (which re-checks
+    per market). If those two ever disagreed, covered markets would consume
+    the sync loop's per-cycle limit and the loop would stop making progress --
+    precisely the 2026-07-23 defect this function exists to prevent.
+
+    Both values are normalized to naive UTC first. `market_snapshots.
+    close_time` is TIMESTAMPTZ while `market_candlesticks.period_end` is a
+    naive TIMESTAMP, so the two must never be compared raw -- and, for the
+    same reason, this comparison is done in Python rather than pushed into a
+    SQL predicate that would silently reinterpret the naive side against the
+    server's TimeZone setting.
+    """
+    if latest_period_end is None or close_time is None:
+        return False
+    return to_naive_utc(latest_period_end) >= to_naive_utc(close_time) - tolerance
+
+
 async def select_backfill_candidates(
     session: AsyncSession,
     *,
@@ -154,34 +181,107 @@ async def select_backfill_candidates(
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int | None = None,
+    period_interval_seconds: int = DEFAULT_RESOLUTION_MINUTES * 60,
+    exclude_covered: bool = False,
+    exclude_tickers: Collection[str] | None = None,
 ) -> list[MarketSnapshot]:
     """Settled markets to backfill, **oldest close_time first** -- the
     rolling retention window makes the oldest known markets the
-    highest-risk (see the investigation report)."""
+    highest-risk (see the investigation report).
+
+    With ``exclude_covered`` (the continuous sync loop's mode), markets whose
+    coverage already reaches close are filtered out *before* ``limit`` is
+    applied, so the limit is spent only on markets that still need work. The
+    original ordering-then-LIMIT-then-skip shape meant the oldest fully
+    covered markets consumed the entire limit every cycle and newly settled
+    markets were never reached (2026-07-23; see ADR 0010).
+
+    ``exclude_tickers`` lets a caller drop markets it has already resolved to
+    a terminal, non-retryable outcome this process (no price data, expired,
+    unsupported) so they cannot re-block the head of the queue -- see
+    `run_price_sync_loop`.
+
+    Ties on ``close_time`` are broken by ``market_ticker`` so the ordering is
+    deterministic and a bounded run is reproducible.
+    """
     latest_ids = (
         select(func.max(MarketSnapshot.id))
         .group_by(MarketSnapshot.market_ticker)
         .scalar_subquery()
     )
-    stmt = select(MarketSnapshot).where(
-        MarketSnapshot.id.in_(latest_ids), MarketSnapshot.result.in_(["yes", "no"])
-    )
+    filters: list[ColumnElement[bool]] = [
+        MarketSnapshot.id.in_(latest_ids),
+        MarketSnapshot.result.in_(["yes", "no"]),
+    ]
     if tickers:
-        stmt = stmt.where(MarketSnapshot.market_ticker.in_(tickers))
+        filters.append(MarketSnapshot.market_ticker.in_(tickers))
     if event_ticker:
-        stmt = stmt.where(MarketSnapshot.event_ticker == event_ticker)
+        filters.append(MarketSnapshot.event_ticker == event_ticker)
     if start_date is not None:
-        stmt = stmt.where(
+        filters.append(
             MarketSnapshot.close_time >= datetime.combine(start_date, time.min, tzinfo=UTC)
         )
     if end_date is not None:
-        stmt = stmt.where(
+        filters.append(
             MarketSnapshot.close_time <= datetime.combine(end_date, time.max, tzinfo=UTC)
         )
-    stmt = stmt.order_by(MarketSnapshot.close_time.asc())
-    if limit is not None:
-        stmt = stmt.limit(limit)
-    return list((await session.scalars(stmt)).all())
+
+    ordering = (MarketSnapshot.close_time.asc(), MarketSnapshot.market_ticker.asc())
+
+    if not exclude_covered and not exclude_tickers:
+        stmt = select(MarketSnapshot).where(*filters).order_by(*ordering)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list((await session.scalars(stmt)).all())
+
+    # Coverage-aware path. Step 1 is a narrow projection (three columns, no
+    # ORM hydration) left-joined to each market's latest candle at this
+    # resolution; step 2 applies the shared coverage rule in Python; only
+    # then is `limit` applied and the surviving rows hydrated. Keeping the
+    # tolerance comparison out of SQL avoids the TIMESTAMPTZ/TIMESTAMP
+    # mismatch described in `coverage_reaches_close`.
+    latest_candle = (
+        select(
+            MarketCandlestick.market_ticker.label("market_ticker"),
+            func.max(MarketCandlestick.period_end).label("latest_period_end"),
+        )
+        .where(MarketCandlestick.period_interval_seconds == period_interval_seconds)
+        .group_by(MarketCandlestick.market_ticker)
+        .subquery()
+    )
+    projection = (
+        select(
+            MarketSnapshot.market_ticker,
+            MarketSnapshot.close_time,
+            latest_candle.c.latest_period_end,
+        )
+        .outerjoin(latest_candle, latest_candle.c.market_ticker == MarketSnapshot.market_ticker)
+        .where(*filters)
+        .order_by(*ordering)
+    )
+
+    excluded = set(exclude_tickers or ())
+    selected: list[str] = []
+    for market_ticker, close_time, latest_period_end in await session.execute(projection):
+        if market_ticker in excluded:
+            continue
+        if exclude_covered and coverage_reaches_close(latest_period_end, close_time):
+            continue
+        selected.append(market_ticker)
+        if limit is not None and len(selected) >= limit:
+            break
+
+    if not selected:
+        return []
+
+    rows = (
+        await session.scalars(
+            select(MarketSnapshot)
+            .where(*filters, MarketSnapshot.market_ticker.in_(selected))
+            .order_by(*ordering)
+        )
+    ).all()
+    return list(rows)
 
 
 def _price_block_kwargs(prefix: str, block: Any) -> dict[str, Any]:
@@ -222,7 +322,9 @@ async def backfill_one_market(
         latest = await get_latest_candlestick_period_end(
             session, snap.market_ticker, period_interval_seconds
         )
-        if latest is not None and latest >= close_time - tolerance:
+        # Same rule the candidate query used, so a market excluded there is
+        # never re-admitted here (and vice versa) -- see coverage_reaches_close.
+        if coverage_reaches_close(latest, close_time, tolerance):
             coverage = await get_candlestick_coverage(
                 session, snap.market_ticker, period_interval_seconds
             )
@@ -264,7 +366,7 @@ async def backfill_one_market(
         )
         result.outcome = (
             MarketOutcome.COMPLETE
-            if fetched_max >= close_time - tolerance
+            if coverage_reaches_close(fetched_max, close_time, tolerance)
             else MarketOutcome.PARTIAL
         )
         return result
@@ -314,7 +416,7 @@ async def backfill_one_market(
     result.candle_count_after = coverage["candle_count"]
     result.outcome = (
         MarketOutcome.COMPLETE
-        if latest_after is not None and latest_after >= close_time - tolerance
+        if coverage_reaches_close(latest_after, close_time, tolerance)
         else MarketOutcome.PARTIAL
     )
     return result
@@ -332,13 +434,30 @@ async def run_price_backfill(
     limit: int | None = None,
     skip_covered: bool = True,
     dry_run: bool = False,
+    exclude_tickers: Collection[str] | None = None,
 ) -> PriceBackfillReport:
     """Backfill candlestick history for settled markets matching the given
     filters, oldest-close-time first, one committed transaction per market.
     Resumable: an interrupted run's completed markets are skipped on the
     next invocation via ``skip_covered`` (default); a failed market is
-    recorded and the run continues -- never silently discarded."""
+    recorded and the run continues -- never silently discarded.
+
+    Covered markets are excluded from *candidate selection* (not merely
+    skipped after selection) for sweep-shaped runs -- the continuous sync and
+    any bounded `prices backfill` without an explicit market/event selector --
+    so ``limit`` is spent only on markets that still need work.
+
+    Naming an explicit ``tickers`` or ``event_ticker`` opts out of that
+    exclusion: an operator who names a market is inspecting or deliberately
+    re-fetching it, and must still be able to reach it once it is covered.
+    ``skip_covered`` continues to govern whether such a run re-fetches or
+    reports it as already complete, exactly as before. ``--no-skip-covered``
+    likewise disables the exclusion, since it asks for an unconditional
+    re-fetch. Date bounds (``start_date``/``end_date``) narrow a sweep rather
+    than name markets, so they keep the exclusion.
+    """
     report = PriceBackfillReport(resolution_minutes=resolution_minutes, dry_run=dry_run)
+    exclude_covered = skip_covered and not tickers and not event_ticker
 
     async with session_scope(session_factory) as session:
         candidates = await select_backfill_candidates(
@@ -348,6 +467,9 @@ async def run_price_backfill(
             start_date=start_date,
             end_date=end_date,
             limit=limit,
+            period_interval_seconds=resolution_minutes * 60,
+            exclude_covered=exclude_covered,
+            exclude_tickers=exclude_tickers,
         )
         events_by_ticker = {
             e.event_ticker: e for e in (await session.scalars(select(EventRecord))).all()
@@ -389,6 +511,36 @@ async def run_price_backfill(
 
 DEFAULT_SYNC_LIMIT_PER_CYCLE = 50
 
+#: Outcomes that mean "this market will not yield more candles by being asked
+#: again in a moment". Excluding them from the *next* cycle's selection is
+#: what stops a permanently quiet market (`no_price_data`) or one that 404s
+#: (`expired`) from re-occupying the head of the oldest-first queue forever
+#: and starving newly settled markets -- the same starvation the coverage
+#: predicate fixes for already-covered markets. `api_failure` is deliberately
+#: absent: a transient error must stay retryable.
+TERMINAL_SYNC_OUTCOMES = frozenset(
+    {MarketOutcome.NO_PRICE_DATA, MarketOutcome.EXPIRED, MarketOutcome.UNSUPPORTED}
+)
+
+#: Upper bound on the in-process terminal set, so a long-lived loop cannot
+#: grow it without limit. Reaching it simply restores the pre-existing
+#: behaviour for the excess (they get retried), never an error.
+MAX_TERMINAL_SYNC_TICKERS = 20_000
+
+
+def _terminal_for_this_process(result: MarketBackfillResult) -> bool:
+    """A market this cycle proved is not worth re-asking immediately.
+
+    Either it reported a terminal outcome, or it was fetched and stored
+    nothing new while still not reaching close (``partial`` with no forward
+    progress) -- asking again on the next cycle would repeat the same request
+    for the same nothing. A `partial` result that *did* save candles stays
+    eligible, because it is making progress toward coverage.
+    """
+    if result.outcome in TERMINAL_SYNC_OUTCOMES:
+        return True
+    return result.outcome is MarketOutcome.PARTIAL and result.saved == 0
+
 
 async def run_price_sync_loop(
     *,
@@ -406,8 +558,24 @@ async def run_price_sync_loop(
     loop shape already used by the Kalshi and weather collectors -- this is
     not a new scheduler, just another instance of the same one -- including
     best-effort `collector_runs` recording under ``collector="prices"`` for
-    `ops health`."""
+    `ops health`.
+
+    Forward progress has two guards, because a bounded oldest-first queue can
+    be starved from the head by two different kinds of market (ADR 0010):
+
+    - already-covered markets are excluded in the candidate query, before
+      ``limit`` (`select_backfill_candidates`);
+    - markets that just proved terminal for now (quiet, expired, unsupported,
+      or partial-with-no-progress) are excluded from the next cycles via an
+      in-process set.
+
+    The terminal set is deliberately in-process, not persisted: it needs no
+    migration, and forgetting it on restart is the desirable failure mode --
+    a market that was quiet an hour ago gets one more chance after a
+    restart, and the set drains again within a few cycles.
+    """
     cycle_number = 0
+    terminal_tickers: set[str] = set()
     while not stop_event.is_set():
         cycle_number += 1
         started_at = utc_now()
@@ -422,8 +590,14 @@ async def run_price_sync_loop(
                     resolution_minutes=resolution_minutes,
                     limit=limit_per_cycle,
                     skip_covered=True,
+                    exclude_tickers=terminal_tickers,
                 )
                 run_stats = report.totals()
+            if len(terminal_tickers) < MAX_TERMINAL_SYNC_TICKERS:
+                terminal_tickers.update(
+                    r.market_ticker for r in report.results if _terminal_for_this_process(r)
+                )
+            run_stats["terminal_excluded"] = len(terminal_tickers)
             logger.info("price_sync.cycle_complete", cycle=cycle_number, **run_stats)
         except Exception as exc:
             run_error = f"{type(exc).__name__}: {exc}"

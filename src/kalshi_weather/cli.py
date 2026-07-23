@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from kalshi_weather.config import Environment, Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
+from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.backfill import run_backfill
 from kalshi_weather.ingestion.collector import run_collector_loop
 from kalshi_weather.ingestion.price_backfill import run_price_backfill, run_price_sync_loop
@@ -37,7 +38,8 @@ from kalshi_weather.observatory import (
     Severity,
     build_observatory_report,
 )
-from kalshi_weather.ops import restart_policy
+from kalshi_weather.observatory.backup_health import BackupHealthConfig
+from kalshi_weather.ops import alerting, backup, backup_retention, monitor, restart_policy
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
 from kalshi_weather.ops.price_coverage import build_price_coverage_report
@@ -74,6 +76,7 @@ weather_stations_app = typer.Typer(help="Inspect the weather station registry.")
 dataset_app = typer.Typer(help="Build, validate, and export research datasets.")
 settlement_app = typer.Typer(help="Resolve markets to settlement specifications.")
 ops_app = typer.Typer(help="Operations: health, data quality, snapshots, combined runner.")
+backup_app = typer.Typer(help="PostgreSQL backup: finalize, retention, status.")
 prices_app = typer.Typer(help="Historical market price (candlestick) ingestion.")
 app.add_typer(series_app, name="series")
 app.add_typer(markets_app, name="markets")
@@ -85,6 +88,7 @@ app.add_typer(dataset_app, name="dataset")
 app.add_typer(settlement_app, name="settlement")
 app.add_typer(prices_app, name="prices")
 app.add_typer(ops_app, name="ops")
+ops_app.add_typer(backup_app, name="backup")
 
 
 @asynccontextmanager
@@ -96,6 +100,30 @@ async def _open_session(settings: Settings) -> AsyncIterator[AsyncSession]:
             yield session
     finally:
         await engine.dispose()
+
+
+def _backup_dir(settings: Settings) -> Path:
+    """`<KALSHI_DATA_DIR>/backups/postgres` -- mirrors
+    `scripts/backup_postgres.sh`'s own resolution exactly (same relative/
+    absolute handling as `Settings.ensure_dataset_root`)."""
+    base = settings.data_dir if settings.data_dir.is_absolute() else Path.cwd() / settings.data_dir
+    return base / "backups" / "postgres"
+
+
+def _backup_health_config(settings: Settings) -> BackupHealthConfig:
+    backup_dir = _backup_dir(settings)
+    return BackupHealthConfig(
+        backup_dir=backup_dir,
+        status_path=backup_dir / backup.STATUS_FILENAME,
+        remote_type=settings.backup_remote_type,
+        remote_filesystem_path=settings.backup_remote_path,
+        remote_s3_bucket=settings.backup_s3_bucket,
+        remote_s3_prefix=settings.backup_s3_prefix,
+        stale_after_hours=settings.backup_stale_after_hours,
+        remote_stale_after_hours=settings.backup_remote_stale_after_hours,
+        disk_warning_free_gb=settings.backup_disk_warning_free_gb,
+        disk_critical_free_gb=settings.backup_disk_critical_free_gb,
+    )
 
 
 def _build_client(settings: Settings, session: AsyncSession | None = None) -> KalshiClient:
@@ -1039,6 +1067,7 @@ def ops_observatory(
                     weather_interval_seconds=settings.weather_interval_seconds,
                     price_sync_interval_seconds=settings.price_sync_interval_seconds,
                     stale_after_intervals=settings.ops_stale_after_intervals,
+                    backup_health=_backup_health_config(settings),
                 ),
             )
         if as_json:
@@ -1059,6 +1088,96 @@ def ops_observatory(
             raise typer.Exit(code=1)
 
     asyncio.run(run())
+
+
+@ops_app.command("monitor")
+def ops_monitor(
+    state_path: str = typer.Option(..., help="Path to the persisted alert-state JSON."),
+    history_path: str = typer.Option(..., help="Path to the append-only alert-history JSONL log."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the run's decision as JSON."),
+) -> None:
+    """Run the data quality observatory and, on a severity transition, send
+    an alert via the configured transport (ALERT_TRANSPORT; see
+    docs/runbooks/monitoring_alerting.md). Suppresses repeat alerts while
+    severity is unchanged; sends a recovery notification on returning to
+    INFO. Detection and notification only -- never repairs anything, never
+    executes a hypothesis. A non-blocking lock (<state-path>.lock) skips
+    this run rather than overlapping with one still in progress -- intended
+    to run on a schedule (scripts/service/monitor.sh under launchd), not
+    interactively. Exit non-zero iff the observatory's current status is
+    CRITICAL."""
+    lock_path = Path(f"{state_path}.lock")
+    lock_handle = monitor.try_acquire_lock(lock_path)
+    if lock_handle is None:
+        typer.echo("another `ops monitor` run is still in progress; skipping this cycle")
+        return
+
+    async def run() -> None:
+        settings = get_settings()
+        now = utc_now()
+        async with _open_session(settings) as session:
+            report = await build_observatory_report(
+                session,
+                ObservatoryConfig(
+                    kalshi_interval_seconds=settings.collector_interval_seconds,
+                    weather_interval_seconds=settings.weather_interval_seconds,
+                    price_sync_interval_seconds=settings.price_sync_interval_seconds,
+                    stale_after_intervals=settings.ops_stale_after_intervals,
+                    backup_health=_backup_health_config(settings),
+                ),
+            )
+        prior = monitor.load_state(Path(state_path))
+        decision = monitor.decide_alert(report.status, prior, now=now)
+
+        delivered: bool | None = None
+        detail = "suppressed (no severity transition)"
+        if decision.should_alert:
+            telegram = None
+            if settings.alert_telegram_bot_token and settings.alert_telegram_chat_id:
+                telegram = alerting.TelegramConfig(
+                    bot_token=settings.alert_telegram_bot_token,
+                    chat_id=settings.alert_telegram_chat_id,
+                )
+            message = monitor.format_alert_message(report, decision)
+            result = await alerting.send_alert(settings.alert_transport, message, telegram=telegram)
+            delivered, detail = result.delivered, result.detail
+
+        monitor.save_state(Path(state_path), decision.new_state)
+        monitor.append_history(
+            Path(history_path),
+            timestamp=now.isoformat(),
+            severity=report.status,
+            transition=decision.transition,
+            reason=monitor.summarize_reason(report, decision),
+            delivered=delivered,
+            detail=detail,
+        )
+
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": report.status.value,
+                        "transition": decision.transition,
+                        "alerted": decision.should_alert,
+                        "delivered": delivered,
+                        "detail": detail,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo(
+                f"status={report.status.value} transition={decision.transition} "
+                f"alerted={decision.should_alert} delivered={delivered} detail={detail!r}"
+            )
+        if report.status is Severity.CRITICAL:
+            raise typer.Exit(code=1)
+
+    try:
+        asyncio.run(run())
+    finally:
+        lock_handle.close()
 
 
 @ops_app.command("snapshot")
@@ -1176,6 +1295,164 @@ def ops_restart_check(
     report = restart_policy.compare(Path(repo_root).resolve(), Path(manifest))
     typer.echo(restart_policy.format_report(report))
     raise typer.Exit(report.exit_code)
+
+
+@backup_app.command("finalize")
+def backup_finalize(
+    outcome: str = typer.Option(..., help="'success' or 'failed' -- the local dump+verify result."),
+    backup_dir: str = typer.Option(
+        ..., help="Directory the backup lands in (for the status file)."
+    ),
+    local_path: str | None = typer.Option(None, help="Path to the verified local .dump file."),
+    entries: int | None = typer.Option(None, help="pg_restore --list entry count."),
+    size_bytes: int | None = typer.Option(None, help="Size of the local .dump file."),
+    duration_seconds: float | None = typer.Option(None, help="Wall-clock duration of the dump."),
+    error: str | None = typer.Option(None, help="Error detail when outcome=failed."),
+) -> None:
+    """Called by scripts/backup_postgres.sh after its own pg_dump/pg_restore
+    --list work (never before -- this command never touches Postgres
+    itself). Writes the machine-readable status record
+    observatory/backup_health.py reads, and -- only when outcome=success --
+    attempts the configured off-machine copy with independent integrity
+    verification. Local backup success is never contingent on this
+    command's own exit code or on the remote copy succeeding; this always
+    exits 0 (a finalize-step problem is surfaced via the status record and
+    the observatory, not by failing the backup script's own exit code)."""
+    settings = get_settings()
+    remote_config = backup.RemoteConfig(
+        remote_type=settings.backup_remote_type,
+        filesystem_path=settings.backup_remote_path,
+        s3_bucket=settings.backup_s3_bucket,
+        s3_prefix=settings.backup_s3_prefix,
+    )
+    status = backup.finalize_backup(
+        now=utc_now(),
+        local_outcome=outcome,
+        local_path=Path(local_path) if local_path else None,
+        size_bytes=size_bytes,
+        entries=entries,
+        duration_seconds=duration_seconds,
+        error=error,
+        remote_config=remote_config,
+    )
+    status_path = Path(backup_dir) / backup.STATUS_FILENAME
+    backup.write_backup_status(status_path, status)
+    typer.echo(
+        f"local={status.local_outcome} remote={status.remote_outcome} ({status.remote_detail})"
+    )
+
+
+@backup_app.command("prune")
+def backup_prune(
+    dry_run: bool = typer.Option(True, help="Log decisions without deleting anything."),
+    target: str = typer.Option("local", help="'local' or 'remote' (filesystem-type only)."),
+    daily_days: int | None = typer.Option(None, help="Override BACKUP_RETENTION_DAILY_DAYS."),
+    weekly_weeks: int | None = typer.Option(None, help="Override BACKUP_RETENTION_WEEKLY_WEEKS."),
+    monthly_months: int | None = typer.Option(
+        None, help="Override BACKUP_RETENTION_MONTHLY_MONTHS."
+    ),
+) -> None:
+    """Apply the grandfather-father-son retention policy (docs/runbooks/
+    backup_recovery.md "Retention policy"). Defaults to --dry-run=True --
+    pass --no-dry-run to actually delete anything. Never deletes the
+    single newest backup; refuses to run at all if the target directory
+    has zero files matching the naming convention (an empty/wrong
+    directory is far more likely than "no backups yet" for a path this
+    command was pointed at). Also cleans up abandoned `.partial` files
+    (an interrupted dump) older than the grace period. Auto-pruning from
+    the backup script itself is a separate, explicit opt-in
+    (BACKUP_AUTO_PRUNE) -- this command existing does not mean pruning
+    runs automatically."""
+    settings = get_settings()
+    if target == "local":
+        directory = _backup_dir(settings)
+    elif target == "remote":
+        if settings.backup_remote_type != "filesystem":
+            typer.echo(
+                f"--target remote only supports BACKUP_REMOTE_TYPE=filesystem "
+                f"(currently {settings.backup_remote_type!r})"
+            )
+            raise typer.Exit(code=1)
+        if not settings.backup_remote_path:
+            typer.echo("BACKUP_REMOTE_PATH is not set")
+            raise typer.Exit(code=1)
+        directory = Path(settings.backup_remote_path)
+    else:
+        typer.echo(f"unknown --target {target!r} (expected 'local' or 'remote')")
+        raise typer.Exit(code=1)
+
+    files = backup_retention.list_backup_files(directory)
+    plan = backup_retention.compute_retention_plan(
+        files,
+        now=utc_now().replace(tzinfo=None),
+        daily_days=daily_days if daily_days is not None else settings.backup_retention_daily_days,
+        weekly_weeks=(
+            weekly_weeks if weekly_weeks is not None else settings.backup_retention_weekly_weeks
+        ),
+        monthly_months=(
+            monthly_months
+            if monthly_months is not None
+            else settings.backup_retention_monthly_months
+        ),
+    )
+    if plan.aborted:
+        typer.echo(f"ABORTED: {plan.abort_reason} ({directory})")
+        raise typer.Exit(code=1)
+
+    log = backup_retention.apply_retention_plan(plan, dry_run=dry_run)
+    partials = backup_retention.find_stale_partial_files(
+        directory, now=utc_now().replace(tzinfo=None)
+    )
+    log += backup_retention.apply_partial_cleanup(partials, dry_run=dry_run)
+
+    prefix = "[DRY RUN] " if dry_run else ""
+    for entry in log:
+        verb = "would delete" if entry.dry_run and entry.action == "delete" else entry.action
+        typer.echo(f"{prefix}{verb}: {entry.path} -- {entry.reason}")
+    kept = sum(1 for e in log if e.action == "keep")
+    deleted = sum(1 for e in log if e.action == "delete")
+    typer.echo(f"{prefix}{kept} kept, {deleted} {'would be ' if dry_run else ''}deleted")
+
+
+@backup_app.command("status")
+def backup_status(
+    as_json: bool = typer.Option(False, "--json", help="Emit the status record as JSON."),
+) -> None:
+    """Show the last recorded backup outcome and current local backup
+    inventory -- "how to confirm the last successful local and remote
+    backup" (docs/runbooks/backup_recovery.md)."""
+    settings = get_settings()
+    backup_dir = _backup_dir(settings)
+    status = backup.read_backup_status(backup_dir / backup.STATUS_FILENAME)
+    files = backup_retention.list_backup_files(backup_dir)
+    newest = max(files, key=lambda f: f.timestamp) if files else None
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "status": status.to_dict() if status else None,
+                    "local_backup_count": len(files),
+                    "newest_local_backup": newest.path.name if newest else None,
+                    "newest_local_timestamp": newest.timestamp.isoformat() if newest else None,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    if status is None:
+        typer.echo("no backup has ever run")
+    else:
+        typer.echo(f"last run:      {status.timestamp}")
+        typer.echo(
+            f"local outcome: {status.local_outcome}"
+            + (f" ({status.error})" if status.error else "")
+        )
+        typer.echo(f"remote outcome: {status.remote_outcome} -- {status.remote_detail}")
+    typer.echo(f"local backups on disk: {len(files)}")
+    if newest:
+        typer.echo(f"newest local backup:   {newest.path.name} ({newest.timestamp.isoformat()})")
 
 
 if __name__ == "__main__":

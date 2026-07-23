@@ -64,13 +64,9 @@ class Settings(BaseSettings):
     # Collector defaults (see ingestion/collector.py). "Climate and Weather"
     # is Kalshi's real live category value, confirmed in docs/API_VERIFICATION.md
     # -- not "Weather", which was an earlier unverified guess.
-    collector_category: str = Field(
-        default="Climate and Weather", alias="COLLECTOR_CATEGORY"
-    )
+    collector_category: str = Field(default="Climate and Weather", alias="COLLECTOR_CATEGORY")
     collector_market_status: str = Field(default="open", alias="COLLECTOR_MARKET_STATUS")
-    collector_interval_seconds: float = Field(
-        default=300.0, alias="COLLECTOR_INTERVAL_SECONDS"
-    )
+    collector_interval_seconds: float = Field(default=300.0, alias="COLLECTOR_INTERVAL_SECONDS")
     # Bounded bootstrap window for a market with no stored trade checkpoint
     # yet (see docs/adr/0002-ingestion-collector.md decision 9). Without this,
     # a market with a very large trade history (observed: >100,000 trades on
@@ -95,6 +91,60 @@ class Settings(BaseSettings):
     # multiples of its interval is reported stale by `ops health`.
     ops_stale_after_intervals: float = Field(default=3.0, alias="OPS_STALE_AFTER_INTERVALS")
 
+    # --- Monitoring & alerting (docs/runbooks/monitoring_alerting.md) ---
+    # Transport `ops monitor` uses to deliver an alert on a WARNING/CRITICAL
+    # observatory status. "none" (default) disables delivery entirely -- the
+    # monitor still runs, decides, and logs history; it just never calls out.
+    alert_transport: str = Field(default="none", alias="ALERT_TRANSPORT")
+    alert_telegram_bot_token: str | None = Field(default=None, alias="ALERT_TELEGRAM_BOT_TOKEN")
+    alert_telegram_chat_id: str | None = Field(default=None, alias="ALERT_TELEGRAM_CHAT_ID")
+
+    # --- PostgreSQL backup & recovery (docs/runbooks/backup_recovery.md) ---
+    # Identity of the database scripts/backup_postgres.sh dumps -- defaults
+    # match docker-compose.yml's hardcoded POSTGRES_USER/POSTGRES_DB exactly,
+    # so leaving these unset changes no existing behavior.
+    backup_db_user: str = Field(default="kalshi", alias="BACKUP_DB_USER")
+    backup_db_name: str = Field(default="kalshi_weather", alias="BACKUP_DB_NAME")
+    # Off-machine copy destination. "none" (default): local backups only --
+    # the audit finding stays PARTIALLY CLOSED, not CLOSED, until one of
+    # these is configured. filesystem | s3 | none.
+    backup_remote_type: str = Field(default="none", alias="BACKUP_REMOTE_TYPE")
+    # A DIFFERENT mounted volume/NAS path than KALSHI_DATA_DIR -- never the
+    # same physical disk (see docs/runbooks/backup_recovery.md "Off-machine
+    # copy" for why that wouldn't be genuine redundancy).
+    backup_remote_path: str | None = Field(default=None, alias="BACKUP_REMOTE_PATH")
+    # S3-compatible destination. Credentials are never stored here -- the
+    # `aws` CLI's own credential chain (env vars, ~/.aws/credentials, an
+    # instance role) is used, exactly so no AWS secret ever needs to enter
+    # this project's .env.
+    backup_s3_bucket: str | None = Field(default=None, alias="BACKUP_S3_BUCKET")
+    backup_s3_prefix: str = Field(default="postgres", alias="BACKUP_S3_PREFIX")
+    # A local backup older than this is a WARNING/CRITICAL finding (the
+    # default schedule is once/day; 30h mirrors the forecast stream's own
+    # staleness convention -- a day plus slack, not a razor-thin margin).
+    backup_stale_after_hours: float = Field(default=30.0, alias="BACKUP_STALE_AFTER_HOURS")
+    # The off-machine copy is allowed a more lenient window -- it depends on
+    # a second system/network being reachable, which fails independently of
+    # local backup health.
+    backup_remote_stale_after_hours: float = Field(
+        default=48.0, alias="BACKUP_REMOTE_STALE_AFTER_HOURS"
+    )
+    # Free-space thresholds on the local backup destination's filesystem.
+    backup_disk_warning_free_gb: float = Field(default=20.0, alias="BACKUP_DISK_WARNING_FREE_GB")
+    backup_disk_critical_free_gb: float = Field(default=5.0, alias="BACKUP_DISK_CRITICAL_FREE_GB")
+    # Retention policy (ops/backup_retention.py, `ops backup prune`). Exists
+    # as a fully tested, dry-run-capable capability, but auto-pruning is OFF
+    # by default -- scripts/backup_postgres.sh's own long-standing comment
+    # ("pruning is a deliberate manual act") is a prior, explicit policy
+    # decision this project made; overriding it silently would violate that
+    # decision, so BACKUP_AUTO_PRUNE must be explicitly set to enable it.
+    backup_auto_prune: bool = Field(default=False, alias="BACKUP_AUTO_PRUNE")
+    backup_retention_daily_days: int = Field(default=14, alias="BACKUP_RETENTION_DAILY_DAYS")
+    backup_retention_weekly_weeks: int = Field(default=8, alias="BACKUP_RETENTION_WEEKLY_WEEKS")
+    backup_retention_monthly_months: int = Field(
+        default=12, alias="BACKUP_RETENTION_MONTHLY_MONTHS"
+    )
+
     # Weather collector defaults (see ingestion/weather_collector.py,
     # weather/provider.py). NWS asks API consumers to identify themselves in
     # the User-Agent; there's no authentication to configure.
@@ -103,25 +153,17 @@ class Settings(BaseSettings):
         alias="WEATHER_USER_AGENT",
     )
     weather_backfill_days: int = Field(default=30, alias="WEATHER_BACKFILL_DAYS")
-    weather_interval_seconds: float = Field(
-        default=1800.0, alias="WEATHER_INTERVAL_SECONDS"
-    )
+    weather_interval_seconds: float = Field(default=1800.0, alias="WEATHER_INTERVAL_SECONDS")
 
     # Price ingestion defaults (see ingestion/price_backfill.py,
     # docs/runbooks/price_ingestion.md). The observed retention window is a
     # measured finding (~67 days as of 2026-07-21, docs/research/
     # investigations/INV-20260721-price-history-recovery.md), not a documented
     # API guarantee -- kept configurable and re-verifiable, not hardcoded logic.
-    price_candle_resolution_minutes: int = Field(
-        default=1, alias="PRICE_CANDLE_RESOLUTION_MINUTES"
-    )
+    price_candle_resolution_minutes: int = Field(default=1, alias="PRICE_CANDLE_RESOLUTION_MINUTES")
     price_sync_limit_per_cycle: int = Field(default=50, alias="PRICE_SYNC_LIMIT_PER_CYCLE")
-    price_sync_interval_seconds: float = Field(
-        default=1800.0, alias="PRICE_SYNC_INTERVAL_SECONDS"
-    )
-    price_observed_retention_days: int = Field(
-        default=67, alias="PRICE_OBSERVED_RETENTION_DAYS"
-    )
+    price_sync_interval_seconds: float = Field(default=1800.0, alias="PRICE_SYNC_INTERVAL_SECONDS")
+    price_observed_retention_days: int = Field(default=67, alias="PRICE_OBSERVED_RETENTION_DAYS")
     price_retention_warning_buffer_days: int = Field(
         default=10, alias="PRICE_RETENTION_WARNING_BUFFER_DAYS"
     )
@@ -143,9 +185,7 @@ class Settings(BaseSettings):
     # "derive from KALSHI_DATA_DIR" (resolved by the validator below; note
     # pathlib normalizes "" to ".", so DATASET_ROOT=. also derives).
     dataset_root: Path = Field(default=Path(""), alias="DATASET_ROOT")
-    dataset_market_map_path: Path | None = Field(
-        default=None, alias="DATASET_MARKET_MAP_PATH"
-    )
+    dataset_market_map_path: Path | None = Field(default=None, alias="DATASET_MARKET_MAP_PATH")
 
     # Captured by _derive_dataset_root BEFORE it mutates dataset_root:
     # pydantic v2 adds a field to model_fields_set on assignment, so the
@@ -192,9 +232,7 @@ class Settings(BaseSettings):
             probe.write_text("")
             probe.unlink()
         except OSError as exc:
-            raise RuntimeError(
-                f"configured data root {base} is not writable: {exc}"
-            ) from exc
+            raise RuntimeError(f"configured data root {base} is not writable: {exc}") from exc
         return base
 
     @model_validator(mode="after")

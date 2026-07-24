@@ -52,6 +52,11 @@ class RawApiPayload(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     payload_json: Mapped[Any] = mapped_column(JSON, nullable=False)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL
+    # for pre-0010 rows and for non-Kalshi payloads (e.g. weather), whose
+    # host provenance this field does not describe. `endpoint_or_channel`
+    # stores only the path, so it cannot distinguish demo from production.
+    environment: Mapped[str | None] = mapped_column(String(16))
 
 
 class SeriesRecord(Base):
@@ -146,6 +151,10 @@ class MarketSnapshot(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
+    # pre-0010 rows. Demo carries ~zero volume/OI; production carries the real
+    # values, so this disambiguates the liquidity dimension per ticker.
+    environment: Mapped[str | None] = mapped_column(String(16))
 
 
 class OrderbookSnapshot(Base):
@@ -166,6 +175,9 @@ class OrderbookSnapshot(Base):
     # identical to the immediately-prior one for this ticker.
     content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
+    # pre-0010 rows. Demo order books are empty; production has real depth.
+    environment: Mapped[str | None] = mapped_column(String(16))
 
 
 class TradeRecord(Base):
@@ -180,6 +192,11 @@ class TradeRecord(Base):
     taker_side: Mapped[str | None] = mapped_column(String(8))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
+    # rows written before migration 0010. Stamped from the producing client's
+    # base URL, never guessed. Demo trades are near-empty; production carries
+    # the real activity.
+    environment: Mapped[str | None] = mapped_column(String(16))
 
 
 class WeatherStation(Base):
@@ -432,6 +449,9 @@ class MarketCandlestick(Base):
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     observed_at: Mapped[datetime] = mapped_column(nullable=False)
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
+    # pre-0010 rows. Candlesticks come from the production price client.
+    environment: Mapped[str | None] = mapped_column(String(16))
 
 
 class MarketMetadataVerification(Base):
@@ -519,3 +539,6 @@ class SettlementAttempt(Base):
     raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
     snapshot_id: Mapped[int | None] = mapped_column(ForeignKey("market_snapshots.id"))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
+    # pre-0010 rows. Stamped from the settlement client (currently demo).
+    environment: Mapped[str | None] = mapped_column(String(16))

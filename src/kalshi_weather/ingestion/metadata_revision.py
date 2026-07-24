@@ -283,7 +283,12 @@ async def revise_one_market(
             changed_fields=changed_fields,
         )
 
-    save = await persist_market_snapshot(session, market, raw_payload_id=client.last_raw_payload_id)
+    save = await persist_market_snapshot(
+        session,
+        market,
+        raw_payload_id=client.last_raw_payload_id,
+        environment=client.source_environment,
+    )
     appended = not save.was_duplicate
     # `outcome` reports whether a *venue-mutable* field moved; `appended`
     # separately reports whether a row was written. They are not the same

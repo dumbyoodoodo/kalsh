@@ -43,11 +43,15 @@ async def persist_market_snapshot(
     market: Market,
     *,
     raw_payload_id: int | None,
+    environment: str | None = None,
 ) -> SaveResult[MarketSnapshot]:
     """Persist one `Market` as a snapshot row -- the single shared mapping
-    from the wire model to `save_market_snapshot`, used by both open-market
-    discovery and settled-transition capture (ingestion/settlement_sync.py)
-    so the two paths can never drift apart.
+    from the wire model to `save_market_snapshot`, used by open-market
+    discovery, settled-transition capture (ingestion/settlement_sync.py), and
+    metadata revision (ingestion/metadata_revision.py) so the paths can never
+    drift apart. ``environment`` (ADR 0013) is the calling client's source, so
+    a demo-collected snapshot and a production-revision snapshot are
+    distinguishable even under the same ticker.
 
     Non-temperature climate markets can carry a non-numeric
     expiration_value (e.g. empty string or a categorical outcome); a
@@ -91,6 +95,7 @@ async def persist_market_snapshot(
         cap_strike=(Decimal(str(market.cap_strike)) if market.cap_strike is not None else None),
         strike_type=market.strike_type,
         raw_payload_id=raw_payload_id,
+        environment=environment,
     )
 
 
@@ -176,7 +181,10 @@ async def discover_and_snapshot_weather_markets(
                     continue
 
                 save_result = await persist_market_snapshot(
-                    session, market, raw_payload_id=client.last_raw_payload_id
+                    session,
+                    market,
+                    raw_payload_id=client.last_raw_payload_id,
+                    environment=client.source_environment,
                 )
                 if save_result.was_duplicate:
                     result.market_snapshots_duplicate += 1

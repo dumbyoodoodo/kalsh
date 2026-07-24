@@ -276,8 +276,10 @@ async def record_settlement_attempt(
     detail: str | None = None,
     raw_payload_id: int | None = None,
     snapshot_id: int | None = None,
+    environment: str | None = None,
 ) -> SettlementAttempt:
-    """Append one attempt row. Never updates an existing row."""
+    """Append one attempt row. Never updates an existing row. ``environment``
+    (ADR 0013) is the settlement client's source (currently demo)."""
     retryable, cooldown = RETRY_POLICY[outcome]
     record = SettlementAttempt(
         market_ticker=market_ticker,
@@ -290,6 +292,7 @@ async def record_settlement_attempt(
         detail=(detail or None) if detail is None else detail[:300],
         raw_payload_id=raw_payload_id,
         snapshot_id=snapshot_id,
+        environment=environment,
     )
     session.add(record)
     await session.flush()
@@ -310,6 +313,7 @@ async def _attempt_one(
     can never be paired with a missing attempt record, and a recorded terminal
     success can never exist without its snapshot.
     """
+    env = client.source_environment  # ADR 0013: stamp rows with this client's source
     try:
         market = await client.get_market(ticker)
     except KalshiAPIError as exc:
@@ -325,6 +329,7 @@ async def _attempt_one(
             http_status=exc.status_code,
             error_code=type(exc).__name__,
             detail=str(exc)[:300],
+            environment=env,
         )
         return SettleAttemptResult(ticker, outcome, http_status=exc.status_code)
     except Exception as exc:
@@ -335,6 +340,7 @@ async def _attempt_one(
             now=now,
             error_code=type(exc).__name__,
             detail=str(exc)[:300],
+            environment=env,
         )
         return SettleAttemptResult(
             ticker, SettlementOutcome.API_FAILURE_RETRYABLE, error_code=type(exc).__name__
@@ -344,7 +350,9 @@ async def _attempt_one(
     raw_id = client.last_raw_payload_id
 
     try:
-        save = await persist_market_snapshot(session, market, raw_payload_id=raw_id)
+        save = await persist_market_snapshot(
+            session, market, raw_payload_id=raw_id, environment=env
+        )
     except Exception as exc:
         # Persistence failed: the attempt must NOT be recorded as a success.
         # Re-raise so the per-market transaction rolls back entirely; the
@@ -363,6 +371,7 @@ async def _attempt_one(
         http_status=200,
         raw_payload_id=raw_id,
         snapshot_id=save.record.id,
+        environment=env,
     )
     return SettleAttemptResult(ticker, outcome, http_status=200)
 
@@ -452,6 +461,7 @@ async def capture_settled_transitions(
                         now=now,
                         error_code=exc.error_code,
                         detail=exc.detail,
+                        environment=client.source_environment,
                     )
             except Exception:
                 logger.exception("collector.settle_capture.attempt_record_failed", ticker=ticker)

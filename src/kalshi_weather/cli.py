@@ -36,6 +36,7 @@ from kalshi_weather.ingestion.weather_collector import run_weather_collector_loo
 from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
+from kalshi_weather.kalshi.provenance import resolve_kalshi_environment
 from kalshi_weather.logging import configure_logging, get_logger
 from kalshi_weather.observatory import (
     ObservatoryConfig,
@@ -151,6 +152,7 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
 
     raw_payload_sink = None
     if session is not None:
+        environment = resolve_kalshi_environment(base_url).value  # ADR 0013
 
         async def sink(
             source: str, endpoint: str, request_key: str, status: int, payload: Any
@@ -162,6 +164,7 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
                 request_key=request_key,
                 http_status=status,
                 payload_json=payload,
+                environment=environment,
             )
             return raw.id
 
@@ -197,6 +200,7 @@ def _build_price_client(
     demo. No credentials are needed or used: candlestick data for a public
     market is unauthenticated, same as every other read in this client."""
     base_url = settings.base_url_for(Environment.PRODUCTION)
+    environment = resolve_kalshi_environment(base_url).value  # ADR 0013
 
     async def sink(source: str, endpoint: str, request_key: str, status: int, payload: Any) -> int:
         async with session_scope(session_factory) as sink_session:
@@ -207,6 +211,7 @@ def _build_price_client(
                 request_key=request_key,
                 http_status=status,
                 payload_json=payload,
+                environment=environment,
             )
             return raw.id
 
@@ -284,6 +289,7 @@ def market_show(ticker: str) -> None:
                 rules_primary=market.rules_primary,
                 rules_secondary=market.rules_secondary,
                 raw_payload_id=client.last_raw_payload_id,
+                environment=client.source_environment,
             )
             typer.echo(f"ticker:         {market.ticker}")
             typer.echo(f"title:          {market.title or '-'}")
@@ -314,6 +320,7 @@ def orderbook_show(ticker: str, depth: int | None = typer.Option(None)) -> None:
                 yes_levels=book.orderbook.yes,
                 no_levels=book.orderbook.no,
                 raw_payload_id=client.last_raw_payload_id,
+                environment=client.source_environment,
             )
             yes_bids = [(level[0], level[1]) for level in book.orderbook.yes]
             no_bids = [(level[0], level[1]) for level in book.orderbook.no]

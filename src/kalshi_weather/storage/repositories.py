@@ -51,8 +51,11 @@ async def save_raw_payload(
     request_key: str,
     http_status: int,
     payload_json: Any,
+    environment: str | None = None,
 ) -> RawApiPayload:
-    """Insert a raw payload, or return the existing row if it's an exact duplicate."""
+    """Insert a raw payload, or return the existing row if it's an exact
+    duplicate. ``environment`` (ADR 0013) is the Kalshi source environment for
+    Kalshi payloads; leave it None for non-Kalshi (e.g. weather) sources."""
     hash_value = content_hash(payload_json)
     existing = await session.scalar(
         select(RawApiPayload).where(
@@ -73,6 +76,7 @@ async def save_raw_payload(
         content_hash=hash_value,
         payload_json=payload_json,
         schema_version="1",
+        environment=environment,
     )
     session.add(record)
     await session.flush()
@@ -236,11 +240,16 @@ async def save_market_snapshot(
     floor_strike: Decimal | None = None,
     cap_strike: Decimal | None = None,
     strike_type: str | None = None,
+    environment: str | None = None,
 ) -> SaveResult[MarketSnapshot]:
     """Insert a market snapshot, unless it's identical to the immediately-prior
     snapshot for this ticker (see _market_snapshot_content_hash) -- in which
     case the prior row is returned with was_duplicate=True. Nothing is ever
-    overwritten either way; a duplicate is simply not appended."""
+    overwritten either way; a duplicate is simply not appended.
+
+    ``environment`` (ADR 0013) is provenance, deliberately NOT part of the
+    content hash: it records where a row came from, not what the market did, so
+    it must never by itself force a new snapshot."""
     hash_value = _market_snapshot_content_hash(
         market_type=market_type,
         title=title,
@@ -291,6 +300,7 @@ async def save_market_snapshot(
         content_hash=hash_value,
         raw_payload_id=raw_payload_id,
         observed_at=utc_now(),
+        environment=environment,
     )
     session.add(record)
     await session.flush()
@@ -304,9 +314,11 @@ async def save_orderbook_snapshot(
     yes_levels: list[list[int]],
     no_levels: list[list[int]],
     raw_payload_id: int | None,
+    environment: str | None = None,
 ) -> SaveResult[OrderbookSnapshot]:
     """Insert an order-book snapshot, unless the book (yes/no levels) is
-    identical to the immediately-prior snapshot for this ticker."""
+    identical to the immediately-prior snapshot for this ticker.
+    ``environment`` (ADR 0013) is provenance, not part of the dedup hash."""
     yes_bids = [(level[0], level[1]) for level in yes_levels]
     no_bids = [(level[0], level[1]) for level in no_levels]
     quote = reconstruct_best_quote(yes_bids, no_bids)
@@ -333,6 +345,7 @@ async def save_orderbook_snapshot(
         spread_cents=quote.yes_spread_cents,
         content_hash=hash_value,
         raw_payload_id=raw_payload_id,
+        environment=environment,
     )
     session.add(record)
     await session.flush()
@@ -349,10 +362,12 @@ async def save_trade(
     count: int,
     taker_side: str | None,
     raw_payload_id: int | None,
+    environment: str | None = None,
 ) -> SaveResult[TradeRecord]:
     """Insert a trade, unless a row with this trade_id already exists --
     trades are immutable and keyed by Kalshi's own trade_id, so a repeat
-    fetch (e.g. an overlapping min_ts window) is a duplicate, not new data."""
+    fetch (e.g. an overlapping min_ts window) is a duplicate, not new data.
+    ``environment`` (ADR 0013) records the source; demo trades are near-empty."""
     existing = await session.get(TradeRecord, trade_id)
     if existing is not None:
         return SaveResult(record=existing, was_duplicate=True)
@@ -365,6 +380,7 @@ async def save_trade(
         count=count,
         taker_side=taker_side,
         raw_payload_id=raw_payload_id,
+        environment=environment,
     )
     session.add(record)
     await session.flush()
@@ -683,11 +699,13 @@ async def save_market_candlestick(
     volume: int,
     open_interest: int | None,
     raw_payload_id: int | None,
+    environment: str | None = None,
 ) -> SaveResult[MarketCandlestick]:
     """Insert a candle, unless this exact (market, resolution, period_end)
     is already stored -- candles are immutable once elapsed (Kalshi's
     endpoint never revises a past period), so a repeat fetch is a duplicate,
-    never an overwrite."""
+    never an overwrite. ``environment`` (ADR 0013) is the price client's source
+    (production for the price-sync loop)."""
     existing = await session.scalar(
         select(MarketCandlestick).where(
             MarketCandlestick.market_ticker == market_ticker,
@@ -722,6 +740,7 @@ async def save_market_candlestick(
         open_interest=open_interest,
         raw_payload_id=raw_payload_id,
         observed_at=utc_now(),
+        environment=environment,
     )
     session.add(record)
     await session.flush()

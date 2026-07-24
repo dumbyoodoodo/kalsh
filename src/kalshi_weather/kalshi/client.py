@@ -32,6 +32,7 @@ from kalshi_weather.kalshi.models import (
     TradeListResponse,
 )
 from kalshi_weather.kalshi.pagination import paginate
+from kalshi_weather.kalshi.provenance import resolve_kalshi_environment
 from kalshi_weather.logging import get_logger
 
 logger = get_logger(__name__)
@@ -118,6 +119,14 @@ class KalshiClient:
         #: read by the collector loop when recording per-cycle metrics.
         self.requests_attempted: int = 0
         self.retries: int = 0
+
+    @property
+    def source_environment(self) -> str:
+        """Canonical provenance (`demo`/`production`/`unknown`) for data this
+        client produces, resolved from its effective base URL (ADR 0013).
+        Write paths stamp rows with this so demo- and production-sourced data
+        stay distinguishable."""
+        return resolve_kalshi_environment(str(self._http.base_url)).value
 
     async def __aenter__(self) -> "KalshiClient":
         return self

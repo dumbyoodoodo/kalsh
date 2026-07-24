@@ -401,6 +401,7 @@ async def backfill_one_market(
             volume=candle.volume or 0,
             open_interest=candle.open_interest,
             raw_payload_id=raw_payload_id,
+            environment=client.source_environment,
             **_price_block_kwargs("yes_bid", candle.yes_bid),
             **_price_block_kwargs("yes_ask", candle.yes_ask),
         )

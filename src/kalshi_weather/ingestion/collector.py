@@ -110,6 +110,7 @@ async def run_collection_cycle(
                 yes_levels=book.orderbook.yes,
                 no_levels=book.orderbook.no,
                 raw_payload_id=client.last_raw_payload_id,
+                environment=client.source_environment,
             )
             if orderbook_result.was_duplicate:
                 stats.orderbooks_duplicate += 1
@@ -162,6 +163,7 @@ async def run_collection_cycle(
                     count=trade.count,
                     taker_side=trade.taker_side,
                     raw_payload_id=client.last_raw_payload_id,
+                    environment=client.source_environment,
                 )
                 if trade_result.was_duplicate:
                     stats.trades_duplicate += 1

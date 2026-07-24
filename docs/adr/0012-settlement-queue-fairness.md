@@ -134,6 +134,10 @@ queue, and every deferral is auditable in the ledger.
   production.** A real and possibly significant inconsistency, discovered
   during this investigation, but a separate decision requiring its own
   evidence — changing it would alter what data the archive contains.
+  *(Update: this environment inconsistency has since been investigated and
+  instrumented — see ADR 0013, which confirms demo/production share
+  definitions and results but not liquidity, and adds source-environment
+  provenance to new rows. The endpoint decision itself remains open there.)*
 - **The 20 KXRAIN markets past `expiration_time` with no result on demo.**
   They now retry on a 6-hour cooldown and are counted under
   `result_missing_retryable`; whether the demo venue ever settles them is an

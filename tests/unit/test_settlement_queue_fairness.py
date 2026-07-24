@@ -415,3 +415,75 @@ async def test_existing_snapshots_are_never_mutated(session_factory) -> None:  #
     async with session_scope(session_factory) as s:
         after = (await s.scalars(select(MarketSnapshot).order_by(MarketSnapshot.id))).all()
     assert [(r.id, r.result, r.content_hash) for r in after][: len(snapshot)] == snapshot
+
+
+async def test_snapshot_persists_when_raw_payload_is_in_the_open_transaction(  # type: ignore[no-untyped-def]
+    session_factory,
+) -> None:
+    """End-to-end persistence with an uncommitted raw payload (ADR 0012).
+
+    Wires a real payload sink writing into the same open session, so
+    `last_raw_payload_id` points at an uncommitted `raw_api_payloads` row --
+    production's shape -- and asserts the snapshot still persists with full
+    provenance.
+
+    **Honest limitation:** this does NOT reproduce the production failure it
+    was written for. On 2026-07-23 the separate-session approach made that row
+    invisible and 10 of 10 newly reached markets hit
+    `market_snapshots_raw_payload_id_fkey`. This suite runs on SQLite with a
+    `StaticPool`, where every session shares one connection and foreign keys
+    are not enforced by default, so the separate-session variant passes here
+    too (verified by reverting the fix and re-running). That is exactly why the
+    bug escaped the unit suite and only appeared against PostgreSQL.
+
+    The real proof is the production evidence plus the post-fix cycles. Catching
+    this class of defect in tests would need a PostgreSQL-backed integration
+    test with FK enforcement -- recorded as follow-up, not faked here.
+    """
+    from kalshi_weather.storage.repositories import save_raw_payload
+
+    async with session_scope(session_factory) as s:
+        await _seed(s, "KXTEMPNYCH-26JUL2316-T1", close_time=NEW_CLOSE)
+
+    spec = {"KXTEMPNYCH-26JUL2316-T1": _payload("KXTEMPNYCH-26JUL2316-T1", result="yes")}
+
+    async with session_scope(session_factory) as session:
+
+        async def sink(source, endpoint, request_key, status, payload):  # type: ignore[no-untyped-def]
+            raw = await save_raw_payload(
+                session,
+                source=source,
+                endpoint_or_channel=endpoint,
+                request_key=request_key,
+                http_status=status,
+                payload_json=payload,
+            )
+            return raw.id
+
+        client = KalshiClient(
+            base_url="https://example.invalid/trade-api/v2",
+            environment=Environment.DEVELOPMENT,
+            transport=httpx.MockTransport(_handler(spec)),
+            min_request_interval_seconds=0,
+            max_retries=1,
+            raw_payload_sink=sink,
+        )
+        async with client:
+            stats = await capture_settled_transitions(
+                client,
+                session,
+                open_tickers=set(),
+                limit=5,
+                recent_days=7,
+                session_factory=session_factory,
+                now=NOW,
+            )
+        assert client.last_raw_payload_id is not None, "sink must have run"
+
+    assert stats.settled_captured == 1, "must persist despite the uncommitted raw payload"
+    assert stats.errors == 0
+    async with session_scope(session_factory) as s:
+        attempt = (await s.scalars(select(SettlementAttempt))).one()
+    assert attempt.outcome == SettlementOutcome.SETTLED_AND_SAVED.value
+    assert attempt.snapshot_id is not None
+    assert attempt.raw_payload_id is not None, "provenance retained"

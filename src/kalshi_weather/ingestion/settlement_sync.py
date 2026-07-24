@@ -44,7 +44,6 @@ from kalshi_weather.ingestion.discovery import persist_market_snapshot
 from kalshi_weather.kalshi.client import KalshiAPIError, KalshiClient
 from kalshi_weather.kalshi.models import Market
 from kalshi_weather.logging import get_logger
-from kalshi_weather.storage.database import session_scope
 from kalshi_weather.storage.models import MarketSnapshot, SettlementAttempt
 
 logger = get_logger(__name__)
@@ -387,10 +386,17 @@ async def capture_settled_transitions(
 ) -> SettleSyncStats:
     """Run one bounded settlement pass.
 
-    When `session_factory` is supplied each market gets its own transaction,
-    so one market's failure cannot roll back another's success. Without it the
-    caller's `session` is used for backward compatibility (the collector
-    passes a factory).
+    Each market is processed inside its own SAVEPOINT on the caller's
+    `session`, so one market's failure rolls back only that market while the
+    rest of the cycle -- and the outer transaction -- continue.
+
+    `session_factory` is accepted but no longer used to open a session per
+    market. That approach failed in production: a separate session cannot see
+    the `raw_api_payloads` row the client's sink wrote into the caller's still
+    open transaction, so every newly reached market violated the
+    `raw_payload_id` foreign key. The parameter is retained so the collector's
+    call site keeps working and so the intent (per-market isolation) stays
+    explicit at the boundary.
     """
     now = now or utc_now()
     stats = SettleSyncStats()
@@ -417,10 +423,15 @@ async def capture_settled_transitions(
 
     for ticker in pending:
         try:
-            if session_factory is not None:
-                async with session_scope(session_factory) as market_session:
-                    result = await _attempt_one(market_session, client, ticker, now=now)
-            else:
+            # SAVEPOINT per market, not a separate session. A separate session
+            # cannot see the `raw_api_payloads` row the client's sink just
+            # wrote into *this* session's open transaction, so every newly
+            # reached market failed its raw_payload_id foreign key (observed
+            # in production, cycle 2 of the ADR 0012 deploy: 10/10 new markets
+            # hit ForeignKeyViolation). A nested transaction gives the same
+            # per-market isolation -- a rollback undoes only this market --
+            # while keeping the raw payload visible.
+            async with session.begin_nested():
                 result = await _attempt_one(session, client, ticker, now=now)
         except _PersistenceFailure as exc:
             result = SettleAttemptResult(
@@ -430,17 +441,10 @@ async def capture_settled_transitions(
                 detail=exc.detail,
             )
             try:
-                if session_factory is not None:
-                    async with session_scope(session_factory) as retry_session:
-                        await record_settlement_attempt(
-                            retry_session,
-                            market_ticker=ticker,
-                            outcome=SettlementOutcome.PERSISTENCE_FAILURE,
-                            now=now,
-                            error_code=exc.error_code,
-                            detail=exc.detail,
-                        )
-                else:
+                # The savepoint above already rolled back this market's writes;
+                # the outer transaction is still usable, so the attempt row is
+                # recorded normally and the market stays retryable.
+                async with session.begin_nested():
                     await record_settlement_attempt(
                         session,
                         market_ticker=ticker,

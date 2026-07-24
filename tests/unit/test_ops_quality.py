@@ -68,6 +68,26 @@ async def test_clean_empty_store_is_ok_with_gap_warnings(session: AsyncSession) 
     assert json.dumps(report.to_dict())  # machine-readable
 
 
+def test_expected_db_revision_matches_alembic_head() -> None:
+    """EXPECTED_DB_REVISION must track the latest migration. This is the guard
+    that the rest of this file's fixtures cannot provide -- they insert whatever
+    the constant holds, so they never catch the constant lagging a new
+    migration. Forgetting to bump it makes the observatory go CRITICAL with
+    `unexpected_schema_change` right after a deploy (ADR 0013's 0010 migration
+    hit exactly this)."""
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    assert head == EXPECTED_DB_REVISION, (
+        f"EXPECTED_DB_REVISION={EXPECTED_DB_REVISION!r} but Alembic head is "
+        f"{head!r}; bump ops/quality.py in the same change as the migration."
+    )
+
+
 async def test_schema_mismatch_is_an_error(session: AsyncSession) -> None:
     await session.execute(text("UPDATE alembic_version SET version_num = '0001'"))
     report = await run_quality_checks(session)

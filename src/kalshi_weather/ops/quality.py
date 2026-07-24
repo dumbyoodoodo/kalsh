@@ -30,7 +30,7 @@ from kalshi_weather.weather.stations import list_stations
 #: The Alembic revision this codebase expects the database to be at. Bump in
 #: the same change that adds a migration -- `unexpected_schema_change` fires
 #: on any mismatch, in either direction (DB behind code, or code behind DB).
-EXPECTED_DB_REVISION = "0009"
+EXPECTED_DB_REVISION = "0010"
 
 #: Windows for gap checks. Observations: a settled day's final CLI report
 #: arrives the next local morning, so "yesterday missing" is only a gap once

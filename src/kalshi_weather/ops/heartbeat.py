@@ -21,8 +21,11 @@ outcome are.
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import httpx
 from sqlalchemy import func, select
@@ -134,3 +137,177 @@ async def run_heartbeat(
 
     logger.info("ops.heartbeat.pinged", newest_snapshot_at=str(newest))
     return HeartbeatResult(PINGED_HEALTHY, emitted=True, detail="ok", newest_snapshot_at=newest)
+
+
+# --- persisted state (read by `ops heartbeat-status` / status.sh) ----------
+
+#: Outcomes where the *collector* was healthy at attempt time. PING_FAILED
+#: means the collector was fine but the external ping didn't get through -- a
+#: delivery problem, not a data problem -- so it counts as collector-healthy.
+_COLLECTOR_HEALTHY_OUTCOMES = frozenset({PINGED_HEALTHY, PING_FAILED})
+#: Outcomes that deliberately withheld the ping because the collector was NOT
+#: healthy (this is the dead-man's-switch firing on purpose).
+_COLLECTOR_UNHEALTHY_OUTCOMES = frozenset({WITHHELD_STALE, WITHHELD_NO_DATA, WITHHELD_DB_ERROR})
+
+
+@dataclass(frozen=True)
+class HeartbeatState:
+    """The last-attempt bookkeeping `ops heartbeat` persists so a read-only
+    status check can report recency without sending a request. ``last_success_at``
+    tracks the last time a ping was actually emitted (not just attempted), so
+    the staleness check reflects real delivery, not withheld attempts."""
+
+    last_attempt_at: datetime | None
+    last_outcome: str | None
+    last_emitted: bool
+    last_success_at: datetime | None
+    newest_snapshot_at: datetime | None = None
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def load_heartbeat_state(path: Path) -> HeartbeatState | None:
+    """Read the persisted heartbeat state. Returns None if the file is absent
+    (no attempt yet) or unparseable (treated as no usable state, never raises)
+    -- a status check must degrade gracefully, not crash."""
+    try:
+        raw = path.read_text()
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return HeartbeatState(
+        last_attempt_at=_parse_dt(data.get("last_attempt_at")),
+        last_outcome=data.get("last_outcome"),
+        last_emitted=bool(data.get("last_emitted", False)),
+        last_success_at=_parse_dt(data.get("last_success_at")),
+        newest_snapshot_at=_parse_dt(data.get("newest_snapshot_at")),
+    )
+
+
+def write_heartbeat_state(path: Path, result: HeartbeatResult, now: datetime) -> None:
+    """Persist the outcome of one attempt, preserving the prior ``last_success_at``
+    unless this attempt itself emitted a ping. Written atomically (tmp + replace)
+    so a status check never reads a half-written file."""
+    prior = load_heartbeat_state(path)
+    last_success = now if result.emitted else (prior.last_success_at if prior else None)
+    payload = {
+        "last_attempt_at": now.isoformat(),
+        "last_outcome": result.outcome,
+        "last_emitted": result.emitted,
+        "last_success_at": last_success.isoformat() if last_success else None,
+        "newest_snapshot_at": (
+            result.newest_snapshot_at.isoformat() if result.newest_snapshot_at else None
+        ),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
+
+
+# --- read-only status classification (pure; unit-tested) -------------------
+
+STATUS_NOT_CONFIGURED = "not_configured"
+STATUS_AGENT_NOT_RUNNING = "agent_not_running"
+STATUS_NO_ATTEMPT = "no_attempt"
+STATUS_LAST_ATTEMPT_FAILED = "last_attempt_failed"
+STATUS_HEALTHY = "healthy"
+
+
+@dataclass(frozen=True)
+class HeartbeatStatusReport:
+    """The read-only verdict rendered by `ops heartbeat-status`. ``label`` is
+    the coarse state (one of the five required cases); ``collector_healthy`` is
+    the orthogonal question of whether the *collector* was healthy at the last
+    attempt (None when there is no attempt to judge); ``stale`` warns that no
+    ping has succeeded within period+grace."""
+
+    label: str
+    stale: bool
+    collector_healthy: bool | None
+    summary: str
+    last_attempt_at: datetime | None = None
+    last_outcome: str | None = None
+    last_success_at: datetime | None = None
+
+
+def _collector_healthy(outcome: str | None) -> bool | None:
+    if outcome in _COLLECTOR_HEALTHY_OUTCOMES:
+        return True
+    if outcome in _COLLECTOR_UNHEALTHY_OUTCOMES:
+        return False
+    return None
+
+
+def classify_heartbeat_status(
+    *,
+    url_configured: bool,
+    agent_running: bool,
+    state: HeartbeatState | None,
+    now: datetime,
+    period_seconds: float,
+    grace_seconds: float,
+) -> HeartbeatStatusReport:
+    """Map the gathered facts to one of the five required states plus a
+    staleness warning. Pure: all inputs are passed in (launchd/config facts are
+    gathered by the caller), so the policy is unit-testable without a host."""
+    if not url_configured:
+        return HeartbeatStatusReport(
+            STATUS_NOT_CONFIGURED,
+            stale=False,
+            collector_healthy=None,
+            summary="HEARTBEAT_URL not set -- external uptime monitoring disabled",
+        )
+    if not agent_running:
+        return HeartbeatStatusReport(
+            STATUS_AGENT_NOT_RUNNING,
+            stale=False,
+            collector_healthy=None,
+            summary="configured, but the heartbeat agent is not running -- no external pings sent",
+        )
+    if state is None or state.last_attempt_at is None:
+        return HeartbeatStatusReport(
+            STATUS_NO_ATTEMPT,
+            stale=False,
+            collector_healthy=None,
+            summary="agent running, but no heartbeat attempt has been recorded yet",
+        )
+
+    window = timedelta(seconds=period_seconds + grace_seconds)
+    if state.last_success_at is None:
+        stale = True
+    else:
+        stale = to_naive_utc(now) - to_naive_utc(state.last_success_at) > window
+    collector_healthy = _collector_healthy(state.last_outcome)
+
+    if not state.last_emitted:
+        summary = f"last attempt did not emit a ping (outcome={state.last_outcome})"
+        label = STATUS_LAST_ATTEMPT_FAILED
+    else:
+        summary = "heartbeat healthy -- last attempt emitted a ping"
+        label = STATUS_HEALTHY
+    if stale:
+        window_min = round(window.total_seconds() / 60, 1)
+        summary += f" -- WARNING: no successful ping within {window_min} min (period+grace)"
+
+    return HeartbeatStatusReport(
+        label,
+        stale=stale,
+        collector_healthy=collector_healthy,
+        summary=summary,
+        last_attempt_at=state.last_attempt_at,
+        last_outcome=state.last_outcome,
+        last_success_at=state.last_success_at,
+    )

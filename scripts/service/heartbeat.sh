@@ -13,4 +13,4 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 cd "${REPO_DIR}"
 
 env PYTHONPATH="${REPO_DIR}/src" "${REPO_DIR}/.venv/bin/python" -m kalshi_weather.cli \
-    ops heartbeat || true
+    ops heartbeat --state-path "${HEARTBEAT_STATE_PATH}" || true

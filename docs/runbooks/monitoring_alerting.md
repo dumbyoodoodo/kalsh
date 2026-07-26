@@ -258,3 +258,13 @@ collector is fresh, and `withheld_stale` / `withheld_no_data` /
 `withheld_db_error` (`emitted=False`) otherwise. With `HEARTBEAT_URL` unset the
 agent no-ops (`skipped_not_configured`), so installing it before configuring
 the URL is harmless.
+
+Status: `scripts/service/status.sh` has a read-only "heartbeat" section showing
+whether the URL is configured (never the value), the agent's installed/loaded/
+running state, and the last attempt's timestamp, outcome, collector-health, and
+one of `NOT_CONFIGURED` / `AGENT_NOT_RUNNING` / `NO_ATTEMPT` /
+`LAST_ATTEMPT_FAILED` / `HEALTHY` (with a staleness `WARNING` if no ping has
+succeeded within the ping interval plus grace). The default status check sends
+**no** network request -- it reads the local `heartbeat_state.json` that
+`ops heartbeat` writes. `status.sh --ping-heartbeat` additionally fires one real
+ping as a manual end-to-end test.

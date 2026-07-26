@@ -57,6 +57,9 @@ MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-900}"
 # ping only happens when HEARTBEAT_URL is set; the agent is harmless otherwise.
 HEARTBEAT_OUT_LOG="${LOG_DIR}/heartbeat.out.log"
 HEARTBEAT_ERR_LOG="${LOG_DIR}/heartbeat.err.log"
+# Last-attempt bookkeeping `ops heartbeat` writes and `ops heartbeat-status`
+# (via status.sh) reads -- operational state, alongside the monitor's state.
+HEARTBEAT_STATE_PATH="${LOG_DIR}/heartbeat_state.json"
 HEARTBEAT_INTERVAL_SECONDS="$(_read_env_var HEARTBEAT_INTERVAL_SECONDS)"
 HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS:-300}"
 

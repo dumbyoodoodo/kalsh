@@ -47,7 +47,12 @@ from kalshi_weather.observatory.backup_health import BackupHealthConfig
 from kalshi_weather.ops import alerting, backup, backup_retention, monitor, restart_policy
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
-from kalshi_weather.ops.heartbeat import run_heartbeat
+from kalshi_weather.ops.heartbeat import (
+    classify_heartbeat_status,
+    load_heartbeat_state,
+    run_heartbeat,
+    write_heartbeat_state,
+)
 from kalshi_weather.ops.price_coverage import build_price_coverage_report
 from kalshi_weather.ops.quality import run_quality_checks
 from kalshi_weather.ops.snapshot import create_snapshot, default_snapshot_version
@@ -1259,7 +1264,11 @@ def ops_monitor(
 
 
 @ops_app.command("heartbeat")
-def ops_heartbeat() -> None:
+def ops_heartbeat(
+    state_path: str | None = typer.Option(
+        None, help="Persist the attempt outcome to this JSON file for `ops heartbeat-status`."
+    ),
+) -> None:
     """Emit an external uptime heartbeat (dead-man's-switch). Pings HEARTBEAT_URL
     only while the collector is healthy; withholds the ping if the machine is
     off (nothing runs), wedged, or the DB is unreachable, so an EXTERNAL monitor
@@ -1267,19 +1276,95 @@ def ops_heartbeat() -> None:
     run on this machine and can't fire when it's dead. Intended to run on a
     short schedule under launchd (scripts/service/heartbeat.sh). Always exits 0
     -- the signal is the ping's presence/absence, not this process's exit code.
+    Sends a network request (the ping); `ops heartbeat-status` does not.
     See docs/runbooks/monitoring_alerting.md."""
 
     async def run() -> None:
         settings = get_settings()
+        now = utc_now()
         engine = create_engine(settings.database_url)
         session_factory = create_session_factory(engine)
         try:
-            result = await run_heartbeat(settings, session_factory)
+            result = await run_heartbeat(settings, session_factory, now=now)
         finally:
             await engine.dispose()
+        if state_path is not None:
+            write_heartbeat_state(Path(state_path), result, now)
         typer.echo(f"heartbeat outcome={result.outcome} emitted={result.emitted} {result.detail}")
 
     asyncio.run(run())
+
+
+@ops_app.command("heartbeat-status")
+def ops_heartbeat_status(
+    state_path: str = typer.Option(
+        ..., help="Path to the heartbeat state JSON written by ops heartbeat."
+    ),
+    period_seconds: float = typer.Option(300.0, help="Heartbeat ping interval, seconds."),
+    grace_seconds: float = typer.Option(300.0, help="Extra staleness grace, seconds."),
+    url_configured: bool | None = typer.Option(
+        None,
+        "--url-configured/--no-url-configured",
+        help="Whether HEARTBEAT_URL is set (caller supplies it; default: read from settings).",
+    ),
+    agent_running: bool = typer.Option(
+        False,
+        "--agent-running/--no-agent-running",
+        help="Whether the launchd heartbeat agent is running (supplied by status.sh).",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the status report as JSON."),
+) -> None:
+    """Read-only heartbeat status: report the last attempt and classify the
+    heartbeat into one of not-configured / agent-not-running / no-attempt /
+    last-attempt-failed / healthy, plus a staleness warning. Reads only the
+    local state file and the supplied facts -- never sends a network request
+    and never prints HEARTBEAT_URL. Intended to be called by
+    scripts/service/status.sh, which supplies the launchd/config facts."""
+    configured = (
+        (get_settings().heartbeat_url is not None) if url_configured is None else url_configured
+    )
+    state = load_heartbeat_state(Path(state_path))
+    report = classify_heartbeat_status(
+        url_configured=configured,
+        agent_running=agent_running,
+        state=state,
+        now=utc_now(),
+        period_seconds=period_seconds,
+        grace_seconds=grace_seconds,
+    )
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "label": report.label,
+                    "stale": report.stale,
+                    "collector_healthy": report.collector_healthy,
+                    "last_attempt_at": (
+                        report.last_attempt_at.isoformat() if report.last_attempt_at else None
+                    ),
+                    "last_outcome": report.last_outcome,
+                    "last_success_at": (
+                        report.last_success_at.isoformat() if report.last_success_at else None
+                    ),
+                    "summary": report.summary,
+                },
+                indent=2,
+            )
+        )
+        return
+    health = (
+        "n/a"
+        if report.collector_healthy is None
+        else ("healthy" if report.collector_healthy else "unhealthy")
+    )
+    if report.last_attempt_at is not None:
+        typer.echo(
+            f"  last attempt: {report.last_attempt_at.isoformat()} "
+            f"outcome={report.last_outcome} (collector {health})"
+        )
+        last_success = report.last_success_at.isoformat() if report.last_success_at else "never"
+        typer.echo(f"  last success: {last_success}")
+    typer.echo(f"  status: {report.label.upper()} -- {report.summary}")
 
 
 @ops_app.command("snapshot")

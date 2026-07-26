@@ -554,3 +554,46 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 **Results.** Run 2026-07-22 — [EXP-20260722-H0017-revision-risk-pricing](docs/research/experiments/EXP-20260722-H0017-revision-risk-pricing.md), all three input hashes re-verified at G1; analysis commit `512d248`; reruns byte-identical. All gates passed: strike-semantics agreement **792/792** vs realized payouts; event-time presence 100%; N = 122 adjacent at-risk variable-days, quote coverage 96.8%, 9 qualifying revisions. **Primary: D = +2.33pp, 95% CI [−1.85, +6.50]pp** (mean implied 9.7¢ vs realized 7.4%) — within the frozen ±7.5pp margin on both sides → **EFFICIENT-WITHIN-MARGIN** (step 3). Controls coherent: locked-NO contracts at 0.5¢ mean; placebo-window reaction (9.3¢) exceeds event reaction (6.0¢) — the preliminary confirms rather than surprises, and the event-study path shows impossible buckets priced to ~0 *before* official publication; per-variable D = +0.5pp (tmax) / +4.1pp (tmin — a slight premium on the riskier variable, not neglect); sensitivities stable (+2.4 to +2.8pp); the 12h-extension artifact (stale end-of-life quotes) documented as a measurement caution. Figures + narrative: `docs/research/postmortems/2026-07-22-h0017-closeout.md`.
 
 **Conclusion.** **Rejected** — and the rejection is the finding: near-settlement NYC weather prices incorporate the program's proven revision-risk knowledge to within economic materiality (an equivalence claim at ±7.5pp, not mere absence of evidence). Combined with H0007's locked-side null, the near-settlement zone is efficiently priced; there is no Phase-6 case from this channel on this evidence. The remaining edge candidates are the forecast-side questions (H0003 → M-01 → H0006), which concern genuinely probabilistic horizons rather than the near-settlement zone traders demonstrably handle well. Dated (2026-05→07, NYC): scheduled re-run ≥ late Sept 2026 with a ~3× cohort and possibly DEN/LAX as their candle history accrues.
+
+### H0018 — Weather + contract features improve on the Kalshi market probability (PRELIMINARY baseline)
+
+- **Status:** Closed 2026-07-26 — **NOT SUPPORTED** (coverage-blocked held-out test; descriptive in-sample null). See Results below.
+- **Opened:** 2026-07-26
+- **Related:** ADR 0014 (production cutover — the data source), ADR 0013 (provenance), `dataset/provenance.py` (canonical dataset), H0005 (null: daily-temp prices calibrated within costs — the market-benchmark ancestor)
+- **Dataset version:** frozen canonical decision-grain build `EXP-20260726-H0018` (git commit + DB revision + hashes recorded in its manifest); production-only liquidity policy, though **no liquidity feature is used here**.
+
+**Hypothesis.** A probability model using point-in-time weather forecasts, observations, contract thresholds, station/location, and time-to-resolution can improve out-of-sample probability calibration (Brier score) or predictive loss relative to the contemporaneous Kalshi market-implied probability, for settled weather markets, at a fixed 24-hour-before-close decision horizon.
+
+**Claim reduction (pre-specified, before any modeling).** The verified-production data supports only **~168 event-days** (station×date×variable) across 72 dates (2026-05-15→07-25), of ~1,008 threshold markets, and is **heavily Denver-concentrated (≈86%)**. This is too thin and too dependent for a confirmatory held-out test. **This is registered as a preliminary baseline study**, not a confirmatory test: the primary comparison is reported with an event-day-grouped bootstrap CI, and no confirmatory "edge" claim may be made regardless of the point estimate. The strongest allowed positive verdict is `SUPPORTED BUT INCONCLUSIVE`.
+
+**Primary outcome metric.** Test-set **Brier score** of the market+weather model minus the raw market benchmark, on identical test rows (lower is better; negative difference = improvement).
+
+**Secondary metrics.** Log loss; calibration intercept & slope; reliability curve; expected calibration error (ECE); mean predicted vs actual positive rate; sample & event-day counts; per-station and per-variable Brier; Brier vs raw market per model.
+
+**Market benchmark.** Contemporaneous **production candlestick close price** (in probability = cents/100) at the latest candle whose `period_end ≤ decision_time` (decision_time = close − 24h). Order-book/last-trade prices are not used (thin verified coverage). Prices clipped to [0.02, 0.98] for scoring stability (fixed, pre-registered). Raw (uncalibrated) market probability is the benchmark; a separately-calibrated market is Model 4. No fees applied (probability scoring only). No later/final price used.
+
+**Eligible markets.** Weather-related Kalshi contract; deterministic settlement interpretation mapping to a station with weather data (CHI/DEN/LAX/NYC); valid final binary label (`kalshi_result ∈ {yes,no}`); reliable close_time; a production candle price at ≤ decision_time; a point-in-time forecast **and** observation available at ≤ decision_time. Excluded otherwise, with recorded reason. No liquidity fields required or used.
+
+**Decision horizon.** 24 hours before `close_time`, chosen from coverage (996/1008 have a ≤24h-price) before any performance was evaluated. One primary row per market.
+
+**Splits (chronological, by target_date).** Train = target_date ≤ 2026-06-30; Validation/calibration = 2026-07-01 → 2026-07-12; Test = 2026-07-13 → 2026-07-25. Boundaries frozen here, before test evaluation. Whole event-families (station×date) never span splits (split is by date). Grouped by (station, target_date) for bootstrap.
+
+**Feature groups.** Contract (threshold/strike, direction, station, time-to-close, variable); forecast (value, issue time, age, forecast−threshold gap, missing flags); observation (latest value at decision, age, observation−threshold gap, missing flags). Market-implied probability is a feature only in Model 3. **Excluded:** trades, volume, OI, order-book depth, spread, imbalance, demo/NULL liquidity, any post-decision/settlement info.
+
+**Models.** M0 constant base rate (train positive rate); M1 raw market probability; M2 weather-only logistic regression; M3 market+weather logistic regression; M4 Platt-calibrated market (calibration fit on train+val only). Logistic regression fit in numpy (IRLS), L2-regularized, standardized features. No neural nets, no hyperparameter search.
+
+**Calibration procedure.** Platt (logistic) calibration fit on train+validation only, never on test. Isotonic not used (sample too small). Probability clip [0.02, 0.98] fixed.
+
+**Statistical comparison.** Paired per-row Brier difference vs raw market; mean difference; **grouped bootstrap at the (station, target_date) event level**, 2,000 resamples, seed 20260726; 95% percentile CI. Related threshold markets are NOT treated as independent.
+
+**Success threshold (preliminary).** Point-estimate Brier improvement of M3 vs M1 with a 95% grouped-bootstrap CI **entirely below 0** AND no major subgroup sign reversal → `SUPPORTED BUT INCONCLUSIVE` (the max positive verdict here; a confirmatory `CONFIRMED` is not attainable at this N and is deferred to a replication on future untouched data).
+
+**Failure threshold.** CI spanning 0 or a non-negative point estimate → `NOT SUPPORTED`. Any leakage/integrity/timestamp/hash failure → `INVALID`.
+
+**Decision rule.** Evaluate M0–M4 on validation; select nothing on test; report M3−M1 test Brier with grouped-bootstrap CI; apply the thresholds above once, without redefinition.
+
+**Known limitations.** Tiny, Denver-dominated, short (<3 months) sample; single horizon; candlestick-close benchmark (not mid); weather forecast/observation sparsity; no liquidity/execution modeling → **not a tradable-edge claim** under any outcome.
+
+**Results (H0018).** Run 2026-07-26 — [EXP-20260726-H0018](docs/research/experiments/EXP-20260726-H0018/EXP-20260726-H0018.md), deterministic (`grain_sha256` re-run-identical). **The pre-registered held-out test was NOT evaluable:** at the 24h horizon the as-of forecast join leaves only 162 markets / 14 event-days (2026-07-21→07-25) — 840 markets excluded for no forecast at the decision time — all inside the pre-registered test window, so train/validation are empty. Per the claim-reduction clause, a **descriptive in-sample** fit (biased toward the weather model) was reported: raw market Brier 0.1106 (well-calibrated, slope 1.13, ECE 0.052); weather-only 0.1327 (worse); market+weather 0.1108 ≈ market; **M3−M1 Brier +0.0002, event-grouped 95% CI [−0.0089, +0.0087] spanning 0**; subgroups sign-inconsistent (DEN −0.016 vs LAX +0.011). Leakage checks all passed; no liquidity feature used.
+
+**Conclusion (H0018).** **NOT SUPPORTED — market benchmark not beaten.** Even the generous in-sample look shows weather adds nothing to the well-calibrated market, and the pre-registered held-out comparison was blocked by forecast-history length (the binding limitation, not a modeling failure). No tradable claim (probability scoring only). **Follow-up:** accumulate point-in-time forecast coverage, then re-run the *unchanged* pre-registered experiment once a real chronological train/test split is populated (the "inconclusive/accumulate-data" branch), before testing any richer model.

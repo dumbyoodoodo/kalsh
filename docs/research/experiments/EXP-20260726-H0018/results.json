@@ -1,0 +1,180 @@
+{
+  "hypothesis": "H0018",
+  "held_out_test_evaluable": false,
+  "coverage_note": "COVERAGE-BLOCKED: as-of forecast coverage leaves the pre-registered train/val empty; results below are DESCRIPTIVE in-sample only and support no generalization or confirmatory claim",
+  "horizon_hours": 24,
+  "grain_sha256": "af90dbe53a2044945e64b6796d696dbe8b34540f8ffc02238d7512cf1bb6a896",
+  "n_rows": 162,
+  "n_events": 14,
+  "target_date_range": [
+    "2026-07-21",
+    "2026-07-25"
+  ],
+  "split_sizes": {
+    "train": 162,
+    "val": 162,
+    "test": 162
+  },
+  "split_events": {
+    "train": 14,
+    "val": 14,
+    "test": 14
+  },
+  "station_distribution": {
+    "CHI": 36,
+    "DEN": 36,
+    "LAX": 36,
+    "NYC": 54
+  },
+  "exclusions": {
+    "not_weather_station": 7140,
+    "no_binary_result": 129,
+    "no_parsed_threshold": 0,
+    "no_market_price_at_horizon": 9,
+    "no_forecast_at_horizon": 840,
+    "no_observation_at_horizon": 0
+  },
+  "leakage_checks": {
+    "price_asof_before_decision": true,
+    "forecast_before_decision": true,
+    "observation_before_decision": true,
+    "decision_before_close": true,
+    "no_liquidity_features": true,
+    "no_result_derived_feature": true,
+    "all_passed": true
+  },
+  "base_rate_train": 0.16666666666666666,
+  "validation": {
+    "M0_base_rate": {
+      "brier": 0.1388888888888889,
+      "log_loss": 0.4505612088663046,
+      "ece": 0.0,
+      "calibration_slope": 0.0,
+      "calibration_intercept": 0.0,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M1_raw_market": {
+      "brier": 0.11063765432098768,
+      "log_loss": 0.33196564212342244,
+      "ece": 0.05228395061728395,
+      "calibration_slope": 1.1340687981202098,
+      "calibration_intercept": 0.05393835172216033,
+      "mean_pred": 0.17500000000000002,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M2_weather_only": {
+      "brier": 0.1327438955143474,
+      "log_loss": 0.4250816753529407,
+      "ece": 0.044655766653142415,
+      "calibration_slope": 1.689195680625043,
+      "calibration_intercept": 1.0215854660239418,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M3_market_weather": {
+      "brier": 0.1108427252687032,
+      "log_loss": 0.34000394333832856,
+      "ece": 0.07463173817228358,
+      "calibration_slope": 1.0948480097347235,
+      "calibration_intercept": 0.10401494793027011,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M4_calibrated_market": {
+      "brier": 0.11158882911150918,
+      "log_loss": 0.3326932078317727,
+      "ece": 0.06364606485408428,
+      "calibration_slope": 1.0300708413652753,
+      "calibration_intercept": 0.010955613673172326,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    }
+  },
+  "test": {
+    "M0_base_rate": {
+      "brier": 0.1388888888888889,
+      "log_loss": 0.4505612088663046,
+      "ece": 0.0,
+      "calibration_slope": 0.0,
+      "calibration_intercept": 0.0,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M1_raw_market": {
+      "brier": 0.11063765432098768,
+      "log_loss": 0.33196564212342244,
+      "ece": 0.05228395061728395,
+      "calibration_slope": 1.1340687981202098,
+      "calibration_intercept": 0.05393835172216033,
+      "mean_pred": 0.17500000000000002,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M2_weather_only": {
+      "brier": 0.1327438955143474,
+      "log_loss": 0.4250816753529407,
+      "ece": 0.044655766653142415,
+      "calibration_slope": 1.689195680625043,
+      "calibration_intercept": 1.0215854660239418,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M3_market_weather": {
+      "brier": 0.1108427252687032,
+      "log_loss": 0.34000394333832856,
+      "ece": 0.07463173817228358,
+      "calibration_slope": 1.0948480097347235,
+      "calibration_intercept": 0.10401494793027011,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    },
+    "M4_calibrated_market": {
+      "brier": 0.11158882911150918,
+      "log_loss": 0.3326932078317727,
+      "ece": 0.06364606485408428,
+      "calibration_slope": 1.0300708413652753,
+      "calibration_intercept": 0.010955613673172326,
+      "mean_pred": 0.16666666666666666,
+      "actual_rate": 0.16666666666666666,
+      "n": 162
+    }
+  },
+  "primary_bootstrap_M3_minus_M1": {
+    "mean_brier_diff": 0.0002050709477155476,
+    "ci95_lo": -0.0089389638276791,
+    "ci95_hi": 0.008664244527064931,
+    "n_rows": 162,
+    "n_groups": 14,
+    "n_boot": 2000,
+    "seed": 20260726,
+    "fraction_boot_negative": 0.4545
+  },
+  "subgroup_stability_by_station": {
+    "CHI": {
+      "n": 36,
+      "mean_brier_diff": 0.0038113808651973804
+    },
+    "DEN": {
+      "n": 36,
+      "mean_brier_diff": -0.01618288364178272
+    },
+    "LAX": {
+      "n": 36,
+      "mean_brier_diff": 0.010571687814107405
+    },
+    "NYC": {
+      "n": 54,
+      "mean_brier_diff": 0.0018150894847986001
+    }
+  },
+  "seed": 20260726
+}

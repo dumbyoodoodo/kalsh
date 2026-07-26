@@ -100,6 +100,34 @@ app.add_typer(settlement_app, name="settlement")
 app.add_typer(prices_app, name="prices")
 app.add_typer(ops_app, name="ops")
 ops_app.add_typer(backup_app, name="backup")
+experiment_app = typer.Typer(help="Run formal modeling experiments on frozen canonical datasets.")
+app.add_typer(experiment_app, name="experiment")
+
+
+@experiment_app.command("h0018")
+def experiment_h0018(
+    out_dir: str = typer.Option(
+        ..., help="Immutable output directory for the experiment artifact."
+    ),
+) -> None:
+    """Run the H0018 weather-vs-market baseline experiment (see HYPOTHESES.md).
+    Read-only: builds a frozen decision grain, verifies leakage safety, fits the
+    pre-registered models, and writes results.json + predictions. Trains/scores
+    no orders; uses no liquidity features."""
+    from kalshi_weather.experiments.runner import run_h0018
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        async with _open_session(settings) as session:
+            result = await run_h0018(session, out_dir=Path(out_dir))
+        typer.echo(
+            f"H0018: rows={result['n_rows']} events={result['n_events']} "
+            f"held_out={result['held_out_test_evaluable']} "
+            f"grain_sha256={result['grain_sha256'][:12]} -> {out_dir}/results.json"
+        )
+
+    asyncio.run(run())
 
 
 @asynccontextmanager

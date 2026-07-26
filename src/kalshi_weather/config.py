@@ -149,6 +149,16 @@ class Settings(BaseSettings):
     kalshi_min_request_interval_seconds: float = Field(
         default=0.1, alias="KALSHI_MIN_REQUEST_INTERVAL_SECONDS"
     )
+    # Reactive backoff for Kalshi 429 / 5xx (kalshi/client.py). The client honors
+    # a server `Retry-After` header when present; otherwise it waits
+    # base * 2**attempt, capped at max, with +/- jitter to keep the collector's
+    # concurrent loops (discovery, price-sync, revision) from re-colliding after
+    # a shared-API 429. Conservative defaults derived from observed production
+    # behavior (INV rate-limit audit 2026-07-26); tune, don't hard-code as a
+    # guaranteed external limit.
+    kalshi_backoff_base_seconds: float = Field(default=0.5, alias="KALSHI_BACKOFF_BASE_SECONDS")
+    kalshi_backoff_max_seconds: float = Field(default=8.0, alias="KALSHI_BACKOFF_MAX_SECONDS")
+    kalshi_backoff_jitter: float = Field(default=0.25, alias="KALSHI_BACKOFF_JITTER")
     weather_min_request_interval_seconds: float = Field(
         default=0.1, alias="WEATHER_MIN_REQUEST_INTERVAL_SECONDS"
     )
@@ -377,6 +387,16 @@ class Settings(BaseSettings):
                 "enable_live_trading/live_trading_confirm may only be set "
                 "when kalshi_env=production"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_backoff(self) -> "Settings":
+        if self.kalshi_backoff_base_seconds <= 0:
+            raise ValueError("KALSHI_BACKOFF_BASE_SECONDS must be > 0")
+        if self.kalshi_backoff_max_seconds < self.kalshi_backoff_base_seconds:
+            raise ValueError("KALSHI_BACKOFF_MAX_SECONDS must be >= KALSHI_BACKOFF_BASE_SECONDS")
+        if not 0.0 <= self.kalshi_backoff_jitter <= 1.0:
+            raise ValueError("KALSHI_BACKOFF_JITTER must be in [0, 1]")
         return self
 
     @model_validator(mode="after")

@@ -237,7 +237,15 @@ async def run_collector_loop(
                     )
                     run_stats = stats.as_dict()
                     run_requests, run_retries = client.requests_attempted, client.retries
-            logger.info("collector.cycle_complete", cycle=cycle_number, **stats.as_dict())
+            logger.info(
+                "collector.cycle_complete",
+                cycle=cycle_number,
+                # rate-limit observability: distinguish healthy pacing from
+                # 429-dominated latency (rate-limit audit 2026-07-26).
+                rate_limit_hits=client.rate_limit_hits,
+                backoff_seconds=round(client.total_backoff_seconds, 1),
+                **stats.as_dict(),
+            )
         except Exception as exc:
             run_error = f"{type(exc).__name__}: {exc}"
             logger.exception("collector.cycle_failed", cycle=cycle_number)

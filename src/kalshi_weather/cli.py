@@ -259,6 +259,9 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
         base_url=base_url,
         environment=settings.kalshi_data_env,
         min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
+        backoff_base_seconds=settings.kalshi_backoff_base_seconds,
+        backoff_max_seconds=settings.kalshi_backoff_max_seconds,
+        backoff_jitter=settings.kalshi_backoff_jitter,
         raw_payload_sink=raw_payload_sink,
     )
 
@@ -302,6 +305,9 @@ def _build_price_client(
         base_url=base_url,
         environment=settings.kalshi_data_env,
         min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
+        backoff_base_seconds=settings.kalshi_backoff_base_seconds,
+        backoff_max_seconds=settings.kalshi_backoff_max_seconds,
+        backoff_jitter=settings.kalshi_backoff_jitter,
         raw_payload_sink=sink,
     )
 
@@ -317,6 +323,10 @@ def _log_data_environment(settings: Settings) -> None:
         host=host,
         row_provenance=resolve_kalshi_environment(settings.kalshi_data_base_url).value,
         trading_env=settings.kalshi_env.value,
+        min_request_interval_s=settings.kalshi_min_request_interval_seconds,
+        backoff_base_s=settings.kalshi_backoff_base_seconds,
+        backoff_max_s=settings.kalshi_backoff_max_seconds,
+        backoff_jitter=settings.kalshi_backoff_jitter,
     )
 
 

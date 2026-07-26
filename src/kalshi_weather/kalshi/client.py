@@ -7,8 +7,10 @@ scope until a later milestone and explicit human approval per CLAUDE.md.
 """
 
 import asyncio
+import random
 import time
 from collections.abc import Awaitable, Callable
+from email.utils import parsedate_to_datetime
 from types import TracebackType
 from typing import Any
 
@@ -16,6 +18,7 @@ import httpx
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from kalshi_weather.config import Environment
+from kalshi_weather.domain.time import utc_now
 from kalshi_weather.kalshi import auth
 from kalshi_weather.kalshi.models import (
     Candlestick,
@@ -40,6 +43,13 @@ logger = get_logger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_BASE_SECONDS = 0.5
+#: Cap on a single backoff wait so a bad server hint or a high attempt count
+#: can't stall a whole cycle. Bounded exponential: 0.5, 1, 2, 4 ... capped here.
+DEFAULT_BACKOFF_MAX_SECONDS = 8.0
+#: Multiplicative jitter fraction applied to computed backoffs (each wait is
+#: scaled by 1 +/- this). Prevents several loops that 429 at the same instant
+#: from backing off by the identical amount and re-colliding on retry.
+DEFAULT_BACKOFF_JITTER = 0.25
 #: Kalshi's candlestick endpoint rejects a request spanning more than 5,000
 #: candles at the requested resolution (observed live: a 5,760-minute window
 #: at period_interval=1 returned "max candlesticks: 5000" --
@@ -54,6 +64,29 @@ MAX_CANDLES_PER_REQUEST = 4900
 #: docs/adr/0002-ingestion-collector.md) -- this is a proactive throttle, not
 #: just reactive retry-on-429 backoff.
 DEFAULT_MIN_REQUEST_INTERVAL_SECONDS = 0.1
+
+
+def _parse_retry_after(value: str | None, *, now: Any = None) -> float | None:
+    """Parse an HTTP `Retry-After` header into seconds. Supports the two RFC
+    forms -- a non-negative integer number of seconds, or an HTTP-date -- and
+    returns None on anything unparseable so the caller falls back to bounded
+    exponential backoff. Never returns a negative wait."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    reference = now if now is not None else utc_now()
+    if dt.tzinfo is None:
+        return None
+    return max(0.0, (dt - reference).total_seconds())
+
 
 #: Called with (source, endpoint, request_key, http_status, payload_json) for
 #: every response received, before schema validation. Used to persist raw
@@ -88,6 +121,9 @@ class KalshiClient:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         min_request_interval_seconds: float = DEFAULT_MIN_REQUEST_INTERVAL_SECONDS,
+        backoff_base_seconds: float = DEFAULT_BACKOFF_BASE_SECONDS,
+        backoff_max_seconds: float = DEFAULT_BACKOFF_MAX_SECONDS,
+        backoff_jitter: float = DEFAULT_BACKOFF_JITTER,
         raw_payload_sink: RawPayloadSink | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -96,6 +132,9 @@ class KalshiClient:
         self._private_key = private_key
         self._max_retries = max_retries
         self._min_request_interval_seconds = min_request_interval_seconds
+        self._backoff_base_seconds = backoff_base_seconds
+        self._backoff_max_seconds = backoff_max_seconds
+        self._backoff_jitter = backoff_jitter
         self._last_request_at: float | None = None
         self._raw_payload_sink = raw_payload_sink
         self._http = httpx.AsyncClient(
@@ -119,6 +158,11 @@ class KalshiClient:
         #: read by the collector loop when recording per-cycle metrics.
         self.requests_attempted: int = 0
         self.retries: int = 0
+        #: Rate-limit observability: how many 429s were seen and how long this
+        #: client spent waiting in server-directed / backoff sleeps. Lets a
+        #: cycle distinguish healthy pacing from rate-limit-dominated latency.
+        self.rate_limit_hits: int = 0
+        self.total_backoff_seconds: float = 0.0
 
     @property
     def source_environment(self) -> str:
@@ -173,6 +217,29 @@ class KalshiClient:
                 await asyncio.sleep(remaining)
         self._last_request_at = time.monotonic()
 
+    def _backoff_seconds(self, attempt: int, response: httpx.Response | None) -> float:
+        """How long to wait before the next retry. Honors a `Retry-After` header
+        (integer seconds or HTTP-date) when the server sends one -- waiting as
+        directed instead of guessing -- otherwise a bounded exponential
+        (base * 2**attempt, capped at backoff_max). Jitter de-synchronizes
+        concurrent clients that 429 at the same instant; for a server hint the
+        jitter is one-sided (never wait LESS than directed)."""
+        hint: float | None = None
+        if response is not None:
+            hint = _parse_retry_after(response.headers.get("retry-after"))
+        if hint is not None:
+            base = min(hint, self._backoff_max_seconds)
+            return float(base + random.uniform(0.0, base * self._backoff_jitter))
+        base = min(self._backoff_base_seconds * (2**attempt), self._backoff_max_seconds)
+        jitter = base * self._backoff_jitter
+        return float(max(0.0, base + random.uniform(-jitter, jitter)))
+
+    async def _backoff(self, attempt: int, response: httpx.Response | None) -> None:
+        """Wait before the next retry and record the total time spent waiting."""
+        wait = self._backoff_seconds(attempt, response)
+        self.total_backoff_seconds += wait
+        await asyncio.sleep(wait)
+
     async def _request(
         self,
         method: str,
@@ -189,16 +256,21 @@ class KalshiClient:
             self.requests_attempted += 1
             if attempt > 0:
                 self.retries += 1
+            is_last = attempt == self._max_retries - 1
             try:
                 response = await self._http.request(method, path, params=params, headers=headers)
             except httpx.TransportError as exc:
                 last_error = exc
-                await asyncio.sleep(DEFAULT_BACKOFF_BASE_SECONDS * (2**attempt))
+                if not is_last:  # don't wait if we're about to give up
+                    await self._backoff(attempt, None)
                 continue
 
             if response.status_code == 429 or response.status_code >= 500:
+                if response.status_code == 429:
+                    self.rate_limit_hits += 1
                 last_error = KalshiAPIError(response.status_code, response.text)
-                await asyncio.sleep(DEFAULT_BACKOFF_BASE_SECONDS * (2**attempt))
+                if not is_last:
+                    await self._backoff(attempt, response)
                 continue
 
             if response.status_code >= 400:

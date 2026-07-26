@@ -124,3 +124,38 @@ For a deeper check, `scripts/service/logs.sh -n 50` should show
 `collector.cycle_complete` lines with nonzero `*_duplicate` counters —
 duplicate detection working is the signature of append-only collection
 overlapping correctly with already-stored history.
+
+## Reboot / power-loss recovery
+
+After a reboot or power loss the whole stack must come back **without a
+human**, in dependency order: Docker → Postgres → collector. The 2026-07-26
+incident (`docs/incidents/2026-07-26-power-loss-collection-gap.md`) was caused
+by gaps in this chain. Checklist:
+
+1. **Postgres returns with Docker** — `docker-compose.yml` sets the Postgres
+   service to `restart: unless-stopped`. On an already-running container that
+   predates that line, apply it live once with
+   `docker update --restart unless-stopped kalsh-postgres-1`. Verify:
+   `docker inspect kalsh-postgres-1 --format '{{.HostConfig.RestartPolicy.Name}}'`
+   → `unless-stopped`.
+2. **Docker itself starts at login** — enable Docker Desktop → Settings →
+   General → "Start Docker Desktop when you sign in". Without this the DB never
+   comes up and the collector will restart-loop against an unreachable DB
+   (harmlessly, but collecting nothing).
+3. **The host reaches a logged-in session** — the collector runs as a launchd
+   **LaunchAgent** (`RunAtLoad=true`), which starts at *login*, not at boot. If
+   the machine reboots to a locked login screen with nobody signed in, nothing
+   starts. Enable macOS auto-login (System Settings → Users & Groups →
+   Automatically log in as) if the host is a dedicated collector box.
+   (FileVault blocks auto-login; a collector host typically shouldn't use it.)
+4. **The host powers back on after a power cut** — desktop Macs only: System
+   Settings → Energy → "Start up automatically after a power failure" (or
+   `sudo pmset -a autorestart 1`). Laptops have a battery and this setting does
+   not apply; the lid/charger governs power-on instead.
+5. **Something off-device notices if any of the above fails** — the external
+   heartbeat (`docs/runbooks/monitoring_alerting.md`, "External uptime
+   heartbeat"). On-device alerting cannot fire while the host is off.
+
+None of steps 2–4 are code and none can be set from this repo; they are host
+settings recorded here so the recovery posture is auditable. Steps 1 and 5 are
+enforced by this repo (compose restart policy; heartbeat agent).

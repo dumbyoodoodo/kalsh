@@ -11,11 +11,11 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-for label in "${SERVICE_LABEL}" "${ROTATE_LABEL}" "${MONITOR_LABEL}" "${BACKUP_LABEL}"; do
+for label in "${SERVICE_LABEL}" "${ROTATE_LABEL}" "${MONITOR_LABEL}" "${BACKUP_LABEL}" "${HEARTBEAT_LABEL}"; do
     launchctl bootout "${GUI_DOMAIN}/${label}" 2>/dev/null \
         && echo "stopped + unregistered ${label}" \
         || echo "${label} was not loaded"
 done
-rm -f "${SERVICE_PLIST}" "${ROTATE_PLIST}" "${MONITOR_PLIST}" "${BACKUP_PLIST}"
+rm -f "${SERVICE_PLIST}" "${ROTATE_PLIST}" "${MONITOR_PLIST}" "${BACKUP_PLIST}" "${HEARTBEAT_PLIST}"
 echo "removed plists; logs and alert history kept in ${LOG_DIR}"
 echo "backups kept in <KALSHI_DATA_DIR>/backups/postgres/"

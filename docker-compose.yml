@@ -1,6 +1,13 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Auto-restart the DB whenever the Docker daemon starts -- e.g. after a
+    # reboot or power loss (2026-07-26 incident: a power-off left the DB down
+    # with RestartPolicy=no, so the collector had nothing to write to). Docker
+    # Desktop itself must also be set to start at login for this to take
+    # effect. `unless-stopped` (not `always`) respects a deliberate manual
+    # `docker compose stop` and won't fight an intentional shutdown.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: kalshi
       POSTGRES_PASSWORD: kalshi

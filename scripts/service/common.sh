@@ -5,6 +5,7 @@ SERVICE_LABEL="com.kalshi-weather.collector"
 ROTATE_LABEL="com.kalshi-weather.logrotate"
 MONITOR_LABEL="com.kalshi-weather.monitor"
 BACKUP_LABEL="com.kalshi-weather.backup"
+HEARTBEAT_LABEL="com.kalshi-weather.heartbeat"
 
 # Repo root = two levels up from this file.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,6 +15,7 @@ SERVICE_PLIST="${AGENTS_DIR}/${SERVICE_LABEL}.plist"
 ROTATE_PLIST="${AGENTS_DIR}/${ROTATE_LABEL}.plist"
 MONITOR_PLIST="${AGENTS_DIR}/${MONITOR_LABEL}.plist"
 BACKUP_PLIST="${AGENTS_DIR}/${BACKUP_LABEL}.plist"
+HEARTBEAT_PLIST="${AGENTS_DIR}/${HEARTBEAT_LABEL}.plist"
 
 # Service logs live on the INTERNAL disk by default (macOS convention),
 # deliberately not under KALSHI_DATA_DIR: if the external drive is missing,
@@ -47,6 +49,16 @@ MONITOR_HISTORY_PATH="${LOG_DIR}/alert_history.jsonl"
 # the default the monitoring runbook documents.
 MONITOR_INTERVAL_SECONDS="$(_read_env_var MONITOR_INTERVAL_SECONDS)"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-900}"
+
+# Heartbeat (ops heartbeat) service: an external dead-man's-switch ping. Fires
+# often (default 300s / 5 min) so the external monitor can use a tight grace
+# period and detect a power-off quickly. Logs alongside the other operational
+# logs. Override HEARTBEAT_INTERVAL_SECONDS (environment wins over .env). The
+# ping only happens when HEARTBEAT_URL is set; the agent is harmless otherwise.
+HEARTBEAT_OUT_LOG="${LOG_DIR}/heartbeat.out.log"
+HEARTBEAT_ERR_LOG="${LOG_DIR}/heartbeat.err.log"
+HEARTBEAT_INTERVAL_SECONDS="$(_read_env_var HEARTBEAT_INTERVAL_SECONDS)"
+HEARTBEAT_INTERVAL_SECONDS="${HEARTBEAT_INTERVAL_SECONDS:-300}"
 
 # Backup (scripts/backup_postgres.sh) service: once-daily via launchd
 # StartCalendarInterval, not StartInterval -- see

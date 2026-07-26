@@ -124,8 +124,27 @@ cat > "${TMP_DIR}/backup.plist" <<PLIST
 </plist>
 PLIST
 
+cat > "${TMP_DIR}/heartbeat.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${HEARTBEAT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${REPO_DIR}/scripts/service/heartbeat.sh</string>
+    </array>
+    <key>WorkingDirectory</key><string>${REPO_DIR}</string>
+    <key>StartInterval</key><integer>${HEARTBEAT_INTERVAL_SECONDS}</integer>
+    <key>RunAtLoad</key><true/>
+    <key>StandardOutPath</key><string>${HEARTBEAT_OUT_LOG}</string>
+    <key>StandardErrorPath</key><string>${HEARTBEAT_ERR_LOG}</string>
+</dict>
+</plist>
+PLIST
+
 plutil -lint "${TMP_DIR}/collector.plist" "${TMP_DIR}/rotate.plist" \
-    "${TMP_DIR}/monitor.plist" "${TMP_DIR}/backup.plist"
+    "${TMP_DIR}/monitor.plist" "${TMP_DIR}/backup.plist" "${TMP_DIR}/heartbeat.plist"
 
 # Per-agent conditional reload: only bootout+bootstrap a label whose plist
 # content actually changed, or that isn't currently loaded. See this
@@ -148,13 +167,16 @@ _install_agent "${SERVICE_LABEL}" "${TMP_DIR}/collector.plist" "${SERVICE_PLIST}
 _install_agent "${ROTATE_LABEL}" "${TMP_DIR}/rotate.plist" "${ROTATE_PLIST}"
 _install_agent "${MONITOR_LABEL}" "${TMP_DIR}/monitor.plist" "${MONITOR_PLIST}"
 _install_agent "${BACKUP_LABEL}" "${TMP_DIR}/backup.plist" "${BACKUP_PLIST}"
+_install_agent "${HEARTBEAT_LABEL}" "${TMP_DIR}/heartbeat.plist" "${HEARTBEAT_PLIST}"
 
 echo "installed:"
 echo "  ${SERVICE_PLIST}"
 echo "  ${ROTATE_PLIST}"
 echo "  ${MONITOR_PLIST}  (every ${MONITOR_INTERVAL_SECONDS}s)"
 echo "  ${BACKUP_PLIST}  (daily at ${BACKUP_SCHEDULE_HOUR}:$(printf '%02d' "${BACKUP_SCHEDULE_MINUTE}"))"
+echo "  ${HEARTBEAT_PLIST}  (every ${HEARTBEAT_INTERVAL_SECONDS}s; pings only if HEARTBEAT_URL set)"
 echo "logs: ${OUT_LOG} / ${ERR_LOG}"
 echo "monitor logs: ${MONITOR_OUT_LOG} / ${MONITOR_ERR_LOG}"
 echo "backup logs: ${BACKUP_OUT_LOG} / ${BACKUP_ERR_LOG}"
+echo "heartbeat logs: ${HEARTBEAT_OUT_LOG} / ${HEARTBEAT_ERR_LOG}"
 echo "check: scripts/service/status.sh"

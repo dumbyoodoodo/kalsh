@@ -221,12 +221,40 @@ Failure modes of the monitor itself:
 | Alerts stop arriving entirely, no history growth | The monitor agent itself is down (a meta-monitoring gap -- see "Known limitation" below) | `scripts/service/status.sh`; check `MONITOR_ERR_LOG` |
 | Same problem alerted twice in a row | Should not happen -- `monitor_state.json` was deleted/corrupted between runs, resetting the baseline | Inspect `MONITOR_ERR_LOG`; the state file is written atomically, so this indicates the file was removed externally, not a crash mid-write |
 
-**Known limitation**: this system has no meta-monitor -- nothing alerts if
-the `com.kalshi-weather.monitor` launchd agent itself stops running (the
-same class of blind spot the observatory closed for the collectors, one
-level up). `scripts/service/status.sh` surfaces this on manual inspection;
-there is no automated escalation beyond it. Treated as an acceptable,
-disclosed residual gap rather than solved here -- an infinite regress of
-"what watches the watcher" has to stop somewhere, and launchd itself
-(`KeepAlive`-free, `StartInterval`-scheduled, OS-level) is the base of that
-chain.
+**Meta-monitoring**: `ops monitor` and its Telegram alerting run *on* the
+collector host, so they cannot fire when the host itself is off (the
+2026-07-26 power-loss incident: the box was dead ~14.6 h and nothing
+off-device noticed). The off-device complement is the heartbeat below. There
+is still no meta-monitor for the *monitor agent specifically* while the host
+is up -- `scripts/service/status.sh` surfaces that on manual inspection -- but
+a total host outage now escalates externally.
+
+## External uptime heartbeat (dead-man's-switch)
+
+`ops heartbeat` (launchd agent `com.kalshi-weather.heartbeat`, every
+`HEARTBEAT_INTERVAL_SECONDS`, default 300s) pings an **external** monitor's
+push URL (`HEARTBEAT_URL`) **only while the collector is healthy** -- i.e. the
+newest `market_snapshot` is younger than `HEARTBEAT_STALE_AFTER_SECONDS`. If
+the host is powered off (nothing runs), the process is wedged, or the DB is
+unreachable, the ping is withheld and the external service raises the alert
+after its own grace period. One mechanism therefore covers power loss
+(primary), software wedge, and DB outage, from a system that fails
+independently of this host.
+
+Setup (one-time):
+
+1. Create a check on any "alert me when the pings stop" service --
+   [healthchecks.io](https://healthchecks.io) is free; Better Uptime and
+   Cronitor also work. Set its **period** to `HEARTBEAT_INTERVAL_SECONDS` and
+   its **grace** a little above that (e.g. period 5 min, grace 10 min) so one
+   skipped ping doesn't false-alarm.
+2. Put its ping URL in `.env` as `HEARTBEAT_URL=` (treat it as a secret -- it
+   is `SecretStr`, never logged; anyone holding it can suppress your alert by
+   pinging it).
+3. `scripts/service/install.sh` (installs/loads the heartbeat agent).
+
+Verify: `ops heartbeat` prints `outcome=pinged_healthy emitted=True` when the
+collector is fresh, and `withheld_stale` / `withheld_no_data` /
+`withheld_db_error` (`emitted=False`) otherwise. With `HEARTBEAT_URL` unset the
+agent no-ops (`skipped_not_configured`), so installing it before configuring
+the URL is harmless.

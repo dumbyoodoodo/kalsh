@@ -47,6 +47,7 @@ from kalshi_weather.observatory.backup_health import BackupHealthConfig
 from kalshi_weather.ops import alerting, backup, backup_retention, monitor, restart_policy
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
+from kalshi_weather.ops.heartbeat import run_heartbeat
 from kalshi_weather.ops.price_coverage import build_price_coverage_report
 from kalshi_weather.ops.quality import run_quality_checks
 from kalshi_weather.ops.snapshot import create_snapshot, default_snapshot_version
@@ -1255,6 +1256,30 @@ def ops_monitor(
         asyncio.run(run())
     finally:
         lock_handle.close()
+
+
+@ops_app.command("heartbeat")
+def ops_heartbeat() -> None:
+    """Emit an external uptime heartbeat (dead-man's-switch). Pings HEARTBEAT_URL
+    only while the collector is healthy; withholds the ping if the machine is
+    off (nothing runs), wedged, or the DB is unreachable, so an EXTERNAL monitor
+    alerts. This is the off-device complement to `ops monitor`/Telegram, which
+    run on this machine and can't fire when it's dead. Intended to run on a
+    short schedule under launchd (scripts/service/heartbeat.sh). Always exits 0
+    -- the signal is the ping's presence/absence, not this process's exit code.
+    See docs/runbooks/monitoring_alerting.md."""
+
+    async def run() -> None:
+        settings = get_settings()
+        engine = create_engine(settings.database_url)
+        session_factory = create_session_factory(engine)
+        try:
+            result = await run_heartbeat(settings, session_factory)
+        finally:
+            await engine.dispose()
+        typer.echo(f"heartbeat outcome={result.outcome} emitted={result.emitted} {result.detail}")
+
+    asyncio.run(run())
 
 
 @ops_app.command("snapshot")

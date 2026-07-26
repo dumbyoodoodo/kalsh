@@ -160,6 +160,24 @@ class Settings(BaseSettings):
     )
     alert_telegram_chat_id: str | None = Field(default=None, alias="ALERT_TELEGRAM_CHAT_ID")
 
+    # --- External uptime heartbeat / dead-man's-switch ---
+    # A push URL for an EXTERNAL monitor (e.g. healthchecks.io, Better Uptime,
+    # Cronitor). `ops heartbeat` pings it on a schedule *only while the
+    # collector is healthy*; if the whole machine is powered off, wedged, or
+    # the DB is unreachable, the ping stops and the external service alerts.
+    # Telegram alerting (above) runs ON this machine and cannot fire when the
+    # machine is dead -- this is the off-device complement to it (2026-07-26
+    # power-loss incident). SecretStr: the URL is a capability token; anyone
+    # holding it can suppress your outage alert by pinging it themselves.
+    heartbeat_url: SecretStr | None = Field(default=None, alias="HEARTBEAT_URL")
+    # Max age of the newest market_snapshot before the collector is considered
+    # unhealthy and the heartbeat is withheld. Must exceed the collector
+    # interval with margin so a single slow cycle doesn't trip a false outage;
+    # default = 3x the 300s collector interval.
+    heartbeat_stale_after_seconds: float = Field(
+        default=900.0, alias="HEARTBEAT_STALE_AFTER_SECONDS"
+    )
+
     # --- PostgreSQL backup & recovery (docs/runbooks/backup_recovery.md) ---
     # Identity of the database scripts/backup_postgres.sh dumps -- defaults
     # match docker-compose.yml's hardcoded POSTGRES_USER/POSTGRES_DB exactly,

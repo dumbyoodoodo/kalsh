@@ -138,3 +138,46 @@ Every dataset directory is self-describing. To reproduce version *V*:
 - Forecast "high/low" per day is the max/min forecast period touching that local
   date --- an approximation (see the ADR), not true daily-high/low classification.
 - DuckDB export is not implemented (Parquet only).
+
+## Canonical (provenance-aware) build
+
+`dataset build --canonical` (ADR 0014, `dataset/provenance.py`) produces the
+research-grade dataset that excludes contaminated demo/NULL liquidity. Use it
+for any liquidity- or microstructure-dependent research; the plain build stays
+environment-agnostic for backward compatibility.
+
+**Environment policy (default):**
+
+- **Liquidity is production-only.** Volume, open interest, order-book depth,
+  spread, and trade activity are kept only for `environment='production'` rows.
+  Non-production order books and trades are dropped; volume/OI on non-production
+  snapshots and candlesticks become **NULL (missing), never 0**.
+- **Candlestick prices** are admitted for production *and* pre-provenance NULL
+  candles: the sole candlestick writer is the always-production price-sync path
+  (ADR 0002/0014), so a NULL candle is *deterministically* production. Its price
+  is trusted; its volume is still excluded (unattributable).
+- **Settlement results/identity** are environment-invariant (ADR 0013) and used
+  regardless of environment.
+
+**Historical NULL handling.** NULL rows are classified for reporting only
+(`verified_production` for deterministic-production candles, else
+`historical_unknown`) — never relabeled in the source tables, never included in
+liquidity on a heuristic (positive volume ⇏ production, zero volume ⇏ demo).
+
+**Coverage.** Every canonical build records `environment_policy` and
+`provenance_coverage` (per-table counts by environment and provenance class,
+plus liquidity rows excluded) in the manifest — the reduced production-liquidity
+sample is reported, never concealed. As of the 2026-07-26 cutover, verified
+production liquidity history is thin (collection only just moved to production);
+expect liquidity coverage to grow forward from the cutover.
+
+**Missingness & leakage.** Missing data stays missing (never zero-filled); the
+existing as-of joins (ADR 0008) and forecast-vintage handling prevent using any
+feature created/revised after a row's prediction time. The 2026-07-26 power-loss
+gap (`docs/incidents/2026-07-26-power-loss-collection-gap.md`) is a known
+collection gap in the affected window.
+
+**Reproduction.** `dataset build --canonical --start … --end … --version …`
+writes a versioned, immutable directory (Parquet + `manifest.json` with git
+commit, DB revision, config hash, environment policy, and coverage). Re-running
+the same inputs+config yields byte-identical Parquet.

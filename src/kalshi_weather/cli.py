@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from kalshi_weather.config import Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
+from kalshi_weather.dataset.provenance import EnvironmentPolicy as DatasetEnvironmentPolicy
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.backfill import run_backfill
 from kalshi_weather.ingestion.collector import run_collector_loop
@@ -521,7 +522,13 @@ def _parse_date(value: str | None) -> date | None:
 
 
 async def _build_dataset(
-    settings: Settings, *, which: str, start: date | None, end: date | None, version: str
+    settings: Settings,
+    *,
+    which: str,
+    start: date | None,
+    end: date | None,
+    version: str,
+    canonical: bool = False,
 ) -> dataset_pipeline.BuildOutput:
     # Mappings come from the automated settlement parser (Milestone 2b), with
     # the config file retained as a manual override layer on top -- see
@@ -537,6 +544,9 @@ async def _build_dataset(
             start=start,
             end=end,
             version=version,
+            # Canonical build: production-only liquidity, provenance-aware
+            # (ADR 0014). Default policy; explicit here so the choice is visible.
+            env_policy=DatasetEnvironmentPolicy() if canonical else None,
             resolver_meta={
                 "resolver": "parser+overrides",
                 "parser_version": PARSER_VERSION,
@@ -569,10 +579,16 @@ def dataset_build(
     version: str | None = typer.Option(None, help="Dataset version (default: UTC timestamp)."),
     output_root: str | None = typer.Option(None, help="Export root (default: settings/env)."),
     export: bool = typer.Option(True, help="Write Parquet + manifest to disk."),
+    canonical: bool = typer.Option(
+        False,
+        "--canonical/--no-canonical",
+        help="Canonical build: liquidity from verified production only (ADR 0014).",
+    ),
 ) -> None:
     """Build the research dataset(s): point-in-time join, validate, compute
-    stats, and (by default) export a versioned Parquet directory. See
-    docs/runbooks/dataset.md."""
+    stats, and (by default) export a versioned Parquet directory. Use
+    --canonical for the provenance-aware research dataset (production-only
+    liquidity). See docs/runbooks/dataset.md."""
 
     async def run() -> None:
         settings = get_settings()
@@ -584,6 +600,7 @@ def dataset_build(
             start=_parse_date(start),
             end=_parse_date(end),
             version=resolved_version,
+            canonical=canonical,
         )
         _echo_summary(output)
         if export:

@@ -33,6 +33,12 @@ from kalshi_weather.dataset.observation_timeline import (
     compute_running_extremes,
 )
 from kalshi_weather.dataset.pit import local_date
+from kalshi_weather.dataset.provenance import (
+    EnvironmentPolicy,
+    ProvenanceCoverage,
+    liquidity_admissible,
+    price_admissible,
+)
 from kalshi_weather.domain.time import to_utc
 from kalshi_weather.storage.models import (
     MarketCandlestick,
@@ -173,9 +179,28 @@ async def load_source_frames(
     *,
     start: date | None = None,
     end: date | None = None,
+    env_policy: EnvironmentPolicy | None = None,
+    coverage: ProvenanceCoverage | None = None,
 ) -> SourceFrames:
     """Read the source tables into Polars frames. ``start``/``end`` bound the
-    weather target dates and market snapshot dates (inclusive) when given."""
+    weather target dates and market snapshot dates (inclusive) when given.
+
+    ``env_policy`` (ADR 0014) makes loading provenance-aware. When supplied,
+    liquidity is admitted only from the policy's environments (production):
+    non-production order books and trades are dropped entirely, and
+    volume/open-interest on non-production snapshots and candlesticks are set to
+    NULL -- *missing*, never zero. Candlestick *prices* are kept for
+    production-and-deterministic-NULL rows (the sole candlestick writer has only
+    ever read production; see dataset/provenance.py). Environment-invariant
+    fields (identity, status, result, close time, strikes) are kept regardless.
+    When ``env_policy`` is None the loader behaves exactly as before (no
+    filtering), so the generic builder and its fixtures are unaffected. Pass a
+    ``coverage`` accumulator to collect per-table environment counts."""
+
+    def _liq(env: str | None) -> bool:
+        # Admit liquidity fields? Always True in the no-policy (legacy) mode.
+        return env_policy is None or liquidity_admissible(env, env_policy)
+
     stations = {
         s.station_id: s.timezone for s in (await session.scalars(select(WeatherStation))).all()
     }
@@ -192,16 +217,22 @@ async def load_source_frames(
             continue
         if end is not None and observed is not None and observed.date() > end:
             continue
+        if coverage is not None and env_policy is not None:
+            coverage.record("market_snapshots", m.environment, env_policy)
+        # Liquidity/market-state fields require production; identity, status,
+        # result, close time, and strikes are environment-invariant (ADR 0013)
+        # and kept. Excluded liquidity becomes NULL (missing), never zero.
+        liq_ok = _liq(m.environment)
         market_rows.append(
             {
                 "market_ticker": m.market_ticker,
                 "event_ticker": m.event_ticker,
                 "status": m.status,
-                "yes_bid_cents": m.yes_bid_cents,
-                "yes_ask_cents": m.yes_ask_cents,
-                "last_price_cents": m.last_price_cents,
-                "volume": m.volume,
-                "open_interest": m.open_interest,
+                "yes_bid_cents": m.yes_bid_cents if liq_ok else None,
+                "yes_ask_cents": m.yes_ask_cents if liq_ok else None,
+                "last_price_cents": m.last_price_cents if liq_ok else None,
+                "volume": m.volume if liq_ok else None,
+                "open_interest": m.open_interest if liq_ok else None,
                 "rules_primary": m.rules_primary,
                 "observed_at": observed,
                 "raw_payload_id": m.raw_payload_id,
@@ -219,28 +250,38 @@ async def load_source_frames(
     markets_frame = pl.DataFrame(market_rows, schema=MARKETS_SCHEMA, orient="row")
     known_tickers = set(markets_frame["market_ticker"].to_list())
 
-    orderbook_rows = [
-        {
-            "market_ticker": o.market_ticker,
-            "captured_at": _naive_utc(o.captured_at),
-            "best_yes_bid_cents": o.best_yes_bid_cents,
-            "best_yes_ask_cents": o.best_yes_ask_cents,
-            "spread_cents": o.spread_cents,
-        }
-        for o in (await session.scalars(select(OrderbookSnapshot))).all()
-        if o.market_ticker in known_tickers
-    ]
+    # Order books and trades are pure liquidity: a non-production row is dropped
+    # entirely (there is no environment-invariant field to preserve).
+    orderbook_rows = []
+    for o in (await session.scalars(select(OrderbookSnapshot))).all():
+        if coverage is not None and env_policy is not None:
+            coverage.record("orderbook_snapshots", o.environment, env_policy)
+        if o.market_ticker not in known_tickers or not _liq(o.environment):
+            continue
+        orderbook_rows.append(
+            {
+                "market_ticker": o.market_ticker,
+                "captured_at": _naive_utc(o.captured_at),
+                "best_yes_bid_cents": o.best_yes_bid_cents,
+                "best_yes_ask_cents": o.best_yes_ask_cents,
+                "spread_cents": o.spread_cents,
+            }
+        )
     orderbooks_frame = pl.DataFrame(orderbook_rows, schema=ORDERBOOKS_SCHEMA, orient="row")
 
-    trade_rows = [
-        {
-            "market_ticker": t.market_ticker,
-            "executed_at": _naive_utc(t.executed_at),
-            "price_cents": t.price_cents,
-        }
-        for t in (await session.scalars(select(TradeRecord))).all()
-        if t.market_ticker in known_tickers
-    ]
+    trade_rows = []
+    for t in (await session.scalars(select(TradeRecord))).all():
+        if coverage is not None and env_policy is not None:
+            coverage.record("trades", t.environment, env_policy)
+        if t.market_ticker not in known_tickers or not _liq(t.environment):
+            continue
+        trade_rows.append(
+            {
+                "market_ticker": t.market_ticker,
+                "executed_at": _naive_utc(t.executed_at),
+                "price_cents": t.price_cents,
+            }
+        )
     trades_frame = pl.DataFrame(trade_rows, schema=TRADES_SCHEMA, orient="row")
 
     forecast_rows = []
@@ -284,33 +325,47 @@ async def load_source_frames(
         )
     observations_frame = pl.DataFrame(observation_rows, schema=OBSERVATIONS_SCHEMA, orient="row")
 
-    candlestick_rows = [
-        {
-            "market_ticker": c.market_ticker,
-            "period_interval_seconds": c.period_interval_seconds,
-            "period_start": _naive_utc(c.period_start),
-            "period_end": _naive_utc(c.period_end),
-            "price_open_cents": c.price_open_cents,
-            "price_high_cents": c.price_high_cents,
-            "price_low_cents": c.price_low_cents,
-            "price_close_cents": c.price_close_cents,
-            "price_mean_cents": c.price_mean_cents,
-            "price_close_is_carried_forward": c.price_close_is_carried_forward,
-            "yes_bid_open_cents": c.yes_bid_open_cents,
-            "yes_bid_high_cents": c.yes_bid_high_cents,
-            "yes_bid_low_cents": c.yes_bid_low_cents,
-            "yes_bid_close_cents": c.yes_bid_close_cents,
-            "yes_ask_open_cents": c.yes_ask_open_cents,
-            "yes_ask_high_cents": c.yes_ask_high_cents,
-            "yes_ask_low_cents": c.yes_ask_low_cents,
-            "yes_ask_close_cents": c.yes_ask_close_cents,
-            "volume": c.volume,
-            "open_interest": c.open_interest,
-            "raw_payload_id": c.raw_payload_id,
-        }
-        for c in (await session.scalars(select(MarketCandlestick))).all()
-        if c.market_ticker in known_tickers
-    ]
+    # Candlestick prices are admissible for production and deterministic-NULL
+    # rows (sole writer is always-production price-sync); a non-price-admissible
+    # row is dropped. Volume/OI are liquidity: kept only for production, NULL
+    # (missing) otherwise -- a NULL candle's price is trustworthy but its volume
+    # is unattributable.
+    candlestick_rows = []
+    for c in (await session.scalars(select(MarketCandlestick))).all():
+        if coverage is not None and env_policy is not None:
+            coverage.record("market_candlesticks", c.environment, env_policy)
+        if c.market_ticker not in known_tickers:
+            continue
+        if env_policy is not None and not price_admissible(
+            c.environment, env_policy, table="market_candlesticks"
+        ):
+            continue
+        c_liq = _liq(c.environment)
+        candlestick_rows.append(
+            {
+                "market_ticker": c.market_ticker,
+                "period_interval_seconds": c.period_interval_seconds,
+                "period_start": _naive_utc(c.period_start),
+                "period_end": _naive_utc(c.period_end),
+                "price_open_cents": c.price_open_cents,
+                "price_high_cents": c.price_high_cents,
+                "price_low_cents": c.price_low_cents,
+                "price_close_cents": c.price_close_cents,
+                "price_mean_cents": c.price_mean_cents,
+                "price_close_is_carried_forward": c.price_close_is_carried_forward,
+                "yes_bid_open_cents": c.yes_bid_open_cents,
+                "yes_bid_high_cents": c.yes_bid_high_cents,
+                "yes_bid_low_cents": c.yes_bid_low_cents,
+                "yes_bid_close_cents": c.yes_bid_close_cents,
+                "yes_ask_open_cents": c.yes_ask_open_cents,
+                "yes_ask_high_cents": c.yes_ask_high_cents,
+                "yes_ask_low_cents": c.yes_ask_low_cents,
+                "yes_ask_close_cents": c.yes_ask_close_cents,
+                "volume": c.volume if c_liq else None,
+                "open_interest": c.open_interest if c_liq else None,
+                "raw_payload_id": c.raw_payload_id,
+            }
+        )
     candlesticks_frame = pl.DataFrame(candlestick_rows, schema=CANDLESTICKS_SCHEMA, orient="row")
 
     return SourceFrames(

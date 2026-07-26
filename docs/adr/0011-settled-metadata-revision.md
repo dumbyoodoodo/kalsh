@@ -138,3 +138,46 @@ after `close_time` (`settlement_timer_seconds=3600`) — was not even stored.
   affected — every sampled market older than ~2 days agreed exactly with the
   venue, and the 3 label errors postdate every closed experiment. Converting
   "no evidence of harm" into "verified unaffected" is cheap and worth doing.
+
+## Correction (2026-07-26) — the "volume revisions" were the demo→production delta
+
+The 2026-07-23 evidence above (markets reporting `volume=0`: 10/11 → 0/11; event
+total volume 4 → 2,950, "737×") was **contaminated by the demo-vs-production
+environment split**, discovered and instrumented later (ADR 0013) and remediated
+by the production cutover (ADR 0014).
+
+At the time of this ADR, the main collector read the **demo** venue (≈zero
+volume/OI) while the metadata-revision pass read **production** (real
+liquidity). The dramatic "post-expiration volume revision" this ADR documented
+was therefore, in the overwhelming part, **not** the venue revising a settled
+market — it was the revision pass overwriting a *demo* snapshot with the
+*production* value of the same field. ADR 0013 confirmed empirically that demo
+carries ~zero volume/OI and an empty trade feed while production carries the
+real values; a 0 → 2,950 "revision" is exactly a demo→production delta, and its
+magnitude has no plausible reading as a genuine venue revision.
+
+What this corrects:
+
+- **The headline conclusion** ("Kalshi continues to revise a settled market's
+  volume/open_interest after expiration") is **not established by this
+  evidence.** The observed change is dominated by the environment delta. Whether
+  a *genuine* small post-settlement revision also exists is now an open
+  question, not a finding — it was masked by the environment difference.
+- **`result` revisions** are unaffected by this correction: settlement *results*
+  are environment-invariant (ADR 0013), so the 3 late result corrections this
+  ADR also captured remain real.
+
+What stays valid:
+
+- The **mechanism** (a bounded post-expiration revision pass on an append-only
+  snapshot history) is sound and remains in place; it now reads production on
+  both passes (ADR 0014), so future revisions it records are real venue changes,
+  not environment artifacts.
+- No completed experiment is retroactively invalidated by this correction: the
+  canonical dataset (ADR 0014, dataset/provenance.py) now excludes demo/NULL
+  liquidity entirely, so contaminated liquidity cannot enter new research; and
+  liquidity-derived findings should be rebuilt only on verified-production rows.
+
+This ADR is **not superseded** — its result-capture and revision-pass decisions
+stand. Only its liquidity-revision *interpretation* is corrected, preserving the
+original record above per the project's amend-don't-erase policy.

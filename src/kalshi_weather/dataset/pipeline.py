@@ -25,6 +25,7 @@ from kalshi_weather.dataset.builder import (
 from kalshi_weather.dataset.export import ExportFormat, ExportResult, export_dataset
 from kalshi_weather.dataset.manifest import DatasetManifest, build_manifest
 from kalshi_weather.dataset.market_map import MarketMapping
+from kalshi_weather.dataset.provenance import EnvironmentPolicy, ProvenanceCoverage
 from kalshi_weather.dataset.stats import compute_stats
 from kalshi_weather.dataset.validation import ValidationReport, validate
 from kalshi_weather.settlement.labels import RECONSTRUCTION_VERSION, SettlementLabel, build_labels
@@ -69,11 +70,21 @@ async def build(
     version: str = "unversioned",
     repo_dir: Path | None = None,
     resolver_meta: dict[str, Any] | None = None,
+    env_policy: EnvironmentPolicy | None = None,
 ) -> BuildOutput:
     """Load, build, validate, and describe the dataset(s) -- everything except
     writing to disk. ``resolver_meta`` (optional) records how the mappings were
-    produced (e.g. settlement parser version) in the manifest config."""
-    sources = await load_source_frames(session, start=start, end=end)
+    produced (e.g. settlement parser version) in the manifest config.
+
+    ``env_policy`` (ADR 0014) makes the build the *canonical* provenance-aware
+    dataset: liquidity only from verified production, prices including
+    deterministic-NULL candlesticks, excluded liquidity left missing. The policy
+    and the per-table provenance coverage are recorded in the manifest. When
+    None, the generic (environment-agnostic) build is produced."""
+    coverage = ProvenanceCoverage() if env_policy is not None else None
+    sources = await load_source_frames(
+        session, start=start, end=end, env_policy=env_policy, coverage=coverage
+    )
     built = build_datasets(sources, mappings, which=which)
     if (
         "market_weather" in built.frames
@@ -156,13 +167,14 @@ async def build(
             "settlement_label_reconstruction_version": RECONSTRUCTION_VERSION,
             "market_prices_schema_version": MARKET_PRICES_SCHEMA_VERSION,
             "market_price_weather_schema_version": MARKET_PRICE_WEATHER_SCHEMA_VERSION,
+            "canonical": env_policy is not None,
+            **({"environment_policy": env_policy.to_manifest()} if env_policy else {}),
+            **({"provenance_coverage": coverage.to_report()} if coverage else {}),
             **({"resolver": resolver_meta} if resolver_meta else {}),
         },
         repo_dir=repo_dir,
     )
-    return BuildOutput(
-        frames=built.frames, manifest=manifest, validation=report, stats=stats
-    )
+    return BuildOutput(frames=built.frames, manifest=manifest, validation=report, stats=stats)
 
 
 def _labels_frame(labels: list[SettlementLabel]) -> pl.DataFrame:

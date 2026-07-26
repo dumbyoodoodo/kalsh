@@ -102,6 +102,93 @@ app.add_typer(ops_app, name="ops")
 ops_app.add_typer(backup_app, name="backup")
 experiment_app = typer.Typer(help="Run formal modeling experiments on frozen canonical datasets.")
 app.add_typer(experiment_app, name="experiment")
+paper_app = typer.Typer(
+    help="SIMULATION ONLY -- deterministic paper-trading/execution simulator (no exchange orders)."
+)
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("simulate")
+def paper_simulate(
+    config: str = typer.Option(..., help="Path to a JSON run configuration (required)."),
+    out_dir: str = typer.Option(..., help="Immutable output run directory (must not exist)."),
+) -> None:
+    """Run a paper-trading simulation from an explicit config and write an
+    immutable run artifact. SIMULATION ONLY -- NO EXCHANGE ORDERS ARE SUBMITTED,
+    no account is connected, no H0019 artifact is read."""
+    from kalshi_weather.execution import SIMULATION_ONLY_BANNER
+    from kalshi_weather.execution.loader import load_run_config
+    from kalshi_weather.execution.replay import run_replay, write_artifacts
+
+    typer.echo(SIMULATION_ONLY_BANNER)
+    cfg = load_run_config(Path(config))
+    sim = run_replay(cfg)
+    manifest = write_artifacts(cfg, sim, Path(out_dir))
+    typer.echo(f"run {cfg.run_id}: orders={len(sim.orders)} fills={len(sim.fills)} -> {out_dir}")
+    typer.echo(
+        f"manifest git={manifest['git_commit'][:10]} dataset_sha={manifest['dataset_sha256'][:12]}"
+    )
+
+
+@paper_app.command("inspect")
+def paper_inspect(run_dir: str = typer.Argument(..., help="A run directory to inspect.")) -> None:
+    """Print a run's summary and metrics (read-only)."""
+    d = Path(run_dir)
+    typer.echo((d / "summary.txt").read_text())
+    typer.echo(json.dumps(json.loads((d / "metrics.json").read_text())["accounting"], indent=2))
+
+
+def _load_ledger(run_dir: Path):  # type: ignore[no-untyped-def]
+    from datetime import datetime as _dt
+
+    from kalshi_weather.execution.ledger import EntryKind, LedgerEntry
+
+    return [
+        LedgerEntry(
+            seq=e["seq"],
+            at=_dt.fromisoformat(e["at"]),
+            kind=EntryKind(e["kind"]),
+            cash_delta_cents=e["cash_delta_cents"],
+            reserved_delta_cents=e["reserved_delta_cents"],
+            payload=e["payload"],
+        )
+        for e in json.loads((run_dir / "ledger.json").read_text())
+    ]
+
+
+@paper_app.command("replay-ledger")
+def paper_replay_ledger(run_dir: str = typer.Argument(...)) -> None:
+    """Replay a run's ledger from scratch and confirm the final cash reconciles."""
+    from kalshi_weather.execution.ledger import replay
+
+    d = Path(run_dir)
+    manifest = json.loads((d / "run_manifest.json").read_text())
+    p = replay(manifest["initial_cash_cents"], _load_ledger(d))
+    typer.echo(
+        f"replayed cash={p.cash_cents} reserved={p.reserved_cents} "
+        f"realized={p.realized_pnl_cents()}"
+    )
+    typer.echo(f"positions reconstructed: {len(p.positions)}")
+
+
+@paper_app.command("validate")
+def paper_validate(run_dir: str = typer.Argument(...)) -> None:
+    """Validate a run: ledger replay reconciles and invariants hold. Exits
+    non-zero on any accounting failure."""
+    from kalshi_weather.execution.ledger import replay
+
+    d = Path(run_dir)
+    manifest = json.loads((d / "run_manifest.json").read_text())
+    try:
+        p = replay(manifest["initial_cash_cents"], _load_ledger(d))  # AccountingError on mismatch
+    except Exception as exc:
+        typer.echo(f"INVALID: {exc}")
+        raise typer.Exit(code=1) from exc
+    ok = p.cash_cents + p.reserved_cents >= 0
+    total = p.cash_cents + p.reserved_cents
+    typer.echo(f"{'VALID' if ok else 'INVALID'}: replay reconciles, cash+reserved={total}")
+    if not ok:
+        raise typer.Exit(code=1)
 
 
 @experiment_app.command("h0018")

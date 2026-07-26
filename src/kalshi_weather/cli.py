@@ -16,12 +16,12 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import typer
-from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from kalshi_weather.config import Environment, Settings, get_settings
+from kalshi_weather.config import Settings, get_settings
 from kalshi_weather.dataset import pipeline as dataset_pipeline
 from kalshi_weather.dataset.export import ExportFormat, default_version
 from kalshi_weather.domain.time import utc_now
@@ -33,7 +33,6 @@ from kalshi_weather.ingestion.metadata_revision import (
 )
 from kalshi_weather.ingestion.price_backfill import run_price_backfill, run_price_sync_loop
 from kalshi_weather.ingestion.weather_collector import run_weather_collector_loop
-from kalshi_weather.kalshi.auth import load_private_key_from_setting
 from kalshi_weather.kalshi.client import KalshiClient
 from kalshi_weather.kalshi.orderbook import reconstruct_best_quote
 from kalshi_weather.kalshi.provenance import resolve_kalshi_environment
@@ -141,20 +140,15 @@ def _backup_health_config(settings: Settings) -> BackupHealthConfig:
 
 
 def _build_client(settings: Settings, session: AsyncSession | None = None) -> KalshiClient:
-    base_url = settings.base_url_for(settings.kalshi_env)
-    key_id: str | None = None
-    private_key: rsa.RSAPrivateKey | None = None
-    if settings.kalshi_env == Environment.DEMO and settings.kalshi_demo_private_key:
-        # Unwrapped here and nowhere else: this is the Kalshi signing boundary.
-        # Neither value is stored, logged, or re-raised beyond this call.
-        key_id = (
-            settings.kalshi_demo_api_key_id.get_secret_value()
-            if settings.kalshi_demo_api_key_id
-            else None
-        )
-        private_key = load_private_key_from_setting(
-            settings.kalshi_demo_private_key.get_secret_value()
-        )
+    """The research/archival data client. Reads from the configured DATA
+    environment (`kalshi_data_env`, default production; ADR 0014) via the
+    centralized `kalshi_data_base_url`, so discovery, snapshots, trades, order
+    books, and settlement all share one environment. It is UNAUTHENTICATED:
+    every endpoint this client uses is public (no `require_auth=True` anywhere),
+    and demo signing credentials are reserved for the separate future execution
+    client -- they are deliberately never attached here, so a demo execution
+    client and the production data client can never be confused."""
+    base_url = settings.kalshi_data_base_url
 
     raw_payload_sink = None
     if session is not None:
@@ -178,9 +172,7 @@ def _build_client(settings: Settings, session: AsyncSession | None = None) -> Ka
 
     return KalshiClient(
         base_url=base_url,
-        environment=settings.kalshi_env,
-        key_id=key_id,
-        private_key=private_key,
+        environment=settings.kalshi_data_env,
         min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
         raw_payload_sink=raw_payload_sink,
     )
@@ -197,15 +189,15 @@ def _build_price_client(
     rows that reference them (same FK-ordering rationale as weather_backfill's
     sink -- see `weather_backfill` below).
 
-    Always targets **production**, regardless of `settings.kalshi_env`: a
-    market's candlestick/trade history only exists in the environment it was
-    discovered in, and every weather market this project has ever collected
-    -- including the entire settled-market archive price backfill runs
-    against -- has come from production's public "Climate and Weather"
-    category (confirmed live, docs/adr/0002-ingestion-collector.md), never
-    demo. No credentials are needed or used: candlestick data for a public
-    market is unauthenticated, same as every other read in this client."""
-    base_url = settings.base_url_for(Environment.PRODUCTION)
+    Reads from the same centralized DATA environment as every other data
+    client (`kalshi_data_base_url`, default production; ADR 0014). A market's
+    candlestick/trade history only exists in the environment it was discovered
+    in, and the entire settled-market archive this runs against comes from
+    production's public "Climate and Weather" category (confirmed live,
+    docs/adr/0002-ingestion-collector.md). No credentials are needed or used:
+    candlestick data for a public market is unauthenticated, same as every
+    other read in this client."""
+    base_url = settings.kalshi_data_base_url
     environment = resolve_kalshi_environment(base_url).value  # ADR 0013
 
     async def sink(source: str, endpoint: str, request_key: str, status: int, payload: Any) -> int:
@@ -223,9 +215,23 @@ def _build_price_client(
 
     return KalshiClient(
         base_url=base_url,
-        environment=Environment.PRODUCTION,
+        environment=settings.kalshi_data_env,
         min_request_interval_seconds=settings.kalshi_min_request_interval_seconds,
         raw_payload_sink=sink,
+    )
+
+
+def _log_data_environment(settings: Settings) -> None:
+    """Make the resolved research-data environment visible at startup (ADR
+    0014). Logs the env label, the API host, and the provenance value new rows
+    will carry -- host and env are public config, never secrets."""
+    host = urlparse(settings.kalshi_data_base_url).hostname or "unknown"
+    logger.info(
+        "kalshi.data_environment",
+        data_env=settings.kalshi_data_env.value,
+        host=host,
+        row_provenance=resolve_kalshi_environment(settings.kalshi_data_base_url).value,
+        trading_env=settings.kalshi_env.value,
     )
 
 
@@ -375,6 +381,7 @@ def collector_run(
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop_event.set)
 
+        _log_data_environment(settings)
         logger.info(
             "collector.starting",
             once=once,
@@ -1424,6 +1431,7 @@ def ops_run(
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop_event.set)
 
+        _log_data_environment(settings)
         logger.info(
             "ops.run.starting",
             kalshi_interval=kalshi_interval or settings.collector_interval_seconds,

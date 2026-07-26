@@ -69,7 +69,22 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    # TRADING / EXECUTION environment and live-trading safety gate. Per
+    # CLAUDE.md this MUST default to demo, and live order submission is
+    # impossible unless kalshi_env=production (see
+    # _forbid_live_trading_outside_production). It does NOT select where
+    # research data is read from -- that is kalshi_data_env below. Reserved for
+    # the future demo execution client; never repurpose it as a data source.
     kalshi_env: Environment = Field(default=Environment.DEMO, alias="KALSHI_ENV")
+
+    # DATA-COLLECTION environment: which Kalshi API all research/archival reads
+    # (discovery, snapshots, trades, order books, settlement, candlesticks,
+    # metadata revision) come from. Defaults to production because only
+    # production carries real liquidity/microstructure (ADR 0013/0014); demo
+    # duplicates definitions/results with ~zero volume. Deliberately SEPARATE
+    # from kalshi_env so a future demo execution client and the production data
+    # client can never be confused. Read-only public data needs no credentials.
+    kalshi_data_env: Environment = Field(default=Environment.PRODUCTION, alias="KALSHI_DATA_ENV")
 
     database_url: str = Field(
         default="postgresql+psycopg://kalshi:kalshi@localhost:5432/kalshi_weather",
@@ -364,12 +379,32 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_data_env(self) -> "Settings":
+        # Fail clearly at startup if the data environment can't resolve to a
+        # base URL (only demo/production have one). Prevents a mid-run crash
+        # from `KALSHI_DATA_ENV=development` or a typo.
+        if self.kalshi_data_env not in (Environment.DEMO, Environment.PRODUCTION):
+            raise ValueError(
+                f"KALSHI_DATA_ENV must be 'demo' or 'production', got "
+                f"{self.kalshi_data_env.value!r}"
+            )
+        return self
+
     def base_url_for(self, env: Environment) -> str:
         if env == Environment.PRODUCTION:
             return self.kalshi_prod_base_url
         if env == Environment.DEMO:
             return self.kalshi_demo_base_url
         raise ValueError(f"no Kalshi base URL for environment {env!r}")
+
+    @property
+    def kalshi_data_base_url(self) -> str:
+        """The single source of truth for where research/archival Kalshi data
+        is read from (ADR 0014). Every data-client builder resolves its base
+        URL through here, so no workflow hard-codes an environment
+        independently."""
+        return self.base_url_for(self.kalshi_data_env)
 
 
 def get_settings() -> Settings:

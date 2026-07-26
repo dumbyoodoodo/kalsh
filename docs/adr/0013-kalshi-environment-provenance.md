@@ -111,3 +111,9 @@ Demo's legitimate future role is **simulated order execution** in a later
 paper-trading phase — via an explicit, separate client, never as a data source.
 Demo execution data must never silently mix with production research data; the
 `environment` column is the mechanism that will enforce that separation.
+
+*Update: the production-only data-collection option was chosen and implemented —
+see ADR 0014, which adds a dedicated `KALSHI_DATA_ENV` (default production),
+keeps `KALSHI_ENV` as the demo-locked trading gate, and records the
+historical-data classification policy. Dataset-builder remediation of demo-era
+liquidity remains a separate follow-up.*

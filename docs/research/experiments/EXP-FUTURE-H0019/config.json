@@ -1,0 +1,68 @@
+{
+  "hypothesis": "H0019",
+  "registered": "2026-07-26",
+  "status": "accumulating_prospective_data",
+  "horizon_hours": 24,
+  "forecast_archive_start": "2026-07-21",
+  "windows": {
+    "train": [
+      "2026-07-22",
+      "2026-08-04"
+    ],
+    "val": [
+      "2026-08-05",
+      "2026-08-11"
+    ],
+    "test": [
+      "2026-08-12",
+      "2026-08-25"
+    ]
+  },
+  "grouping_unit": "event_group = (station, variable, target_date)",
+  "requirements": {
+    "min_train_events": 40,
+    "min_val_events": 15,
+    "min_test_events": 25,
+    "min_stations": 3,
+    "min_events_per_station_test": 4,
+    "max_station_concentration": 0.4,
+    "min_pos_labels_per_split": 5,
+    "min_neg_labels_per_split": 5,
+    "min_completion_coverage": 0.85,
+    "min_bootstrap_units": 25
+  },
+  "model_spec": {
+    "models": [
+      "M0_base_rate",
+      "M1_raw_market",
+      "M2_weather_only",
+      "M3_market_weather",
+      "M4_calibrated_market"
+    ],
+    "weather_features": [
+      "fc_gap_dir",
+      "obs_gap_dir",
+      "fc_point",
+      "obs_value",
+      "threshold",
+      "fc_age_h"
+    ],
+    "l2": 1.0,
+    "clip": [
+      0.02,
+      0.98
+    ],
+    "seed": 20260726,
+    "n_boot": 2000,
+    "primary_comparison": "M3_market_weather - M1_raw_market Brier on test, event-grouped bootstrap CI",
+    "calibration": "Platt on train+val only",
+    "liquidity_features": "NONE"
+  },
+  "states": [
+    "NOT_READY",
+    "TRAIN_READY",
+    "VALIDATION_READY",
+    "READY_FOR_FINAL_TEST",
+    "COMPLETED"
+  ]
+}

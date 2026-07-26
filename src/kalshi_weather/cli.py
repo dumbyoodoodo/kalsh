@@ -130,6 +130,62 @@ def experiment_h0018(
     asyncio.run(run())
 
 
+@experiment_app.command("readiness")
+def experiment_readiness(
+    hypothesis: str = typer.Argument("h0019", help="Which registered future experiment."),
+    log_path: str | None = typer.Option(
+        None, help="Append-only readiness-log JSONL (defaults to the registration dir)."
+    ),
+) -> None:
+    """READ-ONLY readiness monitor for the H0019 future replication. Reports
+    whether enough genuinely point-in-time data has accumulated to run the
+    held-out test. It NEVER trains a model, generates test predictions, or
+    computes a test Brier score -- coverage counts only. Each invocation is
+    appended to a readiness log (no outcome-based analysis is recorded)."""
+    if hypothesis.lower() != "h0019":
+        raise typer.BadParameter("only 'h0019' is registered")
+    import json as _json
+
+    from kalshi_weather.dataset.builder import load_source_frames as _load_sources
+    from kalshi_weather.dataset.provenance import EnvironmentPolicy as _EP
+    from kalshi_weather.experiments import readiness as rd
+    from kalshi_weather.settlement.labels import build_labels as _build_labels
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        now = utc_now().date()
+        async with _open_session(settings) as session:
+            labels = await _build_labels(session)
+            sources = await _load_sources(session, env_policy=_EP())
+        report = rd.compute_readiness(sources, labels, now=now)
+        typer.echo(f"H0019 readiness as of {now}: {report.state}")
+        for split in ("train", "val", "test"):
+            c = report.detail["split_coverage"][split]
+            typer.echo(
+                f"  {split}: events={c['events']} rows={c['rows']} pos={c['pos']} neg={c['neg']}"
+            )
+        det = report.detail
+        typer.echo(
+            f"  completion_cov={det['completion_coverage']} "
+            f"(complete {det['complete_in_windows']}/{det['eligible_in_windows']}) "
+            f"days_until_test_end={det['days_until']['test_end']}"
+        )
+        failing = [k for k, v in report.conditions.items() if not v]
+        typer.echo(f"  failing conditions: {failing or 'none'}")
+        # append-only readiness log -- records state, NEVER any test analysis
+        lp = (
+            Path(log_path)
+            if log_path
+            else Path("docs/research/experiments/EXP-FUTURE-H0019/readiness_log.jsonl")
+        )
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        with lp.open("a") as f:
+            f.write(_json.dumps({"as_of": str(now), "state": report.state}) + "\n")
+
+    asyncio.run(run())
+
+
 @asynccontextmanager
 async def _open_session(settings: Settings) -> AsyncIterator[AsyncSession]:
     engine = create_engine(settings.database_url)

@@ -152,7 +152,16 @@ def build_decision_grain(
         # direction-signed gaps: positive => forecast/obs favors YES
         (pl.col("direction") * (pl.col("fc_point") - pl.col("threshold"))).alias("fc_gap_dir"),
         (pl.col("direction") * (pl.col("obs_value") - pl.col("threshold"))).alias("obs_gap_dir"),
-        (pl.col("station") + "|" + pl.col("target_date").cast(pl.Utf8)).alias("event_group"),
+        # Independent inference unit (H0019 registration): the underlying
+        # weather outcome = (station, variable, target_date). Threshold markets
+        # on the same outcome share a group and are never treated as independent.
+        (
+            pl.col("station")
+            + "|"
+            + pl.col("variable").fill_null("_")
+            + "|"
+            + pl.col("target_date").cast(pl.Utf8)
+        ).alias("event_group"),
     ).sort(["target_date", "station", "market_ticker"])
     return DecisionGrain(grain, dict(exclusions), horizon_hours)
 

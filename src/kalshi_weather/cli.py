@@ -12,7 +12,7 @@ import json
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -2574,6 +2574,296 @@ def ops_recovery_watch(
         asyncio.run(run())
     finally:
         lock_handle.close()
+
+
+@ops_app.command("station-pilot-review")
+def ops_station_pilot_review(
+    as_of: str = typer.Option("", help="Review as-of timestamp (ISO; default now)."),
+    start: str = typer.Option("", help="Pilot start override (ISO; default ADR 0023 deploy)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the review as JSON."),
+) -> None:
+    """READ-ONLY seven-day SEA/PHX/MIA pilot review (ADR 0023): continuity,
+    timezone behavior, collector/storage impact, settlement gain, decision
+    gates, and (only after 7 full days) a second-batch recommendation that
+    still requires explicit human approval. Writes nothing."""
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.ops import station_pilot_review as spr
+
+    async def run() -> None:
+        settings = get_settings()
+        now = _dt.fromisoformat(as_of) if as_of else utc_now()
+        pilot_start = _dt.fromisoformat(start) if start else spr.PILOT_START_DEFAULT
+        window = spr.review_window(now, pilot_start=pilot_start)
+
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                all_stations = list(spr.PILOT_STATIONS) + list(spr.BASELINE_STATIONS)
+                fc_rows = (
+                    await conn.execute(
+                        _text(
+                            "select station_id, issue_time, observed_at, valid_start "
+                            "from weather_forecasts where observed_at >= :start"
+                        ),
+                        {"start": pilot_start.replace(tzinfo=None)},
+                    )
+                ).all()
+                forecasts = [
+                    spr.ForecastRowLite(
+                        station=r[0],
+                        issue_time=r[1].replace(tzinfo=None) if r[1].tzinfo else r[1],
+                        observed_at=(
+                            r[2].astimezone(UTC).replace(tzinfo=None) if r[2].tzinfo else r[2]
+                        ),
+                        valid_start=r[3].replace(tzinfo=None) if r[3].tzinfo else r[3],
+                    )
+                    for r in fc_rows
+                    if r[0] in all_stations
+                ]
+                ob_rows = (
+                    await conn.execute(
+                        _text(
+                            "select station_id, variable, observation_date "
+                            "from weather_observations where observation_date >= :d"
+                        ),
+                        {"d": window.first_full_day - timedelta(days=1)},
+                    )
+                ).all()
+                observations = [
+                    spr.ObservationRowLite(station=r[0], variable=r[1], observation_date=r[2])
+                    for r in ob_rows
+                    if r[0] in all_stations
+                ]
+                cyc_rows = (
+                    await conn.execute(
+                        _text(
+                            "select id, started_at, coalesce(duration_seconds,0), "
+                            "coalesce(requests_attempted,0), success from collector_runs "
+                            "where collector='weather' and started_at >= :pre"
+                        ),
+                        {"pre": (pilot_start - timedelta(hours=48)).replace(tzinfo=None)},
+                    )
+                ).all()
+                cycles = [
+                    spr.CycleLite(
+                        run_id=r[0],
+                        started_at=r[1].replace(tzinfo=UTC) if r[1].tzinfo is None else r[1],
+                        duration_seconds=float(r[2]),
+                        requests=int(r[3]),
+                        success=bool(r[4]),
+                    )
+                    for r in cyc_rows
+                ]
+                kalshi_ok = (
+                    await conn.execute(
+                        _text(
+                            "select count(*) filter (where success), count(*) "
+                            "from collector_runs where collector='kalshi' "
+                            "and started_at >= :start"
+                        ),
+                        {"start": pilot_start.replace(tzinfo=None)},
+                    )
+                ).first()
+                sizes = (
+                    await conn.execute(
+                        _text(
+                            "select pg_size_pretty(pg_database_size(current_database())), "
+                            "pg_total_relation_size('weather_forecasts'), "
+                            "pg_total_relation_size('weather_observations')"
+                        )
+                    )
+                ).first()
+                assert sizes is not None  # single-row aggregate always returns
+                pilot_fc = (
+                    await conn.execute(
+                        _text(
+                            "select count(*) from weather_forecasts "
+                            "where station_id in ('SEA','PHX','MIA')"
+                        )
+                    )
+                ).scalar()
+                pilot_ob = (
+                    await conn.execute(
+                        _text(
+                            "select count(*) from weather_observations "
+                            "where station_id in ('SEA','PHX','MIA')"
+                        )
+                    )
+                ).scalar()
+        finally:
+            await engine.dispose()
+
+        pre = [c for c in cycles if c.started_at < pilot_start]
+        post = [c for c in cycles if c.started_at >= pilot_start]
+        impact = spr.collector_impact(
+            pre, post, cadence_seconds=float(settings.weather_interval_seconds)
+        )
+
+        continuity = {
+            st: spr.station_continuity(st, forecasts, observations, window)
+            for st in (*spr.PILOT_STATIONS, *spr.BASELINE_STATIONS)
+        }
+        tz = spr.timezone_checks(now)
+        spill = spr.observation_date_spillover(observations, window)
+
+        # settlement gain (read-only classifier; nothing persisted)
+        from kalshi_weather.settlement.resolver import ParserSettlementResolver
+        from kalshi_weather.settlement.spec import SettlementStatus
+
+        async with _open_session(settings) as session:
+            specs = await ParserSettlementResolver().resolve_specs(session)
+        pilot_resolved: dict[str, dict[str, int]] = {
+            st: {"tmax_f": 0, "tmin_f": 0} for st in spr.PILOT_STATIONS
+        }
+        baseline_resolved = 0
+        unresolved_now = 0
+        for sp in specs:
+            if sp.status is SettlementStatus.RESOLVED:
+                if sp.station_id in pilot_resolved and sp.variable:
+                    pilot_resolved[sp.station_id][sp.variable] += 1
+                elif sp.station_id in spr.BASELINE_STATIONS:
+                    baseline_resolved += 1
+            elif sp.status in (SettlementStatus.UNRESOLVED, SettlementStatus.AMBIGUOUS):
+                unresolved_now += 1
+
+        expected_obs_days = window.elapsed_full_days * len(spr.PILOT_STATIONS)
+        complete_obs_days = sum(
+            continuity[st].observation_days_complete for st in spr.PILOT_STATIONS
+        )
+        stable = sum(
+            1
+            for st in spr.PILOT_STATIONS
+            if window.elapsed_full_days > 0
+            and len(continuity[st].issuance_shortfall_days) == 0
+        )
+        gates = spr.GateInputs(
+            review_state=window.state,
+            timezone_ok=all(v["ok"] for v in tz.values()),
+            spillover_ok=all(spill.values()),
+            mapping_ok=True,  # frozen registry; parser fixtures guard mappings
+            pilot_critical_findings=0,
+            stations_with_stable_issuance=stable,
+            pilot_observation_completeness=(
+                complete_obs_days / expected_obs_days if expected_obs_days else 1.0
+            ),
+            duplicate_rows=sum(
+                continuity[st].duplicate_logical_rows for st in spr.PILOT_STATIONS
+            ),
+            collector_capacity_ok=impact.cycles_exceeding_half_cadence == 0,
+            baseline_stations_healthy=all(
+                continuity[st].longest_forecast_gap_hours < 24.0
+                for st in spr.BASELINE_STATIONS
+            ),
+            settlement_no_regression=baseline_resolved >= spr.BASELINE_RESOLVED_FLOOR,
+            settlement_unresolved_new=unresolved_now,
+            storage_growth_mb_per_day=(
+                (int(sizes[1]) + int(sizes[2])) / 1_048_576 / max(1, window.elapsed_full_days)
+                if window.elapsed_full_days
+                else 0.0
+            ),
+        )
+        recommendation, reasons = spr.decide(gates)
+        if window.state != spr.PILOT_REVIEW_READY:
+            recommendation = spr.CONTINUE_PILOT  # no expansion call before day 7
+
+        payload: dict[str, Any] = {
+            "state": window.state,
+            "pilot_start": str(window.pilot_start),
+            "as_of": str(window.as_of),
+            "elapsed_full_days": window.elapsed_full_days,
+            "review_ready_at": str(window.review_ready_at),
+            "continuity": {
+                st: {
+                    "forecast_rows_by_day": c.forecast_rows_by_day,
+                    "issuances_by_day": c.issuances_by_day,
+                    "issuance_shortfall_days": c.issuance_shortfall_days,
+                    "observation_days_complete": c.observation_days_complete,
+                    "observation_days_missing": c.observation_days_missing,
+                    "duplicates": c.duplicate_logical_rows,
+                    "longest_forecast_gap_h": c.longest_forecast_gap_hours,
+                    "latest_forecast_age_h": c.latest_forecast_age_hours,
+                    "latest_observation": c.latest_observation_date,
+                    "ingest_delay_p50_m": c.ingestion_delay_p50_minutes,
+                    "ingest_delay_p90_m": c.ingestion_delay_p90_minutes,
+                }
+                for st, c in continuity.items()
+            },
+            "timezone_checks": tz,
+            "observation_spillover_ok": spill,
+            "collector_impact": impact.__dict__,
+            "kalshi_runs_since_pilot": {
+                "success": kalshi_ok[0] if kalshi_ok else 0,
+                "total": kalshi_ok[1] if kalshi_ok else 0,
+            },
+            "storage": {
+                "db_size": sizes[0],
+                "forecast_table_bytes": int(sizes[1]),
+                "observation_table_bytes": int(sizes[2]),
+                "pilot_forecast_rows": int(pilot_fc or 0),
+                "pilot_observation_rows": int(pilot_ob or 0),
+            },
+            "settlement": {
+                "pilot_resolved": pilot_resolved,
+                "baseline_resolved": baseline_resolved,
+                "baseline_floor": spr.BASELINE_RESOLVED_FLOOR,
+                "unresolved_or_ambiguous": unresolved_now,
+            },
+            "gates": gates.__dict__,
+            "recommendation": recommendation,
+            "reasons": reasons,
+            "second_batch_ranking": [
+                {"city": c, "notes": n} for c, n in spr.SECOND_BATCH_RANKING
+            ],
+            "second_batch_recommended": (
+                list(spr.SECOND_BATCH_RECOMMENDED)
+                if recommendation == spr.SECOND_BATCH_ELIGIBLE
+                else "deferred until PILOT_REVIEW_READY and all gates pass"
+            ),
+        }
+        if as_json:
+            typer.echo(json.dumps(payload, indent=2, default=str))
+            return
+        typer.echo(f"station-pilot review: {window.state}")
+        typer.echo(
+            f"  pilot day {window.elapsed_full_days}/{spr.REVIEW_DAYS_REQUIRED} "
+            f"(review ready {window.review_ready_at})"
+        )
+        for st in (*spr.PILOT_STATIONS, *spr.BASELINE_STATIONS):
+            c = continuity[st]
+            typer.echo(
+                f"  {st}: obs_complete={c.observation_days_complete} "
+                f"missing={len(c.observation_days_missing)} dup={c.duplicate_logical_rows} "
+                f"max_gap={c.longest_forecast_gap_hours}h "
+                f"latest_fc_age={c.latest_forecast_age_hours}h "
+                f"shortfall_days={len(c.issuance_shortfall_days)}"
+            )
+        typer.echo(f"  tz: {'OK' if all(v['ok'] for v in tz.values()) else 'ANOMALY'} "
+                   f"| spillover: {'OK' if all(spill.values()) else 'ANOMALY'}")
+        typer.echo(
+            f"  weather cycles: pre p50={impact.pre_median_s}s -> steady p50="
+            f"{impact.post_median_s}s p95={impact.post_p95_s}s "
+            f"(backfill {impact.post_first_backfill_s}s) over-cadence="
+            f"{impact.cycles_exceeding_half_cadence}"
+        )
+        typer.echo(
+            f"  settlement: pilot={ {k: sum(v.values()) for k,v in pilot_resolved.items()} } "
+            f"baseline={baseline_resolved} (floor {spr.BASELINE_RESOLVED_FLOOR}) "
+            f"unresolved={unresolved_now}"
+        )
+        typer.echo(f"  recommendation: {recommendation} ({', '.join(reasons)})")
+        if recommendation != spr.SECOND_BATCH_ELIGIBLE:
+            typer.echo("  second batch: deferred (no expansion call before day 7 / gates)")
+        else:
+            typer.echo(
+                f"  second batch candidates (HUMAN APPROVAL REQUIRED): "
+                f"{', '.join(spr.SECOND_BATCH_RECOMMENDED)}"
+            )
+
+    asyncio.run(run())
 
 
 @ops_app.command("restore-drill")

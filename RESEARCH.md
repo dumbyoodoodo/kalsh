@@ -117,3 +117,34 @@ Every experiment, regardless of hypothesis, follows the same sequence. Steps 1-4
 - `STRATEGY_SPEC.md` — a candidate strategy template; any implementation of it must follow the evaluation methodology here.
 - `DATA_MODEL.md` — the concrete schema (issue time, raw payload immutability) that makes the look-ahead/leakage rules above enforceable.
 - `TASKS.md` / `ROADMAP.md` — where each piece of this methodology gets implemented in code (dataset manifests, calibration reports, walk-forward evaluation).
+
+## Pre-freeze registration gate (mandatory from 2026-07-27)
+
+Before any new hypothesis's config/registration is frozen and hashed into
+the research ledger, ALL of the following must pass (2026-07-27 lineage
+audit; ADR record in the audit report):
+
+1. `uv run kalshi-weather research leakage-audit` — static latest-state
+   scan + production temporal invariants must return PASS (or every
+   warning individually dispositioned in the registration).
+2. **Availability-contract declaration** — the registration must state
+   `publication` (issue_time/issuance_time; market-efficiency claims) or
+   `ingestion` (observed_at; tradability claims). Mixing fields across
+   contracts is a leakage-lint ERROR (rule R003).
+3. **Close-time stability guard** — whenever decision_time derives from
+   close_time, run the close-time revision guard over the design's scope
+   (generic: `research/close_time_guard.py`; H0019's instance:
+   `uv run kalshi-weather experiment preflight h0019-close-time`).
+   REVIEW_REQUIRED means a human scientific decision BEFORE freezing —
+   the guard never selects a close_time.
+4. **Grouped partition isolation** — splits built via the workbench's
+   group-atomic splitters, leakage assertion re-run on the final frames.
+5. **Provenance completeness** — every input row type traceable to raw
+   payload / collector lineage / manifest / commit / config hash
+   (leakage-lint R009).
+6. Only after 1–5: freeze config + registration, hash them, append the
+   ledger record.
+
+For already-frozen experiments the gate applies at the **final-run
+preflight** instead (e.g. H0019's close-time preflight before its single
+test execution) — frozen specifications are never edited retroactively.

@@ -1202,6 +1202,162 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
+#: Four-station daily-temperature families in H0019's frozen scope (the
+#: resolved family names observed in production; metadata filter only).
+_H0019_FAMILY_REGEX = (
+    "^(KXHIGHNY|KXLOWTNYC|KXHIGHCHI|KXLOWTCHI|KXHIGHDEN|KXLOWTDEN|KXHIGHLAX|KXLOWTLAX)-"
+)
+
+
+@experiment_app.command("preflight")
+def experiment_preflight(
+    target: str = typer.Argument(..., help="Registered preflight (h0019-close-time)."),
+    start: str = typer.Option("", help="Override window start (ISO date)."),
+    end: str = typer.Option("", help="Override window end (ISO date)."),
+    as_of: str = typer.Option("", help="Explicit as-of timestamp (ISO; default now)."),
+    environment: str = typer.Option("production", help="Provenance environment filter."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+    fail_on_review: bool = typer.Option(
+        True, help="Exit nonzero when the guard requires human review."
+    ),
+) -> None:
+    """READ-ONLY experiment preflight checks. `h0019-close-time` verifies
+    close_time stability across the append-only snapshot history for H0019's
+    frozen window and scope -- market METADATA only: no outcomes, no
+    predictions, no scores, no dataset regeneration, no status change. Any
+    revision requires a separate human scientific decision."""
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.experiments import readiness as h19
+    from kalshi_weather.research import close_time_guard as ctg
+
+    if target.lower() != "h0019-close-time":
+        raise typer.BadParameter("only 'h0019-close-time' is registered")
+
+    win_start = date.fromisoformat(start) if start else h19.TRAIN_START
+    win_end = date.fromisoformat(end) if end else h19.TEST_END
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+
+    async def run() -> None:
+        settings = get_settings()
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        _text(
+                            "select market_ticker, id, observed_at, close_time, environment "
+                            "from market_snapshots "
+                            "where market_ticker ~ :fam "
+                            "and close_time >= :s and close_time < :e"
+                        ),
+                        {
+                            "fam": _H0019_FAMILY_REGEX,
+                            # close is typically the morning after target_date:
+                            # cover the frozen target window with a +2d margin
+                            "s": datetime(win_start.year, win_start.month, win_start.day),
+                            "e": datetime(win_end.year, win_end.month, win_end.day)
+                            + timedelta(days=2),
+                        },
+                    )
+                ).all()
+        finally:
+            await engine.dispose()
+
+        snapshots = [
+            ctg.SnapshotLite(
+                ticker=r[0],
+                snapshot_id=r[1],
+                observed_at=r[2],
+                close_time=r[3],
+                environment=r[4],
+            )
+            for r in rows
+        ]
+        # Pass 1 -- CONSERVATIVE: the full family universe. Tickers whose
+        # entire history predates the production provenance cutover (ADR
+        # 0013/0014: null- and demo-era snapshots) are BLOCKED here.
+        report = ctg.analyze_close_times(
+            snapshots,
+            name="h0019-close-time",
+            as_of=now,
+            horizon_hours=float(h19.HORIZON_HOURS),
+            nulls_excluded_by_frozen_rules=True,  # H0019 requires reliable close_time
+            allowed_environments=(environment,),
+        )
+        # Pass 2 -- FROZEN SCOPE: H0019's registered environment policy admits
+        # production-provenance markets only, so pre-cutover-era tickers are
+        # excluded from its dataset by the frozen rules themselves. This pass
+        # is the one that gates H0019's final run.
+        admissible = {s.ticker for s in snapshots if s.environment == environment}
+        scope_report = ctg.analyze_close_times(
+            [s for s in snapshots if s.ticker in admissible],
+            name="h0019-close-time (frozen scope)",
+            as_of=now,
+            horizon_hours=float(h19.HORIZON_HOURS),
+            nulls_excluded_by_frozen_rules=True,
+            allowed_environments=(environment,),
+        )
+        report.detail["frozen_scope"] = scope_report.to_dict()
+        report.detail["blocked_explanation"] = (
+            "blocked tickers have only pre-production-cutover snapshots "
+            "(null/demo provenance eras); H0019's frozen environment policy "
+            "excludes them from its dataset"
+        )
+        report.detail["frozen_window"] = {
+            "train": [str(h19.TRAIN_START), str(h19.TRAIN_END)],
+            "val": [str(h19.VAL_START), str(h19.VAL_END)],
+            "test": [str(h19.TEST_START), str(h19.TEST_END)],
+            "scanned_close_range": [str(win_start), str(win_end + timedelta(days=2))],
+        }
+        if as_json:
+            typer.echo(json.dumps(report.to_dict(), indent=2, default=str))
+        else:
+            typer.echo(
+                f"preflight h0019-close-time: universe={report.status} "
+                f"frozen-scope={scope_report.status}"
+            )
+            typer.echo(
+                f"  frozen window train {h19.TRAIN_START}..{h19.TRAIN_END} "
+                f"val {h19.VAL_START}..{h19.VAL_END} test {h19.TEST_START}..{h19.TEST_END}"
+            )
+            typer.echo(
+                f"  universe: inspected={report.tickers_inspected} "
+                f"stable={report.tickers_stable} revised={report.tickers_revised} "
+                f"null_close={report.tickers_null_close} "
+                f"blocked={report.tickers_blocked} (pre-cutover era, excluded by "
+                f"the frozen environment policy)"
+            )
+            typer.echo(
+                f"  frozen scope: inspected={scope_report.tickers_inspected} "
+                f"stable={scope_report.tickers_stable} "
+                f"revised={scope_report.tickers_revised} "
+                f"null_close={scope_report.tickers_null_close}"
+            )
+            typer.echo(f"  max revision: {scope_report.max_revision_seconds}s")
+            for r in scope_report.revisions[:10]:
+                typer.echo(
+                    f"  REVISED {r.ticker}: {len(r.versions)} close_times, "
+                    f"max shift {r.max_shift_seconds}s ({r.direction}); derived "
+                    f"decision_time changes -- HUMAN SCIENTIFIC DECISION REQUIRED"
+                )
+            if scope_report.status in (ctg.PASS, ctg.PASS_WITH_NULLS):
+                typer.echo(
+                    "  derived decision_time is stable for every ticker in H0019's "
+                    "frozen scope"
+                )
+        # the FROZEN-SCOPE status gates H0019's final run
+        if scope_report.status == ctg.REVIEW_REQUIRED and fail_on_review:
+            raise typer.Exit(code=1)
+        if scope_report.status == ctg.BLOCKED_INSUFFICIENT_HISTORY:
+            raise typer.Exit(code=2)
+
+    asyncio.run(run())
+
+
 def _experiment_readiness_h0020(log_path: str | None) -> None:
     """H0020 counts-only readiness (see experiments/h0020_readiness.py).
     Counts, dates, exclusions, provenance, and integrity ONLY -- no model,

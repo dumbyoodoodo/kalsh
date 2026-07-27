@@ -89,7 +89,7 @@ variants.
 - **Confirmatory claim:** conditioning market extremity on point-in-time
   revision dispersion improves probability scoring over the market
   alone. **Distinct from H0020** (unsigned dispersion vs signed
-  direction; uncertertainty-width vs directional underreaction) and from
+  direction; uncertainty-width vs directional underreaction) and from
   H0017 (forecast-side pre-close uncertainty, not settlement-label
   revision risk near close).
 - **Primary estimand:** test-window Brier(M_disp) − Brier(M1_market),

@@ -289,6 +289,8 @@ class BackupHealthConfig:
     remote_stale_after_hours: float
     disk_warning_free_gb: float
     disk_critical_free_gb: float
+    #: S3 restore-drill freshness threshold (ops/restore_drill.py).
+    drill_stale_after_days: float = 30.0
 
 
 def build_backup_findings(
@@ -331,4 +333,67 @@ def build_backup_findings(
             )
         )
     findings.append(check_lock_contention(load_skip_count(config.backup_dir)))
+    findings.append(
+        check_restore_drill(
+            _load_drill_state(config.backup_dir),
+            now=now,
+            stale_after_days=config.drill_stale_after_days,
+        )
+    )
     return findings
+
+
+def _load_drill_state(backup_dir: Path) -> dict[str, object] | None:
+    from kalshi_weather.ops.restore_drill import STATE_FILENAME, read_drill_state
+
+    return read_drill_state(backup_dir / STATE_FILENAME)
+
+
+def check_restore_drill(
+    state: dict[str, object] | None, *, now: datetime, stale_after_days: float
+) -> Finding:
+    """Disaster-recovery drill health: INFO when a recent drill succeeded,
+    WARNING when none has run recently (or ever), CRITICAL when the latest
+    drill failed -- an unrestorable backup or failed cleanup is a real
+    recovery-capability gap, not a cosmetic issue."""
+    if state is None:
+        return Finding(
+            check="backup_restore_drill",
+            domain="backup",
+            severity=Severity.WARNING,
+            count=0,
+            message="no S3 restore drill has ever been recorded (ops restore-drill)",
+        )
+    status = str(state.get("status"))
+    completed = str(state.get("completed_at", ""))
+    if status != "success":
+        return Finding(
+            check="backup_restore_drill",
+            domain="backup",
+            severity=Severity.CRITICAL,
+            count=1,
+            message=(
+                f"latest S3 restore drill FAILED ({state.get('failure_reason')}) at {completed}"
+            ),
+        )
+    try:
+        done = datetime.fromisoformat(completed)
+        done_naive = done.astimezone(UTC).replace(tzinfo=None) if done.tzinfo else done
+        age_days = (now - done_naive).total_seconds() / 86400.0
+    except ValueError:
+        age_days = float("inf")
+    if age_days > stale_after_days:
+        return Finding(
+            check="backup_restore_drill",
+            domain="backup",
+            severity=Severity.WARNING,
+            count=0,
+            message=f"last successful S3 restore drill is {age_days:.1f} days old",
+        )
+    return Finding(
+        check="backup_restore_drill",
+        domain="backup",
+        severity=Severity.INFO,
+        count=0,
+        message=f"S3 restore drill healthy ({age_days:.1f} days ago, {state.get('backup_key')})",
+    )

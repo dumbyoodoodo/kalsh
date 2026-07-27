@@ -232,8 +232,40 @@ def test_build_backup_findings_empty_backup_dir_all_info(tmp_path: Path) -> None
         disk_critical_free_gb=0.00001,
     )
     findings = build_backup_findings(config, now=NOW)
-    assert all(f.severity == Severity.INFO for f in findings)
+    # every check is INFO on a fresh install EXCEPT the restore-drill check,
+    # which deliberately warns until a first drill has ever been recorded --
+    # an untested recovery path is a real gap, not a cosmetic one.
+    for f in findings:
+        if f.check == "backup_restore_drill":
+            assert f.severity == Severity.WARNING
+        else:
+            assert f.severity == Severity.INFO
     assert all(f.domain == "backup" for f in findings)
+
+
+def test_restore_drill_check_states(tmp_path: Path) -> None:
+    from kalshi_weather.observatory.backup_health import check_restore_drill
+
+    warn = check_restore_drill(None, now=NOW, stale_after_days=30.0)
+    assert warn.severity == Severity.WARNING and "ever been recorded" in warn.message
+    ok = check_restore_drill(
+        {"status": "success", "completed_at": NOW.isoformat(), "backup_key": "k"},
+        now=NOW,
+        stale_after_days=30.0,
+    )
+    assert ok.severity == Severity.INFO
+    stale = check_restore_drill(
+        {"status": "success", "completed_at": "2026-01-01T00:00:00", "backup_key": "k"},
+        now=NOW,
+        stale_after_days=30.0,
+    )
+    assert stale.severity == Severity.WARNING
+    failed = check_restore_drill(
+        {"status": "failed", "failure_reason": "checksum mismatch", "completed_at": ""},
+        now=NOW,
+        stale_after_days=30.0,
+    )
+    assert failed.severity == Severity.CRITICAL and "checksum" in failed.message
 
 
 def test_build_backup_findings_detects_failed_backup(tmp_path: Path) -> None:

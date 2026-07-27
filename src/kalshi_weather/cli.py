@@ -2576,6 +2576,78 @@ def ops_recovery_watch(
         lock_handle.close()
 
 
+@ops_app.command("restore-drill")
+def ops_restore_drill(
+    dry_run: bool = typer.Option(False, help="Select and verify the backup; download nothing."),
+    backup_key: str = typer.Option("", help="Explicit S3 key (default: newest verified)."),
+    keep_on_failure: bool = typer.Option(
+        False, help="Keep the disposable container + download for forensics on failure."
+    ),
+    timeout_seconds: float = typer.Option(900.0, help="Per-command timeout bound."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the drill result as JSON."),
+) -> None:
+    """Disaster-recovery drill from the newest VERIFIED S3 backup: download,
+    checksum, restore into a uniquely named DISPOSABLE PostgreSQL container,
+    validate schema + representative data, destroy everything, and append
+    the result to the drill history. Mechanically incapable of addressing
+    the production container or database. Read-only toward production."""
+    import subprocess as sp
+
+    from kalshi_weather.ops import restore_drill as rd
+
+    settings = get_settings()
+    if settings.backup_remote_type != "s3":
+        raise typer.BadParameter("BACKUP_REMOTE_TYPE is not 's3'; no S3 backups to drill against")
+    if not settings.backup_s3_bucket:
+        raise typer.BadParameter("BACKUP_S3_BUCKET is not configured")
+    commit = sp.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10, check=False
+    ).stdout.strip()
+    config = rd.DrillConfig(
+        bucket=settings.backup_s3_bucket,
+        prefix=settings.backup_s3_prefix,
+        backup_dir=_backup_dir(settings),
+        timeout_seconds=timeout_seconds,
+        keep_on_failure=keep_on_failure,
+        backup_key=backup_key or None,
+        dry_run=dry_run,
+        code_commit=commit or "unknown",
+    )
+    result = rd.run_drill(config)
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "drill_id": result.drill_id,
+                    "status": result.status,
+                    "failure_reason": result.failure_reason,
+                    "backup_key": result.backup_key,
+                    "backup_size": result.backup_size,
+                    "backup_sha256": result.backup_sha256,
+                    "container": result.container,
+                    "pg_version": result.pg_version,
+                    "cleanup_ok": result.cleanup_ok,
+                    "steps": result.steps,
+                },
+                indent=2,
+            )
+        )
+    else:
+        typer.echo(f"restore drill {result.drill_id}: {result.status.upper()}")
+        typer.echo(f"  backup: {result.backup_key} ({result.backup_size} bytes)")
+        if result.backup_sha256:
+            typer.echo(f"  sha256: {result.backup_sha256}")
+        if result.container:
+            typer.echo(f"  disposable target: {result.container}")
+        for s in result.steps:
+            typer.echo(f"  [{'OK' if s['ok'] else 'FAIL'}] {s['step']}"
+                       + (f": {s['detail']}" if s["detail"] else ""))
+        if result.failure_reason:
+            typer.echo(f"  failure: {result.failure_reason}")
+    if result.status != "success":
+        raise typer.Exit(code=1)
+
+
 @ops_app.command("heartbeat")
 def ops_heartbeat(
     state_path: str | None = typer.Option(

@@ -435,3 +435,23 @@ codebase) and adding a regression test that exercises a real on-disk
 `.dump` file through the full `build_backup_findings` orchestration --
 every prior test in this area used an empty directory, which is exactly
 why the bug wasn't caught until live validation.
+
+## Automated S3 restore drill (added 2026-07-27)
+
+`uv run kalshi-weather ops restore-drill` automates the disaster-recovery
+proof against the OFF-MACHINE copy: selects the newest S3 object the backup
+status marks verified-uploaded (fail-closed — never a silent fallback),
+downloads to a temp path, verifies size + SHA-256 (round-tripped against
+the local twin when present), restores into a uniquely named disposable
+`postgres:16` container (`kalshi-restore-drill-*`; every docker command is
+guard-checked so production `kalsh-postgres-1` is mechanically
+unaddressable), validates schema (alembic revision), representative tables,
+and semantic samples, then destroys the container and download — success or
+failure. Results append to `restore_drill_history.jsonl` with the latest
+state in `restore_drill_state.json` (backup dir), surfaced by the
+observatory's `backup_restore_drill` check (INFO recent / WARNING stale or
+never / CRITICAL failed). Options: `--dry-run`, `--backup-key`,
+`--keep-on-failure`, `--json`, `--timeout-seconds`. Not scheduled
+automatically; run manually or approve a schedule separately. The manual
+`scripts/backup_restore_drill.py` (local newest dump) remains for
+local-only drills.

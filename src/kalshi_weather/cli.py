@@ -2260,6 +2260,250 @@ def ops_monitor(
         lock_handle.close()
 
 
+@ops_app.command("recovery-watch")
+def ops_recovery_watch(
+    state_path: str = typer.Option(..., help="Path to the persisted watch-state JSON."),
+    history_path: str = typer.Option(..., help="Path to the append-only watch-history JSONL."),
+    probe: bool = typer.Option(
+        True, help="Probe the Kalshi production endpoint (unauthenticated reachability only)."
+    ),
+    notify: bool = typer.Option(
+        True, help="Deliver transition notifications via the configured ALERT_TRANSPORT."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the evaluation as JSON."),
+) -> None:
+    """Kalshi outage/recovery watch for the pending paper-fill validation.
+    Read-only against research + paper data; unauthenticated reachability
+    probe only; exactly-once notifications per state transition. NEVER runs
+    the paper validation itself -- human approval remains required."""
+    import subprocess as sp
+
+    import httpx
+    from sqlalchemy import select as _select
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.ops import recovery_watch as rw
+
+    async def run() -> None:
+        settings = get_settings()
+        now = utc_now()
+
+        # -- reachability probe (any HTTP response = reachable) --------------
+        api_reachable = False
+        if probe:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.get(
+                        f"{settings.kalshi_data_base_url}/exchange/status"
+                    )
+                    api_reachable = resp.status_code < 500
+            except httpx.HTTPError:
+                api_reachable = False
+
+        # -- research-side ages (read-only) ----------------------------------
+        r_engine = create_async_engine(settings.database_url)
+        try:
+            async with r_engine.connect() as conn:
+                latest = (
+                    await conn.execute(
+                        _text(
+                            "select id, success from collector_runs "
+                            "where collector='kalshi' order by id desc limit 1"
+                        )
+                    )
+                ).first()
+                success = (
+                    await conn.execute(
+                        _text(
+                            "select id, extract(epoch from (now()-finished_at)) "
+                            "from collector_runs where collector='kalshi' and success "
+                            "order by id desc limit 1"
+                        )
+                    )
+                ).first()
+
+                async def age(q: str) -> float | None:
+                    v = (await conn.execute(_text(q))).scalar()
+                    return float(v) if v is not None else None
+
+                snap_age = await age(
+                    "select extract(epoch from (now()-max(observed_at))) from market_snapshots"
+                )
+                book_age = await age(
+                    "select extract(epoch from (now()-max(captured_at))) from orderbook_snapshots"
+                )
+                poll_age = await age(
+                    "select extract(epoch from (now()-max(completed_at))) "
+                    "from market_poll_attempts where endpoint_type='orderbook' and outcome in "
+                    "('succeeded_new_data','succeeded_unchanged','succeeded_empty')"
+                )
+        finally:
+            await r_engine.dispose()
+
+        # -- collector process count -----------------------------------------
+        pgrep = sp.run(
+            ["pgrep", "-f", "scripts/service/launch.py"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        collector_count = len([ln for ln in pgrep.stdout.splitlines() if ln.strip()])
+
+        # -- paper-side gates (read-only) ------------------------------------
+        from kalshi_weather.execution.ledger import EntryKind as _EK
+        from kalshi_weather.execution.ledger import LedgerEntry as _LE
+        from kalshi_weather.execution.ledger import replay as _replay
+        from kalshi_weather.paper.store import (
+            PaperPnlSnapshotRow,
+            kill_switch_active,
+            open_paper_db,
+            paper_engine,
+            stored_ledger_entries,
+        )
+
+        p_engine = paper_engine(settings.paper_database_url)
+        await open_paper_db(p_engine)
+        p_factory = async_sessionmaker(p_engine, expire_on_commit=False)
+        async with p_factory() as ps:
+            kill, _reason = await kill_switch_active(ps)
+            entries = await stored_ledger_entries(ps)
+            snap_row = (
+                await ps.scalars(
+                    _select(PaperPnlSnapshotRow).order_by(PaperPnlSnapshotRow.id.desc()).limit(1)
+                )
+            ).first()
+        await p_engine.dispose()
+        if not entries:
+            reconcile_ok = True  # an empty paper book reconciles trivially
+        else:
+            portfolio = _replay(
+                0,
+                [
+                    _LE(
+                        seq=i,
+                        at=at,
+                        kind=_EK(kind),
+                        cash_delta_cents=c,
+                        reserved_delta_cents=r,
+                        payload=p,
+                    )
+                    for i, (_s, at, kind, c, r, p) in enumerate(entries)
+                ],
+            )
+            cost = sum(
+                x.yes_cost_cents + x.no_cost_cents for x in portfolio.positions.values()
+            )
+            reconcile_ok = snap_row is not None and (
+                portfolio.cash_cents == snap_row.cash_cents
+                and portfolio.reserved_cents == snap_row.reserved_cents
+                and cost == snap_row.position_cost_cents
+                and portfolio.fees_cents == snap_row.fees_cents
+            )
+
+        inputs = rw.WatchInputs(
+            api_reachable=api_reachable,
+            success_run_age_seconds=float(success[1]) if success else None,
+            latest_success_run_id=success[0] if success else None,
+            latest_run_id=latest[0] if latest else None,
+            latest_run_success=bool(latest[1]) if latest else None,
+            snapshot_age_seconds=snap_age,
+            book_age_seconds=book_age,
+            poll_evidence_age_seconds=poll_age,
+            collector_count=collector_count,
+            kill_switch_inactive=not kill,
+            reconcile_ok=reconcile_ok,
+        )
+        state, reasons = rw.classify(inputs)
+        prior = rw.load_watch_state(Path(state_path))
+        decision = rw.decide_notification(state, reasons, inputs, prior, now=now)
+
+        delivered: bool | None = None
+        detail = "suppressed (no state transition)"
+        if notify and decision.should_notify:
+            telegram = None
+            if settings.alert_telegram_bot_token and settings.alert_telegram_chat_id:
+                telegram = alerting.TelegramConfig(
+                    bot_token=settings.alert_telegram_bot_token.get_secret_value(),
+                    chat_id=settings.alert_telegram_chat_id,
+                )
+            result = await alerting.send_alert(
+                settings.alert_transport, decision.message, telegram=telegram
+            )
+            delivered, detail = result.delivered, result.detail
+        elif decision.should_notify:
+            detail = "notification computed but --no-notify set"
+
+        rw.save_watch_state(Path(state_path), decision.new_state)
+        rw.append_watch_history(
+            Path(history_path),
+            timestamp=now.isoformat(),
+            state=state.value,
+            transition=decision.transition,
+            reasons=",".join(reasons) or "all_gates_pass",
+            notified=delivered,
+            detail=detail,
+        )
+
+        from kalshi_weather.paper.engine import PaperRiskPolicy as _PRP
+
+        thresholds = _PRP()
+        gates = {
+            "api_reachable": api_reachable,
+            f"success_run_age<={thresholds.max_snapshot_age_seconds}s": (
+                inputs.success_run_age_seconds is not None
+                and inputs.success_run_age_seconds <= thresholds.max_snapshot_age_seconds
+            ),
+            f"snapshot_age<={thresholds.max_snapshot_age_seconds}s": (
+                snap_age is not None and snap_age <= thresholds.max_snapshot_age_seconds
+            ),
+            f"book_age<={thresholds.max_book_age_seconds}s": (
+                book_age is not None and book_age <= thresholds.max_book_age_seconds
+            ),
+            f"poll_age<={thresholds.max_poll_evidence_age_seconds}s": (
+                poll_age is not None and poll_age <= thresholds.max_poll_evidence_age_seconds
+            ),
+            "one_collector": collector_count == 1,
+            "kill_switch_inactive": not kill,
+            "paper_reconcile_ok": reconcile_ok,
+        }
+        payload = {
+            "state": state.value,
+            "reasons": reasons,
+            "transition": decision.transition,
+            "notified": delivered,
+            "detail": detail,
+            "outage_started_at": decision.new_state.outage_started_at,
+            "last_notification_at": decision.new_state.last_notification_at,
+            "latest_run": {"id": inputs.latest_run_id, "success": inputs.latest_run_success},
+            "latest_success_run": {
+                "id": inputs.latest_success_run_id,
+                "age_seconds": inputs.success_run_age_seconds,
+            },
+            "ages_seconds": {"snapshot": snap_age, "book": book_age, "poll": poll_age},
+            "gates": gates,
+            "paper_validation_ready": state is rw.WatchState.PAPER_VALIDATION_READY,
+        }
+        if as_json:
+            typer.echo(json.dumps(payload, indent=2, default=str))
+        else:
+            typer.echo(f"recovery-watch state: {state.value} (transition={decision.transition})")
+            if decision.new_state.outage_started_at:
+                typer.echo(f"  outage since: {decision.new_state.outage_started_at}")
+            typer.echo(
+                f"  latest run: {inputs.latest_run_id} success={inputs.latest_run_success} | "
+                f"latest success: {inputs.latest_success_run_id} "
+                f"age={inputs.success_run_age_seconds}"
+            )
+            for name, ok in gates.items():
+                typer.echo(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+            typer.echo(f"  paper_validation_ready: {payload['paper_validation_ready']}")
+            typer.echo(f"  notified: {delivered} detail={detail!r}")
+
+    asyncio.run(run())
+
+
 @ops_app.command("heartbeat")
 def ops_heartbeat(
     state_path: str | None = typer.Option(

@@ -268,3 +268,30 @@ succeeded within the ping interval plus grace). The default status check sends
 **no** network request -- it reads the local `heartbeat_state.json` that
 `ops heartbeat` writes. `status.sh --ping-heartbeat` additionally fires one real
 ping as a manual end-to-end test.
+
+## Kalshi recovery watch (paper-validation trigger)
+
+`ops recovery-watch` answers "is it safe to rerun the pending one-contract
+paper-fill validation?" with a four-state machine — `HEALTHY`,
+`OUTAGE_ACTIVE`, `RECOVERING`, `PAPER_VALIDATION_READY` — whose freshness
+gates are `PaperRiskPolicy`'s own thresholds (no competing constants).
+Exactly-once notifications per state transition via the same
+`ALERT_TRANSPORT` as every other alert, one optional escalation after a
+6-hour outage, and atomic JSON state + append-only JSONL history (the
+`ops monitor` conventions), so deduplication survives restarts:
+
+```bash
+uv run kalshi-weather ops recovery-watch \
+  --state-path ~/Library/Logs/kalshi-weather/recovery_watch_state.json \
+  --history-path ~/Library/Logs/kalshi-weather/recovery_watch_history.jsonl
+```
+
+Output lists each gate PASS/FAIL with measured ages, the current state,
+outage start, last notification, and `paper_validation_ready`. The ready
+notification reads: "Kalshi production collection has recovered and all
+paper freshness gates pass. The pending one-contract paper-fill validation
+may now be rerun." **It never runs the validation itself — human approval
+remains required.** Run it manually or on a schedule (e.g. alongside
+`ops monitor`); `--no-notify` gives a read-only status check, `--json`
+machine output. The endpoint probe is an unauthenticated GET of the public
+exchange-status URL — never an order, never credentialed.

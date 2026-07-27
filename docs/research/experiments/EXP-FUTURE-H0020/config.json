@@ -1,0 +1,122 @@
+{
+  "hypothesis": "H0020",
+  "title": "Forecast-revision underreaction at close minus 24 hours",
+  "registered": "2026-07-27",
+  "status": "REGISTERED_NOT_READY",
+  "claim": "At market close minus 24 hours, a model using market-implied probability plus the most recent point-in-time NWS forecast revision improves Brier score over market-implied probability alone for eligible single-sided daily high and low temperature threshold markets at CHI, DEN, LAX, and NYC.",
+  "mechanism": "Weather-market prices may adjust incompletely or slowly to newly arriving forecast revisions because of limited attention and thin participation.",
+  "falsification": "If the revision-augmented model does not improve untouched test Brier under the frozen success rule, H0020 is NOT SUPPORTED and final.",
+  "related": ["H0018", "H0019"],
+  "spec_module": "src/kalshi_weather/experiments/h0020.py",
+  "decision_time": "market close_time minus 24 hours",
+  "availability": {
+    "forecast_availability_timestamp": "observed_at",
+    "issue_time_as_availability": "FORBIDDEN (measured ingestion delay p50 46m, p90 107m, p99 ~9.6h)",
+    "market_evidence": "latest candlestick close at or before decision time; production environment only"
+  },
+  "eligibility": {
+    "include": [
+      "single-sided daily temperature threshold markets",
+      "series families KXHIGHT* and KXLOWT*",
+      "stations CHI, DEN, LAX, NYC",
+      "valid deterministic settlement lineage",
+      "point-in-time market evidence at or before decision time",
+      "valid frozen revision construction (F_latest and F_prev per revision_spec)"
+    ],
+    "exclude_with_reason_codes": {
+      "range_or_between_contract": "non-monotone revision-to-probability mapping",
+      "composite_or_multi_city_market": "no single-station forecast mapping",
+      "non_temperature_weather_contract": "no matching forecast variable",
+      "station_without_forecast_archive": "no NWS archive collected",
+      "unresolved_settlement_mapping": "station/variable/target_date not deterministic",
+      "no_forecast_available_at_decision": "no forecast row with observed_at <= decision",
+      "latest_forecast_stale": "latest observed_at older than decision minus 30h",
+      "no_eligible_prior_forecast": "no prior within [60min, 30h] issue separation",
+      "no_market_evidence_at_decision": "no candle at or before decision time"
+    }
+  },
+  "revision_spec": {
+    "definition": "revision_24h = F_latest.point_estimate - F_prev.point_estimate",
+    "units": "degrees Fahrenheit",
+    "sign": "positive = warming",
+    "matching_keys": ["source=nws", "station_id", "variable", "station-local target_date", "matching high/low forecast period"],
+    "f_latest": "greatest issue_time among rows with observed_at <= decision_time; observed_at >= decision_time - 30h",
+    "f_prev": "greatest issue_time among rows with observed_at <= decision_time and issue_time <= issue_time(F_latest) - 60min and issue_time >= issue_time(F_latest) - 30h",
+    "tie_break": "greatest (issue_time, observed_at, id) — corrected same-issue rows resolve to latest observed_at; exact ties to max(id); earlier rows retained for provenance",
+    "missing_prior": "exclude with reason no_eligible_prior_forecast; never impute zero",
+    "unchanged_reissue": "revision = 0; retained as control stratum",
+    "min_prior_separation_minutes": 60,
+    "max_prior_separation_hours": 30,
+    "max_latest_staleness_hours": 30,
+    "directional_feature": "rev_dir = revision_24h * threshold_side_sign; threshold_side_sign = +1 when YES pays above the threshold, -1 when YES pays below"
+  },
+  "model_spec": {
+    "benchmark_M1": "latest eligible market-implied probability at decision time, clipped to [0.02, 0.98]",
+    "model_MR": "L2 logistic regression (numpy IRLS, experiments/baseline.fit_logistic) on exactly [logit(market_probability), rev_dir]",
+    "features": ["logit_market_probability", "rev_dir"],
+    "forbidden": ["static forecast-level features", "station effects", "feature selection", "calibration stage beyond fitted intercept and coefficients", "liquidity features"],
+    "l2": 1.0,
+    "clip": [0.02, 0.98],
+    "seed": 20260909,
+    "n_boot": 2000,
+    "missing_data": "exclude with recorded reason; no imputation",
+    "primary_comparison": "Brier(MR) - Brier(M1) on the single untouched test window, (station, variable, target_date)-grouped bootstrap, 2000 resamples, 95% CI, seed 20260909; lower is better; exactly one primary comparison"
+  },
+  "windows": {
+    "train": ["2026-07-21", "2026-08-11"],
+    "excluded_gap_h0019_test": ["2026-08-12", "2026-08-25"],
+    "validation": ["2026-08-26", "2026-09-08"],
+    "test_initial": ["2026-09-09", "2026-09-22"]
+  },
+  "grouping_unit": "event_group = (station, variable, target_date); no group may cross train/validation/test",
+  "test_extension_rule": {
+    "initial_end": "2026-09-22",
+    "extension_days": 7,
+    "max_extensions": 2,
+    "absolute_final_end": "2026-10-06",
+    "on_gates_unmet_at_absolute_end": "status DEFERRED_INSUFFICIENT_DATA; do not run the final test; do not change the hypothesis; no replacement window post hoc",
+    "note": "extensions re-evaluate readiness counts only; encoded before any test access"
+  },
+  "readiness_gates": {
+    "test_window_elapsed": true,
+    "min_test_event_groups": 25,
+    "min_stations": 3,
+    "min_pos_labels_test": 5,
+    "min_neg_labels_test": 5,
+    "max_station_concentration": 0.4,
+    "min_bootstrap_units": 25,
+    "frozen_hashes_valid": true,
+    "no_group_leakage": true,
+    "availability_uses_observed_at": true,
+    "exclusions_reported_by_split": true,
+    "note": "readiness inspects counts and integrity only; it must not compute predictive performance"
+  },
+  "success_rule": {
+    "SUPPORTED": "readiness gates passed before test execution AND mean Brier(MR)-Brier(M1) < 0 AND 95% grouped-bootstrap CI entirely below 0 AND no station has a positive mean Brier difference",
+    "NOT_SUPPORTED": "non-negative point estimate OR CI touches/crosses zero OR any station reverses the sign criterion; final — no rerun, no changed window, no feature addition, no threshold adjustment, no reinterpretation as partial support",
+    "INVALID": "leakage OR hash mismatch OR test access before readiness OR issue_time used as availability OR split-integrity failure OR registered design not reproducible",
+    "on_supported": "authorizes only a separate untouched replication registration; does not authorize paper or live trading"
+  },
+  "secondary_diagnostics_exploratory_only": [
+    "log loss", "reliability table", "ECE", "calibration slope/intercept",
+    "per-station Brier difference", "zero vs nonzero revision strata",
+    "warming vs cooling descriptive split", "sensitivity to clipping",
+    "sensitivity to L2", "sensitivity to minimum revision separation"
+  ],
+  "commands": {
+    "readiness": "uv run kalshi-weather experiment readiness h0020",
+    "final_run_single_shot": "uv run kalshi-weather experiment run h0020 --out docs/research/experiments/EXP-FUTURE-H0020/",
+    "note": "h0020 readiness/runner support is to be implemented (counts-only readiness first) before the validation window closes; the single-run guard must refuse a second test execution"
+  },
+  "artifacts": {
+    "output_dir": "docs/research/experiments/EXP-FUTURE-H0020/",
+    "manifest": "immutable manifest per dataset/manifest.py: git SHA, DB revision, dataset manifest hash, dependency lock hash (uv.lock sha256), config hash, registration hash, ledger sequence + record hash, stdout/stderr capture, sha256 of every output artifact",
+    "required_db_revision": "0011",
+    "ledger": "docs/research/ledger.jsonl (native record follows the two marked backfills)"
+  },
+  "frozen_reference_hashes": {
+    "h0019_config_sha256": "5d1f763dcf6b78eabe25add8226f2d2d4f814cf6b191be5dca554a29f840ab0e",
+    "h0019_registration_sha256": "e8e1200ac3b9d2944f324881d5c8ea755b6da5c4af69fbd2f557d680e78907b5",
+    "h0018_results_sha256": "b691849e2ce1d5e1cede8a4c9f876c565d0f0bad33503059fdcc40a35d2b6c44"
+  }
+}

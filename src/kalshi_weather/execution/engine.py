@@ -59,6 +59,17 @@ class Simulator:
     def open_order_count(self) -> int:
         return sum(1 for o in self.orders if o.is_open())
 
+    def reject(self, intent: OrderIntent, reason: str) -> Order:
+        """Record a pre-trade rejection (e.g. market not open) without evaluating
+        fills. Mirrors the settled-market rejection path in ``submit``."""
+        order = Order(intent=intent)
+        self.orders.append(order)
+        order.transition(OrderState.REJECTED)
+        order.reject_reason = reason
+        self.rejections.append((intent.order_id, reason))
+        self._seen_ids.add(intent.order_id)
+        return order
+
     # --- order submission --------------------------------------------------
 
     def submit(

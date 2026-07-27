@@ -1,0 +1,5 @@
+{
+  "initial_cash_cents": 100000,
+  "policy": {"version": "exec-policy-v1", "fill_mode": "marketable", "fee_model": {"type": "kalshi_event_contract", "version": "kalshi-event-v1"}, "max_book_age_seconds": 7200},
+  "risk": {"version": "risk-v1", "max_order_quantity": 1000, "min_available_cash_cents": 0, "max_book_age_seconds": 7200}
+}

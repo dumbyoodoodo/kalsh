@@ -33,11 +33,36 @@ def test_execution_import_graph_excludes_experiments() -> None:
     code = (
         "import sys; import kalshi_weather.execution.replay; "
         "import kalshi_weather.execution.engine; import kalshi_weather.execution.loader; "
+        "import kalshi_weather.execution.history; import kalshi_weather.execution.history_replay; "
         "assert not any(m.startswith('kalshi_weather.experiments') for m in sys.modules), "
         "'execution pulled in experiments'; print('isolated')"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and "isolated" in out.stdout, out.stderr
+
+
+def test_history_adapter_reads_only_market_data_tables() -> None:
+    # The historical adapter must touch only market-data storage models, never any
+    # H0019 experiment/readiness/prediction code.
+    src = (SRC / "history.py").read_text() + (SRC / "history_replay.py").read_text()
+    for forbidden in ("readiness", "experiments", "EXP-FUTURE-H0019", "prediction", "h0019"):
+        for line in src.splitlines():
+            s = line.strip()
+            if s.startswith(("import ", "from ")):
+                assert forbidden not in s.lower(), f"history adapter imports {forbidden}: {s}"
+
+
+def test_smoke_market_is_not_an_h0019_market() -> None:
+    # The historical smoke test uses a production market unrelated to H0019 model
+    # selection (H0019 markets are chosen by the experiment, not by this adapter).
+    tickers = Path(
+        "docs/research/experiments/EXP-PAPER-PILOT/history_smoke/tickers.txt"
+    ).read_text()
+    assert "H0019" not in tickers
+    cfg = json.loads(Path("docs/research/experiments/EXP-FUTURE-H0019/config.json").read_text())
+    # the H0019 registration remains byte-stable regardless of this task
+    assert cfg["hypothesis"] == "H0019"
+    assert cfg["status"] == "accumulating_prospective_data"
 
 
 def test_h0019_registration_artifacts_unchanged() -> None:

@@ -45,6 +45,18 @@ class SettlementEvent:
     available_at: datetime  # settlement is never applied before this instant
 
 
+@dataclass(frozen=True)
+class MarketStatusEvent:
+    """A market-state transition. When a ticker has any status events, an order
+    submitted while its current state is not ``"open"`` is rejected
+    (``market_not_open``) -- orders may not be placed outside valid windows."""
+
+    ticker: str
+    state: str  # "open" | "closed" | "determined" | "finalized" | ...
+    at: datetime
+    source_ref: str = "synthetic"
+
+
 @dataclass
 class ReplayConfig:
     run_id: str
@@ -55,6 +67,9 @@ class ReplayConfig:
     order_intents: list[OrderIntent] = field(default_factory=list)
     settlements: list[SettlementEvent] = field(default_factory=list)
     marks: dict[str, int] = field(default_factory=dict)  # ticker -> yes mark cents
+    #: Optional market-state transitions. When present for a ticker, orders are
+    #: gated to its OPEN window.
+    market_status: list[MarketStatusEvent] = field(default_factory=list)
 
 
 def _fill_row(f: Any) -> dict[str, Any]:
@@ -96,22 +111,42 @@ def run_replay(config: ReplayConfig) -> Simulator:
     books = list(config.market_data.order_books)
     trades = list(config.market_data.trades)
 
-    # unified, deterministically-ordered event stream
+    # unified, deterministically-ordered event stream. kind_rank encodes the
+    # documented ordering (see module docstring / ADR 0017): market-status (1) <
+    # order intent (3) < settlement (4). Books/trades are looked up per intent
+    # (never future-dated), so they are not streamed.
     events: list[tuple[datetime, int, str, Any]] = []
+    for k, ms in enumerate(config.market_status):
+        events.append((ms.at, 1, f"{ms.at.isoformat()}|status|{ms.ticker}|{k}", ms))
     for oi in config.order_intents:
         events.append((oi.submitted_at, 3, f"{oi.submitted_at.isoformat()}|{oi.order_id}", oi))
     for j, se in enumerate(config.settlements):
         events.append((se.available_at, 4, f"{se.available_at.isoformat()}|{se.ticker}|{j}", se))
     events.sort(key=lambda e: (e[0], e[1], e[2]))
 
+    tickers_with_status = {ms.ticker for ms in config.market_status}
+    current_state: dict[str, str] = {}
+
     equity_curve: list[int] = [sim.initial_cash_cents]
     for at, _rank, _tie, item in events:
-        if isinstance(item, OrderIntent):
-            book = _latest_book_before(books, item.ticker, item.submitted_at)
-            subsequent = [
-                t for t in trades if t.ticker == item.ticker and t.executed_at > item.submitted_at
-            ]
-            sim.submit(item, book=book, subsequent_trades=subsequent, now=at)
+        if isinstance(item, MarketStatusEvent):
+            current_state[item.ticker] = item.state
+        elif isinstance(item, OrderIntent):
+            # Gate to the OPEN window only when we actually have status data for
+            # this ticker (otherwise the window is simply unknown, not closed).
+            if (
+                item.ticker in tickers_with_status
+                and current_state.get(item.ticker, "unknown") != "open"
+            ):
+                sim.reject(item, "market_not_open")
+            else:
+                book = _latest_book_before(books, item.ticker, item.submitted_at)
+                subsequent = [
+                    t
+                    for t in trades
+                    if t.ticker == item.ticker and t.executed_at > item.submitted_at
+                ]
+                sim.submit(item, book=book, subsequent_trades=subsequent, now=at)
         elif isinstance(item, SettlementEvent):
             sim.settle(item.ticker, item.result, at)
         equity_curve.append(sim.portfolio.total_equity_cents(config.marks))

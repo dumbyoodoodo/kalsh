@@ -12,7 +12,7 @@ import json
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -251,6 +251,129 @@ def paper_calculate_fee(
             "note: no market override supplied -- assuming the GENERAL schedule; "
             "pass --ticker for an INX*/NASDAQ100* special schedule."
         )
+
+
+@asynccontextmanager
+async def _open_readonly_session(settings: Settings):  # type: ignore[no-untyped-def]
+    """A PostgreSQL session forced read-only at the connection level, so the
+    historical adapter cannot write to the production archive even by mistake."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        connect_args={"options": "-c default_transaction_read_only=on"},
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
+@paper_app.command("export-replay-data")
+def paper_export_replay_data(
+    start: str = typer.Option(..., help="Start timestamp (ISO 8601, inclusive)."),
+    end: str = typer.Option(..., help="End timestamp (ISO 8601, inclusive)."),
+    tickers: str = typer.Option(..., help="Path to a newline-delimited ticker file (required)."),
+    mode: str = typer.Option(
+        "collector-available", help="collector-available | exchange-time (Phase 4)."
+    ),
+    output: str = typer.Option(..., help="Immutable export directory (must not exist)."),
+    max_book_age_seconds: float = typer.Option(300.0),
+    include_settlement: bool = typer.Option(True),
+    allow_null_provenance: str = typer.Option(
+        "", help="Comma-separated data types allowed with NULL/unknown env (default none)."
+    ),
+) -> None:
+    """Export a bounded historical production interval into an immutable replay
+    dataset. HISTORICAL REPLAY -- read-only, no exchange orders."""
+    import asyncio
+
+    from kalshi_weather.execution.history import (
+        HistoryEnvironmentPolicy,
+        HistoryQuery,
+        TimestampMode,
+        load_historical_replay_data,
+    )
+    from kalshi_weather.execution.history_replay import HISTORICAL_BANNER, export_replay_data
+    from kalshi_weather.execution.replay import _git_commit
+
+    typer.echo(HISTORICAL_BANNER)
+    ticker_list = tuple(t.strip() for t in Path(tickers).read_text().splitlines() if t.strip())
+    if not ticker_list:
+        raise typer.BadParameter("ticker file is empty; explicit market selection is required")
+    allow_null = frozenset(x.strip() for x in allow_null_provenance.split(",") if x.strip())
+    settings = get_settings()
+
+    async def _run() -> dict[str, object]:
+        from sqlalchemy import text
+
+        async with _open_readonly_session(settings) as session:
+            revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+            query = HistoryQuery(
+                start=datetime.fromisoformat(start),
+                end=datetime.fromisoformat(end),
+                tickers=ticker_list,
+                mode=TimestampMode(mode),
+                env_policy=HistoryEnvironmentPolicy(allow_null_for=allow_null),
+                max_book_age_seconds=max_book_age_seconds,
+                include_settlement=include_settlement,
+                source_db_revision=revision,
+            )
+            data = await load_historical_replay_data(session, query)
+        return export_replay_data(
+            query, data, Path(output), source_db_revision=query.source_db_revision
+        )
+
+    manifest = asyncio.run(_run())
+    counts = manifest["counts"]
+    typer.echo(
+        f"export {manifest['export_id']} (git {str(manifest['git_commit'])[:10]}) -> {output}"
+    )
+    typer.echo(f"counts: {json.dumps(counts)}")
+
+
+@paper_app.command("simulate-history")
+def paper_simulate_history(
+    data: str = typer.Option(..., help="An export directory produced by export-replay-data."),
+    orders: str = typer.Option(..., help="JSON file of explicit external/synthetic order intents."),
+    config: str = typer.Option(..., help="JSON execution config (policy/risk/initial_cash)."),
+    output: str = typer.Option(..., help="Immutable run directory (must not exist)."),
+    run_id: str = typer.Option("history-replay", help="Run identifier."),
+) -> None:
+    """Replay explicit order intents against an exported historical interval.
+    HISTORICAL REPLAY -- offline, no exchange orders, no strategy signal."""
+    from kalshi_weather.execution.history_replay import (
+        HISTORICAL_BANNER,
+        build_history_replay_config,
+        load_exec_config,
+        load_exported_data,
+        load_order_intents,
+        run_history_replay,
+        write_history_artifacts,
+    )
+
+    typer.echo(HISTORICAL_BANNER)
+    loaded = load_exported_data(Path(data))
+    intents = load_order_intents(Path(orders))
+    cash, policy, risk, marks = load_exec_config(Path(config))
+    cfg = build_history_replay_config(
+        run_id=run_id,
+        initial_cash_cents=cash,
+        policy=policy,
+        risk=risk,
+        loaded=loaded,
+        order_intents=intents,
+        marks=marks,
+    )
+    sim = run_history_replay(cfg)
+    write_history_artifacts(cfg, sim, loaded, Path(output))
+    typer.echo(
+        f"run {run_id}: orders={len(sim.orders)} fills={len(sim.fills)} "
+        f"rejections={len(sim.rejections)} -> {output}"
+    )
 
 
 @experiment_app.command("h0018")

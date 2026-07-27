@@ -1,0 +1,3 @@
+[
+  {"order_id": "h-buy-1", "strategy_id": "smoke-synthetic", "ticker": "KXTEMPLAXH-26JUL2617-T76.99", "side": "yes", "action": "buy", "order_type": "marketable_limit", "limit_price_cents": 90, "quantity": 2, "submitted_at": "2026-07-26T20:40:00+00:00", "time_in_force": "ioc"}
+]

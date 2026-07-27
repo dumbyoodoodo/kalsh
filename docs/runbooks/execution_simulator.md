@@ -74,6 +74,37 @@ generic prediction interface are follow-ups.
 `paper simulate --config <json> --out-dir <new-dir>` (refuses to overwrite);
 `paper inspect|validate|replay-ledger <dir>`. Same inputs -> byte-identical run.
 
+## Historical production replay (ADR 0017)
+Read-only adapter from archived PostgreSQL market data into replay events.
+- **Source tables**: `orderbook_snapshots` (full-depth snapshots, deduped;
+  `captured_at` = collector clock), `trades` (`executed_at`, `count`,
+  `taker_side`), `market_snapshots` (status/result/settlement_ts/observed_at).
+  `environment` provenance is production/demo/unknown/NULL.
+- **Environment filtering**: production only by default; demo rejected; NULL
+  rejected unless explicitly allowed per data type. Missing != zero.
+- **Book normalization**: `yes_bids` = yes_levels; `yes_asks` = {(100-p, q) for
+  no_levels}. No fabricated depth.
+- **Timestamp modes**: `exchange-time` (settlement at determination time) vs
+  `collector-available` (settlement visible at ingestion `observed_at`; trades
+  without ingestion provenance excluded). Books coincide (captured_at is the
+  only book time). Mode recorded in the manifest.
+- **Trade direction**: `taker_side` kept when reliable, else unknown -- never
+  guessed. **Passive fills**: subsequent qualifying volume only, never a price
+  touch; lower-confidence when trades are sparse. **Missing data**: surfaced in
+  the quality report, never hidden; configurable minimum coverage.
+- **Deterministic ordering**: single engine; market-status < intent < settlement;
+  latest book <= submission, strictly-subsequent trades only.
+- **Read-only DB**: connection is `default_transaction_read_only=on`; bounded
+  time+ticker filters required; the adapter never writes orders/fills back.
+- **Reproduce**: `paper export-replay-data --start --end --tickers <file>
+  --mode <mode> --output <dir>` (immutable; content-hashed) then
+  `paper simulate-history --data <export> --orders <file> --config <exec>
+  --output <dir>`. Same inputs -> identical hashes.
+- **Execution-engine validation != strategy backtesting**: a historical replay
+  checks how orders would have executed; it is not an edge claim, and (like the
+  rest of the simulator) submits nothing.
+
 ## H0019 isolation
 No import of `experiments`, no read of H0019/H0018 artifacts, no model-perf
-calc. Pinned by test.
+calc -- including the historical adapter (market-data tables only). Pinned by
+tests; the smoke market is a production market unrelated to H0019 selection.

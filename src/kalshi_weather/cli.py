@@ -1016,13 +1016,17 @@ def experiment_readiness(
         None, help="Append-only readiness-log JSONL (defaults to the registration dir)."
     ),
 ) -> None:
-    """READ-ONLY readiness monitor for the H0019 future replication. Reports
-    whether enough genuinely point-in-time data has accumulated to run the
-    held-out test. It NEVER trains a model, generates test predictions, or
-    computes a test Brier score -- coverage counts only. Each invocation is
-    appended to a readiness log (no outcome-based analysis is recorded)."""
+    """READ-ONLY readiness monitor for a registered future experiment (h0019
+    or h0020). Reports whether enough genuinely point-in-time data has
+    accumulated to run the held-out test. It NEVER trains a model, generates
+    test predictions, or computes a test Brier score -- coverage counts only.
+    Each invocation is appended to a readiness log (no outcome-based analysis
+    is recorded)."""
+    if hypothesis.lower() == "h0020":
+        _experiment_readiness_h0020(log_path)
+        return
     if hypothesis.lower() != "h0019":
-        raise typer.BadParameter("only 'h0019' is registered")
+        raise typer.BadParameter("only 'h0019' and 'h0020' are registered")
     import json as _json
 
     from kalshi_weather.dataset.builder import load_source_frames as _load_sources
@@ -1057,6 +1061,63 @@ def experiment_readiness(
             Path(log_path)
             if log_path
             else Path("docs/research/experiments/EXP-FUTURE-H0019/readiness_log.jsonl")
+        )
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        with lp.open("a") as f:
+            f.write(_json.dumps({"as_of": str(now), "state": report.state}) + "\n")
+
+    asyncio.run(run())
+
+
+def _experiment_readiness_h0020(log_path: str | None) -> None:
+    """H0020 counts-only readiness (see experiments/h0020_readiness.py).
+    Counts, dates, exclusions, provenance, and integrity ONLY -- no model,
+    no probabilities, no Brier/loss, no benchmark comparison."""
+    import json as _json
+
+    from kalshi_weather.experiments import h0020_readiness as h20r
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        now = utc_now().date()
+        integrity_ok, integrity_detail = h20r.verify_frozen_integrity(Path.cwd())
+        async with _open_session(settings) as session:
+            labels, strikes, candles, series = await h20r.load_inputs(session)
+        report = h20r.compute_report(
+            labels,
+            strikes,
+            candles,
+            series,
+            now=now,
+            integrity_ok=integrity_ok,
+            integrity_detail=integrity_detail,
+        )
+        typer.echo(f"H0020 readiness as of {now}: {report.state}")
+        typer.echo(
+            f"  effective test end: {report.effective_test_end} "
+            f"({report.detail.get('window_kind', 'n/a')}) "
+            f"days_until_test_end={report.detail.get('days_until_test_end')}"
+        )
+        for split in ("train", "validation", "test"):
+            c = report.split_counts.get(split, {})
+            typer.echo(
+                f"  {split}: event_groups={c.get('event_groups', 0)} rows={c.get('rows', 0)} "
+                f"pos={c.get('pos_labels', 0)} neg={c.get('neg_labels', 0)} "
+                f"stations={c.get('stations', 0)} "
+                f"concentration={round(c.get('station_concentration', 0.0), 3)} "
+                f"zero_rev={c.get('zero_revision_rows', 0)}"
+            )
+        for split, reasons in sorted(report.exclusions_by_split.items()):
+            typer.echo(f"  exclusions[{split}]: {dict(sorted(reasons.items()))}")
+        for gate, ok in report.gates.items():
+            typer.echo(f"  [{'PASS' if ok else 'FAIL'}] {gate}")
+        typer.echo(f"  integrity: {report.integrity}")
+        # append-only readiness log -- state only, never any test analysis
+        lp = (
+            Path(log_path)
+            if log_path
+            else Path("docs/research/experiments/EXP-FUTURE-H0020/readiness_log.jsonl")
         )
         lp.parent.mkdir(parents=True, exist_ok=True)
         with lp.open("a") as f:

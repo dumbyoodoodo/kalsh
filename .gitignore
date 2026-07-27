@@ -26,3 +26,5 @@ data/datasets/
 # monitor's normal appends don't dirty the tree. Narrow, exact path only --
 # never ignore the experiment directory itself.
 docs/research/experiments/EXP-FUTURE-H0019/readiness_log.jsonl
+# Same rationale, same narrow exact-path rule, for the H0020 monitor's log.
+docs/research/experiments/EXP-FUTURE-H0020/readiness_log.jsonl

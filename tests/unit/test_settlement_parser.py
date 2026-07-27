@@ -422,3 +422,95 @@ def test_temperature_rules_mentioning_rain_incidentally_still_resolve() -> None:
     )
     assert spec.status is SettlementStatus.RESOLVED
     assert spec.variable == "tmax_f"
+
+
+# --- SEA/PHX/MIA pilot fixtures (ADR 0023): registry-only expansion ----------
+# Deterministic real-structure fixtures: same CLI URL grammar Kalshi uses in
+# production, with each pilot city's exact (issuedby, WFO) pair. The parser
+# grammar is UNCHANGED -- these resolve purely because the registry now maps
+# the CLI location code.
+
+_PILOT = {
+    "SEA": ("SEW", "Seattle"),
+    "PHX": ("PSR", "Phoenix"),
+    "MIA": ("MFL", "Miami"),
+}
+
+
+def _pilot_series(code: str, wfo: str, *, title: str | None = None) -> SeriesInfo:
+    overrides: dict[str, Any] = {
+        "settlement_sources": [
+            {
+                "url": (
+                    "https://forecast.weather.gov/product.php"
+                    f"?site={wfo}&product=CLI&issuedby={code}"
+                )
+            }
+        ]
+    }
+    if title is not None:
+        overrides["title"] = title
+    return _series("KXHIGHNY", **overrides)
+
+
+def test_pilot_cities_daily_high_resolves() -> None:
+    for code, (wfo, city) in _PILOT.items():
+        spec = parse_settlement(
+            _pilot_series(code, wfo),
+            _market(
+                "KXHIGHNY-26JUL21-T79",
+                rules_primary=(
+                    "If the highest temperature recorded on July 21, 2026 is "
+                    "above 79F, then the market resolves to Yes."
+                ),
+            ),
+        )
+        assert spec.status is SettlementStatus.RESOLVED, (code, spec.notes)
+        assert spec.station_id == code
+        assert spec.wfo_site == wfo
+        assert spec.city == city
+        assert spec.variable == "tmax_f"
+        assert spec.target_date == date(2026, 7, 21)
+
+
+def test_pilot_cities_daily_low_resolves() -> None:
+    for code, (wfo, city) in _PILOT.items():
+        spec = parse_settlement(
+            _pilot_series(code, wfo, title=f"Lowest temperature in {city}"),
+            _market(
+                "KXHIGHNY-26JUL21-T79",
+                title=None,
+                rules_primary=(
+                    "If the lowest temperature recorded on July 21, 2026 is "
+                    "below 60F, then the market resolves to Yes."
+                ),
+            ),
+        )
+        assert spec.status is SettlementStatus.RESOLVED, (code, spec.notes)
+        assert spec.station_id == code
+        assert spec.variable == "tmin_f"
+
+
+def test_pilot_city_wrong_wfo_fails_closed() -> None:
+    # SEA cited with the wrong WFO must be AMBIGUOUS, never silently mapped
+    spec = parse_settlement(
+        _pilot_series("SEA", "PSR"),  # Phoenix's WFO on Seattle's code
+        _market("KXHIGHNY-26JUL21-T79"),
+    )
+    assert spec.status is SettlementStatus.AMBIGUOUS
+    assert any("WFO" in n for n in spec.notes)
+
+
+def test_pilot_city_precipitation_stays_unsupported() -> None:
+    spec = parse_settlement(
+        _pilot_series("MIA", "MFL"),
+        _market(
+            "KXHIGHNY-26JUL21-T79",
+            rules_primary=(
+                "If the total precipitation at Miami International in Aug 2026 "
+                "is strictly greater than 8 inches, then the market resolves to Yes."
+            ),
+        ),
+    )
+    assert spec.status is SettlementStatus.UNSUPPORTED
+    assert any("non-temperature quantity" in n for n in spec.notes)

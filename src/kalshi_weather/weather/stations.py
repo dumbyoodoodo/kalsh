@@ -81,6 +81,43 @@ STATIONS: dict[str, Station] = {
         city="Los Angeles",
         wfo_site="LOX",
     ),
+    # --- 2026-07-27 three-city pilot (ADR 0023): SEA/PHX/MIA. Each
+    # (source_location_code, wfo_site) pair is verbatim from Kalshi's own
+    # settlement-source URLs in collected production data; coordinates and
+    # timezones from NWS station metadata (api.weather.gov/stations/K<code>),
+    # cross-verified via /points (same WFO, same tz) and IEM CLI availability
+    # (recent + 2023 history) on 2026-07-27. PHX deliberately uses
+    # America/Phoenix (NO daylight saving) -- never America/Denver.
+    "SEA": Station(
+        station_id="SEA",
+        source_location_code="SEA",
+        name="Seattle-Tacoma International, WA",
+        latitude=Decimal("47.4447"),
+        longitude=Decimal("-122.3136"),
+        timezone="America/Los_Angeles",
+        city="Seattle",
+        wfo_site="SEW",
+    ),
+    "PHX": Station(
+        station_id="PHX",
+        source_location_code="PHX",
+        name="Phoenix Sky Harbor International, AZ",
+        latitude=Decimal("33.4278"),
+        longitude=Decimal("-112.0035"),
+        timezone="America/Phoenix",
+        city="Phoenix",
+        wfo_site="PSR",
+    ),
+    "MIA": Station(
+        station_id="MIA",
+        source_location_code="MIA",
+        name="Miami International, FL",
+        latitude=Decimal("25.7906"),
+        longitude=Decimal("-80.3164"),
+        timezone="America/New_York",
+        city="Miami",
+        wfo_site="MFL",
+    ),
 }
 
 

@@ -4,6 +4,13 @@ What the observatory's `settlement_resolution_failures` check counts, which
 market families the settlement parser supports, and how to extend support
 safely. Baseline audited 2026-07-27 (9,053 markets in store).
 
+**Update 2026-07-27 (ADR 0023):** SEA, PHX, and MIA added to the station
+registry as a three-city pilot — their CLI daily-temperature markets
+(~252, ~190 settled) now resolve. The remaining audited cities (DFW, ATL,
+BOS, DCA, HOU, AUS, PHL, LAS, MSY, MSP, SFO, and discovered OKC/SAT) are
+**deferred pending the one-week pilot review and separate explicit human
+approval** — they remain intentionally unsupported until then.
+
 ## What the numbers mean
 
 The check parses **every market with a stored snapshot** (the entire
@@ -24,9 +31,9 @@ reported for visibility and is **not** presented as failure.
 
 | Family / pattern | Count | Status | Why |
 |---|---|---|---|
-| `KXHIGH*`/`KXLOWT*` daily temp, registry cities (NYC, MDW/CHI, DEN, LAX) | 1,140 | **resolved** | NWS CLI product URL + registry station + temperature variable + cross-checked date |
+| `KXHIGH*`/`KXLOWT*` daily temp, registry cities (NYC, MDW/CHI, DEN, LAX, **SEA, PHX, MIA** since ADR 0023) | ~1,392 | **resolved** | NWS CLI product URL + registry station + temperature variable + cross-checked date |
 | `KXTEMP*H` hourly temperature (5 cities) | ~5,843 | unsupported | settlement source is weather.com hourly, not an NWS CLI product |
-| `KXHIGHT*`/`KXLOWT*` daily temp, **non-registry cities** (SEA, DAL, PHX, ATL, BOS, MIA, SFO, HOU, AUS, PHL, LAS, DCA, MSY, MSP…) | ~1,470 | unsupported | valid CLI source, but the city is not in `weather/stations.py` — see "Adding a city" below |
+| `KXHIGHT*`/`KXLOWT*` daily temp, **non-registry cities** (DFW, ATL, BOS, DCA, HOU, AUS, PHL, LAS, MSY, MSP, SFO, OKC, SAT — deferred pending pilot review) | ~1,220 | unsupported | valid CLI source, but the city is not in `weather/stations.py` — see "Adding a city" below |
 | `KXRAIN*M` monthly precipitation (4 cities) | 69 | unsupported | CLI-cited but the settlement quantity is precipitation, not temperature (fixed word table) |
 | `KXRAIN`, snow, `KXFIRSTHURRICANE`, `KXTORNADO`, `KXHURRICANENAMES`, climate/eruption composites | ~530 | unsupported | non-CLI settlement sources (bare weather.gov, weather.com, others) |
 | Genuinely unresolved/ambiguous | 0 | — | after the 2026-07-27 reclassification |

@@ -28,6 +28,10 @@ EXPECTED_STATIONS = {
     "CHI": ("MDW", "LOT", "America/Chicago", "Chicago"),
     "DEN": ("DEN", "BOU", "America/Denver", "Denver"),
     "LAX": ("LAX", "LOX", "America/Los_Angeles", "Los Angeles"),
+    # three-city pilot, ADR 0023 (verified live 2026-07-27)
+    "SEA": ("SEA", "SEW", "America/Los_Angeles", "Seattle"),
+    "PHX": ("PHX", "PSR", "America/Phoenix", "Phoenix"),
+    "MIA": ("MIA", "MFL", "America/New_York", "Miami"),
 }
 
 
@@ -50,7 +54,7 @@ def test_registry_mappings_match_kalshi_settlement_urls() -> None:
 def test_list_stations_is_deterministically_ordered() -> None:
     ids = [s.station_id for s in list_stations()]
     assert ids == sorted(ids)
-    assert ids == ["CHI", "DEN", "LAX", "NYC"]
+    assert ids == ["CHI", "DEN", "LAX", "MIA", "NYC", "PHX", "SEA"]
 
 
 def test_station_ids_and_location_codes_are_unique() -> None:

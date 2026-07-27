@@ -113,9 +113,19 @@ uv run kalshi-weather experiment readiness h0020
   manually; never shrink; never re-date.
 - Gates still failing after 2026-10-06 → `DEFERRED_INSUFFICIENT_DATA`,
   final: do not run, do not create a replacement window.
-- `READY_FOR_FINAL_TEST` → follow the same sequence as Section B, with
-  H0020's hashes (`5d70303816f5…` / `434286966ed2…` / spec `1a2f63f7ebe7…`,
-  ledger seq 4) and its registered single-shot runner.
+- `READY_FOR_FINAL_TEST` → H0020 final execution requires, **in order**:
+  - [ ] 1. `uv run kalshi-weather experiment readiness h0020` →
+        READY_FOR_FINAL_TEST (counts only)
+  - [ ] 2. `uv run kalshi-weather research leakage-audit` → PASS
+  - [ ] 3. `uv run kalshi-weather experiment preflight h0020-close-time
+        --stage full` → PASS (metadata stability only — implies nothing
+        about readiness or results)
+  - [ ] 4. frozen hashes (`5d70303816f5…` / `434286966ed2…` / spec
+        `1a2f63f7ebe7…`) + ledger chain verify
+  - [ ] 5. explicit human approval
+  - [ ] 6. only then the registered single-shot runner (Section B
+        sequence with H0020's artifacts). None of steps 1–5 may be used
+        to peek at performance early.
 - `INVALID` → STOP; a frozen hash, ledger, availability, or leakage check
   failed; investigate without touching frozen files.
 - A supported result authorizes **replication only** — no trading use.

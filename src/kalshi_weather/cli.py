@@ -1202,6 +1202,154 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
+#: H0020's frozen family/station scope as a snapshot-metadata regex (frozen
+#: prefixes KXHIGHT*/KXLOWT* at CHI/DEN/LAX/NYC; the legacy KXHIGHNY family
+#: is outside H0020's registered prefixes by design).
+_H0020_FAMILY_REGEX = "^KX(HIGHT|LOWT)(CHI|DEN|LAX|NY)"
+
+
+def _preflight_h0020_close_time(
+    *, stage: str, as_of: str, environment: str, as_json: bool, fail_on_review: bool
+) -> None:
+    """H0020 close-time stability preflight: reuses the generic guard over
+    the frozen stage windows. Metadata only; never touches outcomes,
+    revisions-as-signal, readiness state, or the ledger."""
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.experiments import h0020_readiness as h20r
+    from kalshi_weather.experiments.h0020 import HORIZON_HOURS as _H20_HORIZON
+    from kalshi_weather.research import close_time_guard as ctg
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    as_of_date = now.date()
+    ranges = h20r.stage_close_ranges(stage, as_of=as_of_date)
+    all_ranges = h20r.stage_close_ranges(stage)  # uncapped, for observability report
+    cap = as_of_date + timedelta(days=1)
+    not_yet = [(str(s), str(e)) for (s, e) in all_ranges if s >= cap]
+
+    async def run() -> None:
+        settings = get_settings()
+        snapshots: list[ctg.SnapshotLite] = []
+        if ranges:
+            engine = create_async_engine(settings.database_url)
+            try:
+                async with engine.connect() as conn:
+                    for r_start, r_end in ranges:
+                        rows = (
+                            await conn.execute(
+                                _text(
+                                    "select market_ticker, id, observed_at, close_time, "
+                                    "environment from market_snapshots "
+                                    "where market_ticker ~ :fam "
+                                    "and close_time >= :s and close_time < :e"
+                                ),
+                                {
+                                    "fam": _H0020_FAMILY_REGEX,
+                                    "s": datetime(r_start.year, r_start.month, r_start.day),
+                                    "e": datetime(r_end.year, r_end.month, r_end.day),
+                                },
+                            )
+                        ).all()
+                        snapshots.extend(
+                            ctg.SnapshotLite(
+                                ticker=r[0],
+                                snapshot_id=r[1],
+                                observed_at=r[2],
+                                close_time=r[3],
+                                environment=r[4],
+                            )
+                            for r in rows
+                        )
+            finally:
+                await engine.dispose()
+
+        # Pass 1 -- CONSERVATIVE universe: pre-production-cutover tickers
+        # (null/demo provenance eras) are BLOCKED here. Pass 2 -- FROZEN
+        # SCOPE: H0020's registered policy admits production provenance only,
+        # so those tickers are excluded from its dataset by the frozen rules;
+        # this pass gates the final run.
+        report = ctg.analyze_close_times(
+            snapshots,
+            name=f"h0020-close-time ({stage})",
+            as_of=now,
+            horizon_hours=float(_H20_HORIZON),
+            nulls_excluded_by_frozen_rules=True,  # H0020 requires close-derived decisions
+            allowed_environments=(environment,),
+        )
+        admissible = {s.ticker for s in snapshots if s.environment == environment}
+        scope_report = ctg.analyze_close_times(
+            [s for s in snapshots if s.ticker in admissible],
+            name=f"h0020-close-time ({stage}, frozen scope)",
+            as_of=now,
+            horizon_hours=float(_H20_HORIZON),
+            nulls_excluded_by_frozen_rules=True,
+            allowed_environments=(environment,),
+        )
+        payload = report.to_dict()
+        payload["frozen_scope"] = scope_report.to_dict()
+        payload["blocked_explanation"] = (
+            "blocked tickers have only pre-production-cutover snapshots "
+            "(null/demo provenance eras); H0020's frozen environment policy "
+            "excludes them from its dataset"
+        )
+        payload["disclaimer"] = _H0020_PREFLIGHT_DISCLAIMER
+        payload["stage"] = stage
+        payload["frozen_stage_windows"] = {
+            k: [str(a), str(b)] for k, (a, b) in h20r.PREFLIGHT_STAGES.items()
+        }
+        payload["excluded_gap"] = ["2026-08-12", "2026-08-25"]
+        payload["scanned_close_ranges"] = [[str(a), str(b)] for a, b in ranges]
+        payload["not_yet_observable_ranges"] = not_yet
+        payload["coverage"] = {
+            "tickers_observed": report.tickers_inspected + report.tickers_blocked,
+            "missing_expected_history": report.tickers_blocked,
+            "not_yet_observable": "future-stage ranges listed separately, never failures",
+        }
+        if as_json:
+            typer.echo(json.dumps(payload, indent=2, default=str))
+        else:
+            typer.echo(
+                f"preflight h0020-close-time [{stage}]: universe={report.status} "
+                f"frozen-scope={scope_report.status}"
+            )
+            typer.echo(f"  NOTE: {_H0020_PREFLIGHT_DISCLAIMER}")
+            typer.echo(
+                f"  scanned close ranges (as of {as_of_date}): "
+                f"{[[str(a), str(b)] for a, b in ranges] or 'none observable yet'}"
+            )
+            if not_yet:
+                typer.echo(f"  not yet observable (future stages): {not_yet}")
+            typer.echo(
+                f"  universe: inspected={report.tickers_inspected} "
+                f"stable={report.tickers_stable} revised={report.tickers_revised} "
+                f"null_close={report.tickers_null_close} "
+                f"pre-cutover-era={report.tickers_blocked} (excluded by the "
+                f"frozen environment policy)"
+            )
+            typer.echo(
+                f"  frozen scope: inspected={scope_report.tickers_inspected} "
+                f"stable={scope_report.tickers_stable} "
+                f"revised={scope_report.tickers_revised} "
+                f"null_close={scope_report.tickers_null_close}"
+            )
+            typer.echo(f"  max revision: {scope_report.max_revision_seconds}s")
+            for r in scope_report.revisions[:10]:
+                typer.echo(
+                    f"  REVISED {r.ticker}: {len(r.versions)} close_times, max shift "
+                    f"{r.max_shift_seconds}s ({r.direction}) -- HUMAN REVIEW REQUIRED"
+                )
+        # the FROZEN-SCOPE status gates H0020's final run
+        if scope_report.status == ctg.REVIEW_REQUIRED and fail_on_review:
+            raise typer.Exit(code=1)
+        if scope_report.status == ctg.BLOCKED_INSUFFICIENT_HISTORY:
+            raise typer.Exit(code=2)
+
+    asyncio.run(run())
+
+
 #: Four-station daily-temperature families in H0019's frozen scope (the
 #: resolved family names observed in production; metadata filter only).
 _H0019_FAMILY_REGEX = (
@@ -1209,11 +1357,24 @@ _H0019_FAMILY_REGEX = (
 )
 
 
+_H0020_PREFLIGHT_DISCLAIMER = (
+    "close-time metadata stability ONLY: a passing preflight does NOT mean "
+    "H0020 is ready, that sufficient groups exist, or anything about model "
+    "support or test results -- readiness and outcomes are separate gates"
+)
+
+
 @experiment_app.command("preflight")
 def experiment_preflight(
-    target: str = typer.Argument(..., help="Registered preflight (h0019-close-time)."),
-    start: str = typer.Option("", help="Override window start (ISO date)."),
-    end: str = typer.Option("", help="Override window end (ISO date)."),
+    target: str = typer.Argument(
+        ..., help="Registered preflight (h0019-close-time | h0020-close-time)."
+    ),
+    stage: str = typer.Option(
+        "full",
+        help="h0020 only: train|validation|initial-test|extension-1|extension-2|full.",
+    ),
+    start: str = typer.Option("", help="h0019 only: override window start (ISO date)."),
+    end: str = typer.Option("", help="h0019 only: override window end (ISO date)."),
     as_of: str = typer.Option("", help="Explicit as-of timestamp (ISO; default now)."),
     environment: str = typer.Option("production", help="Provenance environment filter."),
     as_json: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
@@ -1221,11 +1382,11 @@ def experiment_preflight(
         True, help="Exit nonzero when the guard requires human review."
     ),
 ) -> None:
-    """READ-ONLY experiment preflight checks. `h0019-close-time` verifies
-    close_time stability across the append-only snapshot history for H0019's
-    frozen window and scope -- market METADATA only: no outcomes, no
-    predictions, no scores, no dataset regeneration, no status change. Any
-    revision requires a separate human scientific decision."""
+    """READ-ONLY experiment preflight checks: close_time stability across the
+    append-only snapshot history for a frozen experiment's window and scope --
+    market METADATA only: no outcomes, no predictions, no scores, no dataset
+    regeneration, no readiness/ledger change. Any revision requires a separate
+    human scientific decision."""
     from datetime import datetime as _dt
 
     from sqlalchemy import text as _text
@@ -1234,8 +1395,17 @@ def experiment_preflight(
     from kalshi_weather.experiments import readiness as h19
     from kalshi_weather.research import close_time_guard as ctg
 
+    if target.lower() == "h0020-close-time":
+        _preflight_h0020_close_time(
+            stage=stage,
+            as_of=as_of,
+            environment=environment,
+            as_json=as_json,
+            fail_on_review=fail_on_review,
+        )
+        return
     if target.lower() != "h0019-close-time":
-        raise typer.BadParameter("only 'h0019-close-time' is registered")
+        raise typer.BadParameter("'h0019-close-time' and 'h0020-close-time' are registered")
 
     win_start = date.fromisoformat(start) if start else h19.TRAIN_START
     win_end = date.fromisoformat(end) if end else h19.TEST_END

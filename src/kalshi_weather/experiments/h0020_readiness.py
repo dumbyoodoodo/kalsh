@@ -532,3 +532,73 @@ async def load_inputs(
                 )
             )
     return labels, strikes, candle_evidence, dict(series)
+
+
+# --- close-time preflight stage scopes (metadata-only; ADR/lineage audit) -----
+# Every boundary is imported from the FROZEN spec module -- nothing re-declared.
+# A stage maps its target-date window to the close_time range used to select
+# snapshot METADATA for the generic close-time guard (close is typically the
+# morning after target_date; margin covers that offset). The excluded H0019
+# gap is not a stage and can never appear in any range.
+
+from kalshi_weather.experiments.h0020 import (  # noqa: E402
+    EXCLUDED_GAP_END,
+    EXCLUDED_GAP_START,
+    TEST_END_INITIAL,
+    TEST_START,
+    TRAIN_START,
+    VAL_END,
+    VAL_START,
+)
+from kalshi_weather.experiments.h0020 import TRAIN_END as _TRAIN_END  # noqa: E402
+
+CLOSE_MARGIN_DAYS = 2
+
+PREFLIGHT_STAGES: dict[str, tuple[date, date]] = {
+    "train": (TRAIN_START, _TRAIN_END),
+    "validation": (VAL_START, VAL_END),
+    "initial-test": (TEST_START, TEST_END_INITIAL),
+    "extension-1": (
+        TEST_END_INITIAL + timedelta(days=1),
+        registered_test_end(1),
+    ),
+    "extension-2": (
+        registered_test_end(1) + timedelta(days=1),
+        ABSOLUTE_TEST_END,
+    ),
+}
+
+
+class UnknownStageError(ValueError):
+    """A preflight stage outside the frozen vocabulary."""
+
+
+def stage_close_ranges(
+    stage: str, *, as_of: date | None = None
+) -> list[tuple[date, date]]:
+    """[(start, end_exclusive)] close_time ranges for a stage, or the union of
+    every stage for ``full``. The excluded H0019 test gap is structurally
+    absent (it is not a stage). ``as_of`` truncates ranges to what can exist
+    yet; a range entirely in the future returns empty (NOT_YET_OBSERVABLE,
+    never a provenance failure)."""
+    if stage == "full":
+        names = list(PREFLIGHT_STAGES)
+    elif stage in PREFLIGHT_STAGES:
+        names = [stage]
+    else:
+        raise UnknownStageError(
+            f"unknown stage {stage!r}; expected one of {[*PREFLIGHT_STAGES, 'full']}"
+        )
+    out: list[tuple[date, date]] = []
+    for name in names:
+        t_start, t_end = PREFLIGHT_STAGES[name]
+        c_start = t_start
+        c_end = t_end + timedelta(days=CLOSE_MARGIN_DAYS)  # exclusive
+        assert not (EXCLUDED_GAP_START <= t_start <= EXCLUDED_GAP_END), name
+        if as_of is not None:
+            cap = as_of + timedelta(days=1)
+            if c_start >= cap:
+                continue  # not yet observable -- reported, never failed
+            c_end = min(c_end, cap)
+        out.append((c_start, c_end))
+    return out

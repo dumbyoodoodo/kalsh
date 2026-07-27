@@ -342,3 +342,83 @@ def test_non_daily_frequency_downgrades_confidence() -> None:
     )
     assert spec.status is SettlementStatus.RESOLVED
     assert spec.confidence is Confidence.MEDIUM
+
+
+# --- non-temperature variable classification (fixed word table) --------------
+
+
+def test_precipitation_rules_with_cli_source_is_unsupported_not_unresolved() -> None:
+    """A monthly rain market citing a valid CLI URL (observed live:
+    KXRAINNYCM) is out of SCOPE (non-temperature quantity), not missing
+    input -- classified UNSUPPORTED with an explicit reason."""
+    m = _market(
+        "KXHIGHNY-26JUL21-T79",
+        event_ticker="KXRAINNYCM-26AUG",
+        rules_primary=(
+            "If the total precipitation at Central Park, New York City in "
+            "Aug 2026 is strictly greater than 4 inches, then the market "
+            "resolves to Yes."
+        ),
+    )
+    spec = parse_settlement(_series("KXHIGHNY", title="Rain in NYC in Aug 2026?"), m)
+    assert spec.status is SettlementStatus.UNSUPPORTED
+    assert any("non-temperature quantity" in n for n in spec.notes)
+    assert spec.market_ticker == m.ticker  # exact source ticker preserved
+
+
+def test_snowfall_rules_with_cli_source_is_unsupported() -> None:
+    spec = parse_settlement(
+        _series("KXHIGHNY"),
+        _market(
+            "KXHIGHNY-26JUL21-T79",
+            rules_primary="If total snowfall at Central Park exceeds 2 inches, Yes.",
+        ),
+    )
+    assert spec.status is SettlementStatus.UNSUPPORTED
+    assert any("non-temperature quantity" in n for n in spec.notes)
+
+
+def test_rules_with_no_recognizable_quantity_stay_unresolved() -> None:
+    """The genuine-problem signal is preserved: garbled rules naming NO
+    quantity at all (temperature OR precipitation) remain UNRESOLVED."""
+    spec = parse_settlement(
+        _series("KXHIGHNY"),
+        _market(
+            "KXHIGHNY-26JUL21-T79",
+            rules_primary="If the recorded value satisfies the condition, Yes.",
+        ),
+    )
+    assert spec.status is SettlementStatus.UNRESOLVED
+    assert any("names neither" in n for n in spec.notes)
+
+
+def test_both_temperatures_still_ambiguous_not_unsupported() -> None:
+    spec = parse_settlement(
+        _series("KXHIGHNY"),
+        _market(
+            "KXHIGHNY-26JUL21-T79",
+            rules_primary=(
+                "If the highest temperature exceeds the lowest temperature "
+                "recorded on July 21, 2026, Yes."
+            ),
+        ),
+    )
+    assert spec.status is SettlementStatus.AMBIGUOUS
+
+
+def test_temperature_rules_mentioning_rain_incidentally_still_resolve() -> None:
+    """Backward compatibility: a valid temperature market whose prose happens
+    to mention rain resolves exactly as before (the non-temperature table is
+    consulted ONLY when no temperature variable was found)."""
+    spec = parse_settlement(
+        _series("KXHIGHNY"),
+        _market(
+            "KXHIGHNY-26JUL21-T79",
+            rules_primary=(
+                "If the highest temperature at Central Park on July 21, 2026 "
+                "exceeds 79F (rain or shine), then the market resolves to Yes."
+            ),
+        ),
+    )
+    assert spec.status is SettlementStatus.RESOLVED
+    assert spec.variable == "tmax_f"

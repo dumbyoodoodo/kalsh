@@ -64,6 +64,16 @@ _TICKER_DATE_RE = re.compile(r"^(\d{2})([A-Z]{3})(\d{2})$")
 
 _HIGH_RE = re.compile(r"\b(highest|maximum|max(?:imum)?)\s+temperature\b", re.IGNORECASE)
 _LOW_RE = re.compile(r"\b(lowest|minimum|min(?:imum)?)\s+temperature\b", re.IGNORECASE)
+#: Fixed word table of NON-temperature settlement quantities this parser
+#: recognizes but deliberately does not support (observed live: monthly
+#: precipitation markets citing a CLI URL, e.g. "total precipitation at
+#: Central Park ... in Aug 2026"). Rules naming one of these are classified
+#: UNSUPPORTED (out of scope), not UNRESOLVED (missing input) -- a fixed
+#: table, never fuzzy matching. Rules naming NO recognizable quantity at all
+#: remain UNRESOLVED, preserving the genuine-problem signal.
+_NON_TEMPERATURE_RE = re.compile(
+    r"\b(precipitation|rainfall|rain|snowfall|snow)\b", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,13 +257,19 @@ def parse_settlement(series: SeriesInfo, market: MarketInfo) -> SettlementSpec:
 
     variable, var_note = _parse_variable(market.rules_primary)
     if variable is None:
+        if var_note and "both" in var_note:
+            notes.append(var_note)
+            return spec(SettlementStatus.AMBIGUOUS, Confidence.NONE, **common)
+        if _NON_TEMPERATURE_RE.search(market.rules_primary):
+            # deterministic out-of-scope quantity (precipitation family):
+            # recognized and intentionally unsupported, not a missing input
+            notes.append(
+                "settlement variable is a non-temperature quantity (precipitation/"
+                "snow); the CLI daily-temperature parser does not support it"
+            )
+            return spec(SettlementStatus.UNSUPPORTED, Confidence.NONE, **common)
         notes.append(var_note or "variable not identifiable")
-        status = (
-            SettlementStatus.AMBIGUOUS
-            if var_note and "both" in var_note
-            else SettlementStatus.UNRESOLVED
-        )
-        return spec(status, Confidence.NONE, **common)
+        return spec(SettlementStatus.UNRESOLVED, Confidence.NONE, **common)
 
     rules_date, date_note = _parse_rules_date(market.rules_primary)
     ticker_date = _parse_ticker_date(market.event_ticker)

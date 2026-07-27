@@ -242,20 +242,32 @@ async def run_quality_checks(session: AsyncSession) -> QualityReport:
     )
 
     # 7. Settlement resolution failures: parse every market currently in the
-    #    store and count non-resolved outcomes (the live backlog, not just
-    #    what happens to be persisted in settlement_specs).
+    #    store (the live backlog, not just what happens to be persisted in
+    #    settlement_specs). Severity is driven by GENUINE problems only:
+    #    UNRESOLVED (missing input) and AMBIGUOUS (conflicting inputs).
+    #    UNSUPPORTED families (non-CLI settlement source, city not in the
+    #    station registry, non-temperature variable) are intentional scope
+    #    decisions -- reported for visibility, never presented as failures
+    #    (docs/runbooks/settlement_coverage.md).
     specs = await ParserSettlementResolver().resolve_specs(session)
-    unresolved = [s for s in specs if s.status is not SettlementStatus.RESOLVED]
+    genuine = [
+        s
+        for s in specs
+        if s.status in (SettlementStatus.UNRESOLVED, SettlementStatus.AMBIGUOUS)
+    ]
+    unsupported = [s for s in specs if s.status is SettlementStatus.UNSUPPORTED]
     findings.append(
         QualityFinding(
             check="settlement_resolution_failures",
-            severity="warning" if unresolved else "info",
-            count=len(unresolved),
+            severity="warning" if genuine else "info",
+            count=len(genuine),
             message=(
-                f"{len(unresolved)} of {len(specs)} markets do not resolve "
-                "(see `settlement report` for reasons)"
+                f"{len(genuine)} markets unresolved/ambiguous; {len(unsupported)} "
+                "intentionally unsupported (non-CLI source, non-registry city, or "
+                f"non-temperature variable) of {len(specs)} total "
+                "(see `settlement report` and docs/runbooks/settlement_coverage.md)"
             ),
-            samples=[s.market_ticker for s in unresolved[:5]],
+            samples=[s.market_ticker for s in genuine[:5]],
         )
     )
 

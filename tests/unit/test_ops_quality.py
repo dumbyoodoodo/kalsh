@@ -166,6 +166,54 @@ async def test_unresolvable_market_appears_in_resolution_failures(
     )
     report = await run_quality_checks(session)
     finding = _finding(report, "settlement_resolution_failures")
+    # an intentionally UNSUPPORTED market (non-CLI source) is reported for
+    # visibility but is NOT a failure: count covers genuine problems only
+    assert finding.count == 0
+    assert finding.severity == "info"
+    assert "1 intentionally unsupported" in finding.message
+    assert finding.samples == []
+
+
+async def test_genuinely_unresolved_market_warns(session: AsyncSession) -> None:
+    # a real CLI source + registry station, but rules text with NO
+    # recognizable settlement quantity at all -> genuine UNRESOLVED -> warning
+    await save_series(
+        session,
+        series_ticker="KXHIGHNY",
+        category="Climate and Weather",
+        title="Highest temperature in NYC",
+        frequency="daily",
+        settlement_source=json.dumps(
+            [
+                {
+                    "url": (
+                        "https://forecast.weather.gov/product.php"
+                        "?site=OKX&product=CLI&issuedby=NYC"
+                    )
+                }
+            ]
+        ),
+    )
+    await save_market_snapshot(
+        session,
+        market_ticker="KXHIGHNY-26AUG01-B90",
+        event_ticker="KXHIGHNY-26AUG01",
+        market_type="binary",
+        title="t",
+        subtitle=None,
+        status="open",
+        yes_bid_cents=None,
+        yes_ask_cents=None,
+        last_price_cents=None,
+        volume=None,
+        open_interest=None,
+        close_time=datetime(2026, 8, 2, tzinfo=UTC),
+        rules_primary="If the thing happens, the market resolves to Yes.",
+        rules_secondary=None,
+        raw_payload_id=None,
+    )
+    report = await run_quality_checks(session)
+    finding = _finding(report, "settlement_resolution_failures")
     assert finding.count == 1
     assert finding.severity == "warning"
-    assert "KXNYCSNOWM-26AUG-A" in finding.samples
+    assert "KXHIGHNY-26AUG01-B90" in finding.samples

@@ -25,11 +25,31 @@ transitions raise.
 - Marketable fills consume only visible depth at/through the limit (partial when
   short). Passive fills need realized subsequent volume beyond a queue-ahead
   assumption; queue position cannot be perfectly reconstructed from public data.
-- Fee model is a versioned, ZERO-by-default placeholder, NOT verified against
-  Kalshi's live schedule.
 - Risk rejects (with a reason) before acceptance: order qty, position/market,
   gross exposure, total/per-event possible loss, open orders, markets with
   exposure, cash, book age, spread, price bounds, duplicate id.
+
+## Fee models (versioned; see ADR 0016)
+Three models behind one interface (`config policy.fee_model.type`):
+- `zero` (default) — charges nothing.
+- `configurable` — labelled PLACEHOLDER (`FeeModel` alias); NOT a real schedule.
+- `kalshi_event_contract` — AUTHORITATIVE, grounded ONLY in official Kalshi docs:
+  - General trade fee `round up(0.07 x C x P x (1-P))`, S&P500/NASDAQ-100
+    (`INX*`/`NASDAQ100*`) `round up(0.035 x ...)` — CFTC-filed Kalshi Fee
+    Schedule (eff. 2022-09-12).
+  - Per-fill centicent trade fee + balance-precision rounding + **per-order
+    $0.01 rebate accumulator** — Kalshi Predictions API "Fee Rounding" docs.
+  - Fee intermediates in integer **centicents** ($0.0001); ledger in integer
+    cents. No floats.
+- **Limitations:** the current July-2026 consolidated PDF was unreachable here
+  (HTTP 429), so the 0.07 coefficient's July-2026 currency and current per-market
+  **maker** coefficients are unconfirmed. Maker fee is **off by default**;
+  supply an official coefficient to enable it. Simulated fees are an estimate;
+  the exchange reports realized fees after execution, and schedules change — a
+  run pins the fee-model version.
+- Inspect a single fill's fee offline:
+  `paper calculate-fee --price-cents 40 --quantity 10 --liquidity taker
+  --fee-model kalshi [--ticker INXD-26]`.
 
 ## Ledger invariants & reconciliation
 Portfolio = replay(ledger). Every balance change is an entry; each entry's cash

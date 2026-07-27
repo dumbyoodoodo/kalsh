@@ -9,56 +9,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from kalshi_weather.execution.models import Action, Liquidity, Side
+from kalshi_weather.execution.fees import (
+    ZERO_FEE_MODEL,
+    ConfigurableFeeModel,
+    FeeModelLike,
+    KalshiEventContractFeeModel,
+    ZeroFeeModel,
+)
+
+#: Backward-compatible alias: ``FeeModel`` historically named the configurable
+#: placeholder. Keep it pointing at ``ConfigurableFeeModel`` so existing configs,
+#: tests, and imports keep working. New code should name a concrete model.
+FeeModel = ConfigurableFeeModel
+
+__all__ = [
+    "ZERO_FEE_MODEL",
+    "ConfigurableFeeModel",
+    "ExecutionPolicy",
+    "FeeModel",
+    "FeeModelLike",
+    "FillMode",
+    "KalshiEventContractFeeModel",
+    "RiskConfig",
+    "ZeroFeeModel",
+]
 
 
 class FillMode(StrEnum):
     SYNTHETIC = "synthetic"  # Mode C: exact fixtures (default for tests)
     MARKETABLE = "marketable"  # Mode A: cross the visible book
     PASSIVE = "passive"  # Mode B: conservative resting-fill via later volume
-
-
-# --- fee model (versioned interface) ---------------------------------------
-
-
-@dataclass(frozen=True)
-class FeeModel:
-    """Configurable per-contract fee, in integer cents, rounded up.
-
-    NOTE: this formula is a CONFIGURABLE PLACEHOLDER, not a verified match to
-    Kalshi's live fee schedule (which was not fetched from an authoritative
-    source during this task). Default is ZERO so synthetic accounting is exact;
-    supply a real schedule (and bump ``version``) once verified. Kalshi's public
-    fee form is roughly ceil(rate * price * (1-price) * qty); ``rate_bps`` here
-    scales a simplified version of that, disabled by default."""
-
-    version: str = "zero-v1"
-    rate_bps: int = 0  # basis points on notional; 0 => zero fees
-    per_contract_min_cents: int = 0
-    charge_on_maker: bool = True
-
-    def fee_cents(
-        self,
-        *,
-        price_cents: int,
-        quantity: int,
-        side: Side,
-        action: Action,
-        liquidity: Liquidity,
-    ) -> int:
-        if self.rate_bps <= 0 and self.per_contract_min_cents <= 0:
-            return 0
-        if liquidity is Liquidity.MAKER and not self.charge_on_maker:
-            return 0
-        # simplified: fee ~ ceil(rate * p * (100 - p) / 10000 * qty), in cents,
-        # bounded below by a per-contract minimum. Deterministic integer math.
-        notional_risk = price_cents * (100 - price_cents)  # 0..2500
-        raw = self.rate_bps * notional_risk * quantity
-        fee = -(-raw // (10000 * 100))  # ceil division to cents
-        return max(fee, self.per_contract_min_cents * quantity)
-
-
-ZERO_FEE_MODEL = FeeModel(version="zero-v1", rate_bps=0)
 
 
 # --- execution policy -------------------------------------------------------
@@ -68,7 +48,7 @@ ZERO_FEE_MODEL = FeeModel(version="zero-v1", rate_bps=0)
 class ExecutionPolicy:
     version: str = "exec-policy-v1"
     fill_mode: FillMode = FillMode.SYNTHETIC
-    fee_model: FeeModel = field(default_factory=lambda: ZERO_FEE_MODEL)
+    fee_model: FeeModelLike = field(default_factory=lambda: ZERO_FEE_MODEL)
     #: Mode A/B slippage is implicit in consuming real book levels; no extra
     #: adverse adjustment is added (documented as conservative-neutral).
     slippage_extra_cents: int = 0
@@ -92,7 +72,7 @@ class ExecutionPolicy:
             "version": self.version,
             "fill_mode": self.fill_mode.value,
             "fee_model_version": self.fee_model.version,
-            "fee_rate_bps": self.fee_model.rate_bps,
+            "fee_model": self.fee_model.to_manifest(),
             "slippage_extra_cents": self.slippage_extra_cents,
             "queue_ahead_contracts": self.queue_ahead_contracts,
             "max_book_age_seconds": self.max_book_age_seconds,

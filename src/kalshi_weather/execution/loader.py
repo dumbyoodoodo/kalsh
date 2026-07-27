@@ -9,9 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from kalshi_weather.execution.fees import (
+    ConfigurableFeeModel,
+    FeeModelLike,
+    KalshiEventContractFeeModel,
+    ZeroFeeModel,
+)
 from kalshi_weather.execution.market import MarketData, OrderBook, Trade
 from kalshi_weather.execution.models import Action, OrderIntent, OrderType, Side, TimeInForce
-from kalshi_weather.execution.policy import ExecutionPolicy, FeeModel, FillMode, RiskConfig
+from kalshi_weather.execution.policy import ExecutionPolicy, FillMode, RiskConfig
 from kalshi_weather.execution.replay import ReplayConfig, SettlementEvent
 
 
@@ -19,16 +25,39 @@ def _dt(v: str) -> datetime:
     return datetime.fromisoformat(v)
 
 
-def load_run_config(path: Path) -> ReplayConfig:
-    raw: dict[str, Any] = json.loads(path.read_text())
-    pol_raw = raw.get("policy", {})
-    fee_raw = pol_raw.get("fee_model", {})
-    fee = FeeModel(
-        version=fee_raw.get("version", "zero-v1"),
+def _build_fee_model(fee_raw: dict[str, Any]) -> FeeModelLike:
+    """Select a fee model from config. ``type`` is explicit; when absent, fall
+    back to the legacy behaviour (configurable if a rate is set, else zero) so
+    pre-existing run configs load unchanged."""
+    kind = fee_raw.get("type")
+    if kind is None:
+        kind = (
+            "configurable"
+            if (fee_raw.get("rate_bps") or fee_raw.get("per_contract_min_cents"))
+            else "zero"
+        )
+    if kind == "zero":
+        return ZeroFeeModel(version=fee_raw.get("version", "zero-v1"))
+    if kind == "kalshi_event_contract":
+        return KalshiEventContractFeeModel(
+            version=fee_raw.get("version", "kalshi-event-v1"),
+            target_precision_centicents=int(fee_raw.get("target_precision_centicents", 100)),
+            charge_maker_fee=bool(fee_raw.get("charge_maker_fee", False)),
+            maker_coeff_num=int(fee_raw.get("maker_coeff_num", 0)),
+            maker_coeff_den=int(fee_raw.get("maker_coeff_den", 1)),
+        )
+    return ConfigurableFeeModel(
+        version=fee_raw.get("version", "configurable-v1"),
         rate_bps=int(fee_raw.get("rate_bps", 0)),
         per_contract_min_cents=int(fee_raw.get("per_contract_min_cents", 0)),
         charge_on_maker=bool(fee_raw.get("charge_on_maker", True)),
     )
+
+
+def load_run_config(path: Path) -> ReplayConfig:
+    raw: dict[str, Any] = json.loads(path.read_text())
+    pol_raw = raw.get("policy", {})
+    fee = _build_fee_model(pol_raw.get("fee_model", {}))
     policy = ExecutionPolicy(
         version=pol_raw.get("version", "exec-policy-v1"),
         fill_mode=FillMode(pol_raw.get("fill_mode", "synthetic")),

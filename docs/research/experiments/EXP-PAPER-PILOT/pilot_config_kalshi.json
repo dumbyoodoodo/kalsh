@@ -1,0 +1,35 @@
+{
+  "run_id": "paper-pilot-kalshi-fees-v1",
+  "initial_cash_cents": 100000,
+  "policy": {
+    "version": "exec-policy-v1",
+    "fill_mode": "marketable",
+    "fee_model": {"type": "kalshi_event_contract", "version": "kalshi-event-v1"},
+    "max_book_age_seconds": 300,
+    "max_spread_cents": 100
+  },
+  "risk": {
+    "version": "risk-v1",
+    "max_order_quantity": 100,
+    "max_position_per_market": 5000,
+    "min_available_cash_cents": 0
+  },
+  "market_data": {
+    "order_books": [
+      {"ticker": "MKT-A", "captured_at": "2026-06-01T09:00:00+00:00", "yes_asks": [[40, 10]], "yes_bids": [[38, 5]]},
+      {"ticker": "MKT-B", "captured_at": "2026-06-01T09:00:00+00:00", "yes_asks": [[50, 8]], "yes_bids": [[48, 5]]}
+    ],
+    "trades": []
+  },
+  "order_intents": [
+    {"order_id": "a-full", "strategy_id": "pilot", "ticker": "MKT-A", "side": "yes", "action": "buy", "order_type": "marketable_limit", "limit_price_cents": 40, "quantity": 10, "submitted_at": "2026-06-01T09:00:00+00:00", "time_in_force": "ioc"},
+    {"order_id": "b-partial", "strategy_id": "pilot", "ticker": "MKT-B", "side": "yes", "action": "buy", "order_type": "marketable_limit", "limit_price_cents": 50, "quantity": 20, "submitted_at": "2026-06-01T09:00:00+00:00", "time_in_force": "ioc"},
+    {"order_id": "c-reject-qty", "strategy_id": "pilot", "ticker": "MKT-A", "side": "yes", "action": "buy", "order_type": "marketable_limit", "limit_price_cents": 40, "quantity": 200, "submitted_at": "2026-06-01T09:01:00+00:00", "time_in_force": "ioc"},
+    {"order_id": "d-passive-expire", "strategy_id": "pilot", "ticker": "MKT-A", "side": "yes", "action": "buy", "order_type": "passive_limit", "limit_price_cents": 30, "quantity": 5, "submitted_at": "2026-06-01T09:02:00+00:00", "time_in_force": "gtc"}
+  ],
+  "settlements": [
+    {"ticker": "MKT-A", "result": "yes", "available_at": "2026-06-01T18:00:00+00:00"},
+    {"ticker": "MKT-B", "result": "no", "available_at": "2026-06-01T18:00:00+00:00"}
+  ],
+  "marks": {}
+}

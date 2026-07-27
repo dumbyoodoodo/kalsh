@@ -191,6 +191,68 @@ def paper_validate(run_dir: str = typer.Argument(...)) -> None:
         raise typer.Exit(code=1)
 
 
+@paper_app.command("calculate-fee")
+def paper_calculate_fee(
+    price_cents: int = typer.Option(..., help="Fill price in integer cents (1..99)."),
+    quantity: int = typer.Option(..., help="Number of contracts in the fill."),
+    liquidity: str = typer.Option("taker", help="taker | maker."),
+    fee_model: str = typer.Option("kalshi", help="kalshi | zero | configurable."),
+    ticker: str = typer.Option(
+        "EVENT-GENERIC",
+        help="Market ticker (selects general vs INX/NASDAQ100 special schedule).",
+    ),
+    target_precision_centicents: int = typer.Option(
+        100, help="Balance precision: 100 = non-direct ($0.01), 1 = direct ($0.0001)."
+    ),
+) -> None:
+    """Offline fee estimate for a single hypothetical fill. Shows every fee
+    component. SIMULATION ONLY -- connects to nothing, needs no credentials."""
+    from kalshi_weather.execution import SIMULATION_ONLY_BANNER
+    from kalshi_weather.execution.fees import (
+        ConfigurableFeeModel,
+        KalshiEventContractFeeModel,
+        ZeroFeeModel,
+    )
+    from kalshi_weather.execution.models import Action, Liquidity, Side
+
+    typer.echo(SIMULATION_ONLY_BANNER)
+    liq = Liquidity(liquidity)
+    if fee_model == "zero":
+        model: object = ZeroFeeModel()
+    elif fee_model == "configurable":
+        model = ConfigurableFeeModel(rate_bps=700, version="configurable-v1")
+    else:
+        model = KalshiEventContractFeeModel(target_precision_centicents=target_precision_centicents)
+    a = model.assess(  # type: ignore[attr-defined]
+        price_cents=price_cents,
+        quantity=quantity,
+        side=Side.YES,
+        action=Action.BUY,
+        liquidity=liq,
+        ticker=ticker,
+        accumulator_centicents=0,
+    )
+    bd = a.breakdown
+    lines = {
+        "fee_model_version": bd.fee_model_version,
+        "market_fee_schedule": bd.market_fee_schedule,
+        "price_cents": price_cents,
+        "quantity": quantity,
+        "liquidity": bd.liquidity,
+        "raw_trade_fee_centicents": bd.trade_fee_centicents,
+        "rounding_fee_centicents": bd.rounding_fee_centicents,
+        "rebate_centicents": bd.rebate_centicents,
+        "net_fee_centicents": bd.net_fee_centicents,
+        "net_fee_cents": bd.net_fee_cents,
+    }
+    typer.echo(json.dumps(lines, indent=2))
+    if bd.market_fee_schedule == "general" and ticker == "EVENT-GENERIC":
+        typer.echo(
+            "note: no market override supplied -- assuming the GENERAL schedule; "
+            "pass --ticker for an INX*/NASDAQ100* special schedule."
+        )
+
+
 @experiment_app.command("h0018")
 def experiment_h0018(
     out_dir: str = typer.Option(

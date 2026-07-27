@@ -156,10 +156,17 @@ class Fill:
     quantity: int
     price_cents: int
     filled_at: datetime
-    fee_cents: int
+    fee_cents: int  # net fee charged to cash (after any rounding rebate)
     liquidity: Liquidity
     source_ref: str  # snapshot/trade id or synthetic marker
     execution_policy_version: str
+    fee_model_version: str | None = None
+    #: Optional fee decomposition (populated by fee models that expose it, e.g.
+    #: the authoritative Kalshi model). All values in centicents ($0.0001).
+    fee_market_schedule: str | None = None
+    fee_trade_centicents: int | None = None
+    fee_rounding_centicents: int | None = None
+    fee_rebate_centicents: int | None = None
 
 
 @dataclass

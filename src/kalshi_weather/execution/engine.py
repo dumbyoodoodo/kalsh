@@ -37,6 +37,9 @@ class Simulator:
     _seen_ids: set[str] = field(default_factory=set)
     _fill_seq: int = 0
     _resting_reserved: dict[str, int] = field(default_factory=dict)  # order_id -> reserved cents
+    #: Per-order fee-rounding accumulator (centicents), threaded across an order's
+    #: fills so rounding rebates converge exactly (Kalshi Predictions API docs).
+    _fee_accumulators: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.ledger = Ledger(Portfolio(initial_cash_cents=self.initial_cash_cents))
@@ -151,13 +154,18 @@ class Simulator:
 
     def _book_fill(self, order: Order, sf: fillmod.SimFill, now: datetime) -> None:
         intent = order.intent
-        fee = self.policy.fee_model.fee_cents(
+        assessment = self.policy.fee_model.assess(
             price_cents=sf.price_cents,
             quantity=sf.quantity,
             side=intent.side,
             action=intent.action,
             liquidity=sf.liquidity,
+            ticker=intent.ticker,
+            accumulator_centicents=self._fee_accumulators.get(intent.order_id, 0),
         )
+        self._fee_accumulators[intent.order_id] = assessment.accumulator_centicents
+        fee = assessment.net_fee_cents
+        bd = assessment.breakdown
         # release any reservation covering this filled quantity (BUY resting)
         if intent.action is Action.BUY and intent.order_id in self._resting_reserved:
             rel = min(
@@ -204,6 +212,11 @@ class Simulator:
                 liquidity=sf.liquidity,
                 source_ref=sf.source_ref,
                 execution_policy_version=self.policy.version,
+                fee_model_version=self.policy.fee_model.version,
+                fee_market_schedule=bd.market_fee_schedule,
+                fee_trade_centicents=bd.trade_fee_centicents,
+                fee_rounding_centicents=bd.rounding_fee_centicents,
+                fee_rebate_centicents=bd.rebate_centicents,
             )
         )
         self._fill_seq += 1

@@ -57,6 +57,33 @@ class ReplayConfig:
     marks: dict[str, int] = field(default_factory=dict)  # ticker -> yes mark cents
 
 
+def _fill_row(f: Any) -> dict[str, Any]:
+    """Serialize a fill. The per-fill fee decomposition is emitted only when the
+    fee model supplies one (a market schedule other than 'n/a'), so runs using a
+    flat fee model (zero / configurable placeholder) keep their original shape."""
+    row: dict[str, Any] = {
+        "fill_id": f.fill_id,
+        "order_id": f.order_id,
+        "ticker": f.ticker,
+        "side": f.side.value,
+        "action": f.action.value,
+        "quantity": f.quantity,
+        "price_cents": f.price_cents,
+        "fee_cents": f.fee_cents,
+        "liquidity": f.liquidity.value,
+        "at": f.filled_at.isoformat(),
+        "source_ref": f.source_ref,
+        "policy_version": f.execution_policy_version,
+    }
+    if f.fee_market_schedule is not None and f.fee_market_schedule != "n/a":
+        row["fee_model_version"] = f.fee_model_version
+        row["fee_market_schedule"] = f.fee_market_schedule
+        row["fee_trade_centicents"] = f.fee_trade_centicents
+        row["fee_rounding_centicents"] = f.fee_rounding_centicents
+        row["fee_rebate_centicents"] = f.fee_rebate_centicents
+    return row
+
+
 def _latest_book_before(books: list[OrderBook], ticker: str, at: datetime) -> OrderBook | None:
     candidates = [b for b in books if b.ticker == ticker and b.captured_at <= at]
     return max(candidates, key=lambda b: b.captured_at) if candidates else None
@@ -158,26 +185,7 @@ def write_artifacts(config: ReplayConfig, sim: Simulator, out_dir: Path) -> dict
             for o in sim.orders
         ],
     )
-    hashes["fills.json"] = dump(
-        "fills.json",
-        [
-            {
-                "fill_id": f.fill_id,
-                "order_id": f.order_id,
-                "ticker": f.ticker,
-                "side": f.side.value,
-                "action": f.action.value,
-                "quantity": f.quantity,
-                "price_cents": f.price_cents,
-                "fee_cents": f.fee_cents,
-                "liquidity": f.liquidity.value,
-                "at": f.filled_at.isoformat(),
-                "source_ref": f.source_ref,
-                "policy_version": f.execution_policy_version,
-            }
-            for f in sim.fills
-        ],
-    )
+    hashes["fills.json"] = dump("fills.json", [_fill_row(f) for f in sim.fills])
     hashes["ledger.json"] = dump(
         "ledger.json",
         [

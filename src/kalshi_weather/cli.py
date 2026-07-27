@@ -463,7 +463,8 @@ def paper_inspect_coverage(
     for m in coverage.markets:
         typer.echo(
             f"  {m.ticker}: {m.confidence.value} books={m.book_count} trades={m.trade_count} "
-            f"settle={m.has_settlement} marketable={m.marketable_eligible} passive={m.passive_eligible}"
+            f"settle={m.has_settlement} marketable={m.marketable_eligible} "
+            f"passive={m.passive_eligible}"
         )
 
 

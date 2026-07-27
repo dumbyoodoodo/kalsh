@@ -86,13 +86,17 @@ def classify_exception(exc: BaseException) -> tuple[PollOutcome, int | None, boo
 
     from kalshi_weather.ingestion.validation import MalformedPayloadError
     from kalshi_weather.kalshi.client import KalshiAPIError
+    from kalshi_weather.kalshi.orderbook import InvalidPriceLevelError
 
     if isinstance(exc, KalshiAPIError):
         status = getattr(exc, "status_code", None)
         if status == 429:
             return PollOutcome.RATE_LIMITED, status, True
         return PollOutcome.API_FAILURE, status, False
-    if isinstance(exc, MalformedPayloadError):
+    # An out-of-range price level / negative quantity in an order-book payload is
+    # malformed data, not an unclassified failure (both already break passive
+    # continuity; this only sharpens the recorded label).
+    if isinstance(exc, MalformedPayloadError | InvalidPriceLevelError):
         return PollOutcome.MALFORMED_PAYLOAD, None, False
     if isinstance(exc, SQLAlchemyError):
         return PollOutcome.PERSISTENCE_FAILURE, None, False

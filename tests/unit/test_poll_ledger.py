@@ -55,6 +55,7 @@ def test_classify_exception_rate_limit_vs_api_vs_persistence() -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
     from kalshi_weather.ingestion.validation import MalformedPayloadError
+    from kalshi_weather.kalshi.orderbook import InvalidPriceLevelError
 
     assert classify_exception(KalshiAPIError(429, "too many")) == (
         PollOutcome.RATE_LIMITED,
@@ -63,7 +64,15 @@ def test_classify_exception_rate_limit_vs_api_vs_persistence() -> None:
     )
     assert classify_exception(KalshiAPIError(500, "boom"))[0] is PollOutcome.API_FAILURE
     assert classify_exception(MalformedPayloadError("bad"))[0] is PollOutcome.MALFORMED_PAYLOAD
+    # An out-of-range order-book price level is malformed payload, not unknown.
+    assert (
+        classify_exception(InvalidPriceLevelError("yes price 0 out of [1, 99]"))[0]
+        is PollOutcome.MALFORMED_PAYLOAD
+    )
     assert classify_exception(SQLAlchemyError("db"))[0] is PollOutcome.PERSISTENCE_FAILURE
+    # A plain ValueError (not a recognized malformed/parse type) stays unknown --
+    # InvalidPriceLevelError is a ValueError subclass but is matched specifically
+    # above, so generic ValueErrors are not swept into malformed_payload.
     assert classify_exception(ValueError("x"))[0] is PollOutcome.UNKNOWN_FAILURE
 
 

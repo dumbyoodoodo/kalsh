@@ -20,3 +20,9 @@ build/
 .coverage
 htmlcov/
 data/datasets/
+# Generated operational log of the H0019 readiness monitor (append-only state
+# history; NOT part of the immutable H0019 definition, which is config.json /
+# registration.md). Written in-place by `experiment readiness`; ignored so the
+# monitor's normal appends don't dirty the tree. Narrow, exact path only --
+# never ignore the experiment directory itself.
+docs/research/experiments/EXP-FUTURE-H0019/readiness_log.jsonl

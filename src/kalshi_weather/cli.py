@@ -335,6 +335,24 @@ def paper_export_replay_data(
         manifest = export_replay_data(
             query, data, Path(output), source_db_revision=query.source_db_revision
         )
+        # Observed-availability timeline (read-only), written into the export.
+        from kalshi_weather.execution.availability import build_availability_timeline
+        from kalshi_weather.execution.history_replay import write_availability_artifacts
+
+        async with _open_readonly_session(settings) as session:
+            timeline = await build_availability_timeline(
+                session,
+                tickers=ticker_list,
+                start=datetime.fromisoformat(start),
+                end=datetime.fromisoformat(end),
+                source_db_revision=query.source_db_revision,
+            )
+        avail_hashes = write_availability_artifacts(Path(output), timeline)
+        manifest["availability_hashes"] = avail_hashes
+        manifest["availability_downtime_gaps"] = timeline.downtime_gaps
+        (Path(output) / "export_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, default=str)
+        )
         if coverage_policy:
             pol = load_coverage_policy(Path(coverage_policy))
             cov = evaluate_coverage(data, ticker_list, pol)
@@ -352,9 +370,7 @@ def paper_export_replay_data(
     manifest = asyncio.run(_run())
     result = manifest
     counts = result["counts"]
-    typer.echo(
-        f"export {result['export_id']} (git {str(result['git_commit'])[:10]}) -> {output}"
-    )
+    typer.echo(f"export {result['export_id']} (git {str(result['git_commit'])[:10]}) -> {output}")
     typer.echo(f"counts: {json.dumps(counts)}")
     if "coverage_verdict" in result:
         typer.echo(f"coverage verdict: {result['coverage_verdict']}")
@@ -370,6 +386,9 @@ def paper_simulate_history(
     coverage_policy: str = typer.Option(
         "", help="Optional JSON coverage-policy file; gates the run on data quality."
     ),
+    coverage_preset: str = typer.Option(
+        "", help="Built-in preset: strict-marketable | passive-research | exploratory."
+    ),
     allow_insufficient_coverage: bool = typer.Option(
         False,
         help="UNSAFE override: run even when a required coverage gate fails. Never default.",
@@ -377,7 +396,9 @@ def paper_simulate_history(
 ) -> None:
     """Replay explicit order intents against an exported historical interval.
     HISTORICAL REPLAY -- offline, no exchange orders, no strategy signal. Refuses
-    to run on INSUFFICIENT_DATA unless an explicit unsafe override is passed."""
+    to run on INSUFFICIENT_DATA unless an explicit unsafe override is passed.
+    passive-research refuses when observation continuity is inadequate;
+    strict-marketable marks passive intents unsupported."""
     from kalshi_weather.execution.coverage import evaluate_coverage
     from kalshi_weather.execution.history_replay import (
         HISTORICAL_BANNER,
@@ -385,7 +406,7 @@ def paper_simulate_history(
         build_history_replay_config,
         compute_order_confidence,
         enforce_coverage,
-        load_coverage_policy,
+        load_availability,
         load_exec_config,
         load_exported_data,
         load_order_intents,
@@ -397,10 +418,16 @@ def paper_simulate_history(
     loaded = load_exported_data(Path(data))
     intents = load_order_intents(Path(orders))
     cash, policy, risk, marks = load_exec_config(Path(config))
+    cov_policy = _resolve_coverage_policy(coverage_preset, coverage_policy)
+    ta_map, avail_summary = load_availability(Path(data))
 
-    cov_policy = load_coverage_policy(Path(coverage_policy) if coverage_policy else None)
-    coverage = evaluate_coverage(loaded.as_historical_data(), loaded.tickers(), cov_policy)
-    typer.echo(f"coverage verdict: {coverage.verdict.value}")
+    coverage = evaluate_coverage(
+        loaded.as_historical_data(),
+        loaded.tickers(),
+        cov_policy,
+        availability=avail_summary or None,
+    )
+    typer.echo(f"coverage verdict: {coverage.verdict.value} (preset={cov_policy.preset_name})")
     for g in coverage.failed_gates():
         typer.echo(f"  FAILED gate {g.name}: {g.actual} vs {g.threshold} ({g.reason})")
     try:
@@ -419,6 +446,7 @@ def paper_simulate_history(
         loaded=loaded,
         order_intents=intents,
         marks=marks,
+        availability=ta_map,
     )
     sim = run_history_replay(cfg)
     order_conf = compute_order_confidence(
@@ -433,39 +461,136 @@ def paper_simulate_history(
         order_confidence=order_conf,
         unsafe_override=allow_insufficient_coverage,
     )
+    (Path(output) / "coverage_preset.json").write_text(
+        json.dumps({"preset_name": cov_policy.preset_name, "version": cov_policy.version}, indent=2)
+    )
+    # copy the availability artifacts from the export into the run dir for a
+    # self-contained record (read-only; already deterministic).
+    for name in (
+        "availability_policy.json",
+        "availability_summary.json",
+        "availability_summary.md",
+        "availability_timeline.parquet",
+    ):
+        src = Path(data) / name
+        if src.exists():
+            (Path(output) / name).write_bytes(src.read_bytes())
     typer.echo(
         f"run {run_id}: orders={len(sim.orders)} fills={len(sim.fills)} "
         f"rejections={len(sim.rejections)} verdict={coverage.verdict.value} -> {output}"
     )
 
 
+def _resolve_coverage_policy(preset: str, policy_path: str):  # type: ignore[no-untyped-def]
+    """Resolve a coverage policy from a preset name or a JSON file (mutually
+    exclusive). A JSON file may override a preset only as an explicit config."""
+    from kalshi_weather.execution.coverage import get_preset
+    from kalshi_weather.execution.history_replay import load_coverage_policy
+
+    if preset and policy_path:
+        raise typer.BadParameter("pass either --coverage-preset or --coverage-policy, not both")
+    if preset:
+        return get_preset(preset)
+    return load_coverage_policy(Path(policy_path) if policy_path else None)
+
+
 @paper_app.command("inspect-coverage")
 def paper_inspect_coverage(
     data: str = typer.Option(..., help="An export directory produced by export-replay-data."),
     coverage_policy: str = typer.Option("", help="Optional JSON coverage-policy file."),
+    preset: str = typer.Option(
+        "", help="Built-in preset: strict-marketable | passive-research | exploratory."
+    ),
 ) -> None:
     """Report historical-data coverage quality WITHOUT running a simulation."""
     from kalshi_weather.execution.coverage import evaluate_coverage
     from kalshi_weather.execution.history_replay import (
         HISTORICAL_BANNER,
-        load_coverage_policy,
+        load_availability,
         load_exported_data,
     )
 
     typer.echo(HISTORICAL_BANNER)
     loaded = load_exported_data(Path(data))
-    cov_policy = load_coverage_policy(Path(coverage_policy) if coverage_policy else None)
-    coverage = evaluate_coverage(loaded.as_historical_data(), loaded.tickers(), cov_policy)
-    typer.echo(f"verdict: {coverage.verdict.value} (policy {cov_policy.version})")
+    cov_policy = _resolve_coverage_policy(preset, coverage_policy)
+    _ta, avail_summary = load_availability(Path(data))
+    coverage = evaluate_coverage(
+        loaded.as_historical_data(),
+        loaded.tickers(),
+        cov_policy,
+        availability=avail_summary or None,
+    )
+    typer.echo(
+        f"verdict: {coverage.verdict.value} (policy {cov_policy.version}, "
+        f"preset {cov_policy.preset_name})"
+    )
     for g in coverage.gates:
         if g.severity.value != "PASS":
             typer.echo(f"  {g.severity.value} {g.name}: {g.actual} vs {g.threshold} ({g.reason})")
     for m in coverage.markets:
+        obs = f" obs={m.observed_pct}%" if m.observed_pct is not None else ""
         typer.echo(
             f"  {m.ticker}: {m.confidence.value} books={m.book_count} trades={m.trade_count} "
             f"settle={m.has_settlement} marketable={m.marketable_eligible} "
-            f"passive={m.passive_eligible}"
+            f"passive={m.passive_eligible}{obs}"
         )
+
+
+@paper_app.command("inspect-availability")
+def paper_inspect_availability(
+    start: str = typer.Option(..., help="Start timestamp (ISO 8601, inclusive)."),
+    end: str = typer.Option(..., help="End timestamp (ISO 8601, inclusive)."),
+    tickers: str = typer.Option(..., help="Path to a newline-delimited ticker file (required)."),
+    output: str = typer.Option("", help="Optional directory to export availability artifacts."),
+) -> None:
+    """Report observed-availability for explicit tickers over a bounded range,
+    from collector-run metadata (read-only). HISTORICAL REPLAY -- no orders."""
+    import asyncio
+
+    from kalshi_weather.execution.availability import build_availability_timeline
+    from kalshi_weather.execution.history_replay import (
+        HISTORICAL_BANNER,
+        write_availability_artifacts,
+    )
+
+    typer.echo(HISTORICAL_BANNER)
+    ticker_list = tuple(t.strip() for t in Path(tickers).read_text().splitlines() if t.strip())
+    if not ticker_list:
+        raise typer.BadParameter("ticker file is empty; explicit market selection is required")
+    settings = get_settings()
+
+    from kalshi_weather.execution.availability import AvailabilityTimeline
+
+    async def _run() -> AvailabilityTimeline:
+        from sqlalchemy import text
+
+        async with _open_readonly_session(settings) as session:
+            revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+            return await build_availability_timeline(
+                session,
+                tickers=ticker_list,
+                start=datetime.fromisoformat(start),
+                end=datetime.fromisoformat(end),
+                source_db_revision=revision,
+            )
+
+    timeline = asyncio.run(_run())
+    typer.echo(
+        f"collector runs={timeline.collector_runs_considered} failed={timeline.failed_runs} "
+        f"downtime_gaps={timeline.downtime_gaps}"
+    )
+    for tk in ticker_list:
+        s = timeline.summary(tk)
+        typer.echo(
+            f"  {tk}: observed={s['observed_pct']}% likely={s['likely_observed_pct']}% "
+            f"unknown={s['unknown_pct']}% unavailable={s['collector_unavailable_pct']}% "
+            f"breaks={s['continuity_breaks']} "
+            f"max_unavail_gap={s['max_collector_unavailable_gap_seconds']}s"
+        )
+    if output:
+        Path(output).mkdir(parents=True, exist_ok=True)
+        write_availability_artifacts(Path(output), timeline)
+        typer.echo(f"availability artifacts -> {output}")
 
 
 @experiment_app.command("h0018")

@@ -261,6 +261,132 @@ def load_exported_data(export_dir: Path) -> LoadedExport:
 # --- run a history replay --------------------------------------------------
 
 
+_AVAIL_SCHEMA = {
+    "ticker": pl.Utf8,
+    "start": pl.Utf8,
+    "end": pl.Utf8,
+    "state": pl.Utf8,
+    "evidence": pl.Utf8,
+    "confidence": pl.Utf8,
+    "reason": pl.Utf8,
+    "collector_run_ids": pl.Utf8,
+    "source_refs": pl.Utf8,
+    "policy_version": pl.Utf8,
+}
+
+
+def write_availability_artifacts(out_dir: Path, timeline: Any) -> dict[str, str]:
+    """Write availability_policy.json, availability_timeline.parquet,
+    availability_summary.json, availability_summary.md. Returns content hashes."""
+    rows = timeline.rows()  # sorted by ticker then start (deterministic)
+    parquet_rows = [
+        {
+            **{
+                k: r[k]
+                for k in (
+                    "ticker",
+                    "start",
+                    "end",
+                    "state",
+                    "evidence",
+                    "confidence",
+                    "reason",
+                    "policy_version",
+                )
+            },
+            "collector_run_ids": json.dumps(r["collector_run_ids"]),
+            "source_refs": json.dumps(r["source_refs"]),
+        }
+        for r in rows
+    ]
+    _write_parquet(out_dir / "availability_timeline.parquet", parquet_rows, _AVAIL_SCHEMA)
+    manifest = timeline.to_manifest()
+    policy = manifest["availability_policy"]
+    summary = {k: v for k, v in manifest.items() if k != "availability_policy"}
+
+    def _h(obj: Any) -> str:
+        return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()
+
+    (out_dir / "availability_policy.json").write_text(
+        json.dumps(policy, indent=2, sort_keys=True, default=str)
+    )
+    (out_dir / "availability_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True, default=str)
+    )
+    md = _availability_summary_md(manifest)
+    (out_dir / "availability_summary.md").write_text(md)
+    return {
+        "availability_policy": _h(policy),
+        "availability_timeline": _h(rows),
+        "availability_summary": _h(summary),
+        "availability_summary_md": hashlib.sha256(md.encode()).hexdigest(),
+    }
+
+
+def _availability_summary_md(manifest: dict[str, Any]) -> str:
+    lines = [
+        f"# {HISTORICAL_BANNER}",
+        "",
+        "## Observed-availability summary",
+        f"- policy: {manifest['availability_policy']['version']}",
+        f"- collector runs considered: {manifest['collector_runs_considered']}",
+        f"- failed runs: {manifest['failed_runs']}  downtime gaps: {manifest['downtime_gaps']}",
+        "",
+        "### Per-ticker",
+    ]
+    for tk, s in sorted(manifest["per_ticker_summary"].items()):
+        lines.append(
+            f"- {tk}: observed {s['observed_pct']}% likely {s['likely_observed_pct']}% "
+            f"unknown {s['unknown_pct']}% unavailable {s['collector_unavailable_pct']}% "
+            f"breaks={s['continuity_breaks']} "
+            f"max_unavail_gap={s['max_collector_unavailable_gap_seconds']}s"
+        )
+    lines += [
+        "",
+        "Availability is CYCLE-GRANULAR (~5-10 min) and collector-wide; LIKELY_OBSERVED",
+        "is inferred (collector up + ticker eligible), not per-cycle proof. Missing",
+        "evidence is never counted as observed time.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def load_availability(export_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reconstruct per-ticker availability + the summary from an export directory.
+    Returns (ticker_availability_map, per_ticker_summary). Empty if absent."""
+    from kalshi_weather.execution.availability import reconstruct_from_rows
+
+    tl_path = export_dir / "availability_timeline.parquet"
+    if not tl_path.exists():
+        return {}, {}
+    df = pl.read_parquet(tl_path)
+    rows = [
+        {
+            **{
+                k: r[k]
+                for k in (
+                    "ticker",
+                    "start",
+                    "end",
+                    "state",
+                    "evidence",
+                    "confidence",
+                    "reason",
+                    "policy_version",
+                )
+            },
+            "collector_run_ids": json.loads(r["collector_run_ids"]),
+            "source_refs": json.loads(r["source_refs"]),
+        }
+        for r in df.iter_rows(named=True)
+    ]
+    ta = reconstruct_from_rows(rows)
+    summ_path = export_dir / "availability_summary.json"
+    summary = json.loads(summ_path.read_text()) if summ_path.exists() else {}
+    per_ticker = summary.get("per_ticker_summary", {})
+    return ta, per_ticker
+
+
 def load_order_intents(path: Path) -> list[OrderIntent]:
     """Parse a JSON file of explicit external/synthetic order intents."""
     from kalshi_weather.execution.models import Action, OrderType, TimeInForce
@@ -320,6 +446,8 @@ def build_history_replay_config(
     loaded: LoadedExport,
     order_intents: list[OrderIntent],
     marks: dict[str, int] | None = None,
+    availability: dict[str, Any] | None = None,
+    allow_likely_observed: bool = False,
 ) -> ReplayConfig:
     return ReplayConfig(
         run_id=run_id,
@@ -331,6 +459,8 @@ def build_history_replay_config(
         settlements=loaded.settlements,
         marks=marks or {},
         market_status=loaded.market_status,
+        availability=availability or {},
+        allow_likely_observed=allow_likely_observed,
     )
 
 

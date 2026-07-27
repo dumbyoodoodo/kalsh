@@ -70,6 +70,11 @@ class ReplayConfig:
     #: Optional market-state transitions. When present for a ticker, orders are
     #: gated to its OPEN window.
     market_status: list[MarketStatusEvent] = field(default_factory=list)
+    #: Optional per-ticker observed-availability timelines (duck-typed
+    #: TickerAvailability). Passive fills consult them for queue continuity.
+    availability: dict[str, Any] = field(default_factory=dict)
+    #: Whether LIKELY_OBSERVED keeps passive continuity (from the availability policy).
+    allow_likely_observed: bool = False
 
 
 def _fill_row(f: Any) -> dict[str, Any]:
@@ -106,7 +111,11 @@ def _latest_book_before(books: list[OrderBook], ticker: str, at: datetime) -> Or
 
 def run_replay(config: ReplayConfig) -> Simulator:
     sim = Simulator(
-        policy=config.policy, risk=config.risk, initial_cash_cents=config.initial_cash_cents
+        policy=config.policy,
+        risk=config.risk,
+        initial_cash_cents=config.initial_cash_cents,
+        availability=config.availability,
+        allow_likely_observed=config.allow_likely_observed,
     )
     books = list(config.market_data.order_books)
     trades = list(config.market_data.trades)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from kalshi_weather.execution import fills as fillmod
 from kalshi_weather.execution.ledger import EntryKind, Ledger, Portfolio
@@ -29,6 +30,12 @@ class Simulator:
     policy: ExecutionPolicy
     risk: RiskConfig
     initial_cash_cents: int
+    #: Optional per-ticker observed-availability timelines (historical replay).
+    #: When present, passive fills consult them for queue continuity. Duck-typed
+    #: (TickerAvailability) to keep the engine free of a hard availability import.
+    availability: dict[str, Any] = field(default_factory=dict)
+    #: Whether LIKELY_OBSERVED intervals keep passive continuity (policy-driven).
+    allow_likely_observed: bool = False
     ledger: Ledger = field(init=False)
     orders: list[Order] = field(default_factory=list)
     fills: list[Fill] = field(default_factory=list)
@@ -149,7 +156,13 @@ class Simulator:
             intent.order_type is OrderType.PASSIVE_LIMIT
             or self.policy.fill_mode is FillMode.PASSIVE
         ):
-            return fillmod.simulate_passive(intent, subsequent, self.policy)
+            return fillmod.simulate_passive(
+                intent,
+                subsequent,
+                self.policy,
+                availability=self.availability.get(intent.ticker),
+                allow_likely_observed=self.allow_likely_observed,
+            )
         # MARKETABLE / SYNTHETIC both cross the visible book (Mode A / C)
         if book is None:
             return []  # never invent a price on missing data

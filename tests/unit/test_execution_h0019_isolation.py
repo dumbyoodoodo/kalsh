@@ -34,6 +34,7 @@ def test_execution_import_graph_excludes_experiments() -> None:
         "import sys; import kalshi_weather.execution.replay; "
         "import kalshi_weather.execution.engine; import kalshi_weather.execution.loader; "
         "import kalshi_weather.execution.history; import kalshi_weather.execution.history_replay; "
+        "import kalshi_weather.execution.availability; import kalshi_weather.execution.coverage; "
         "assert not any(m.startswith('kalshi_weather.experiments') for m in sys.modules), "
         "'execution pulled in experiments'; print('isolated')"
     )

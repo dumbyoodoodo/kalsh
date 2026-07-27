@@ -13,10 +13,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from kalshi_weather.execution.market import CONTRACT_VALUE_CENTS, OrderBook, Trade
 from kalshi_weather.execution.models import Action, Liquidity, OrderIntent, Side
 from kalshi_weather.execution.policy import ExecutionPolicy
+
+if TYPE_CHECKING:
+    from kalshi_weather.execution.availability import TickerAvailability
 
 
 @dataclass(frozen=True)
@@ -75,28 +79,50 @@ def _direction_ok(intent: OrderIntent, trade: Trade, policy: ExecutionPolicy) ->
 
 
 def simulate_passive(
-    intent: OrderIntent, subsequent_trades: list[Trade], policy: ExecutionPolicy
+    intent: OrderIntent,
+    subsequent_trades: list[Trade],
+    policy: ExecutionPolicy,
+    *,
+    availability: TickerAvailability | None = None,
+    allow_likely_observed: bool = False,
 ) -> list[SimFill]:
     """Mode B: a resting order fills only up to the realized subsequent volume
     that traded through its price on the COMPATIBLE aggressive side, minus the
     queue-ahead assumption. Fills at the order's own limit (maker). Only trades
-    strictly after submission count. A trade-data gap larger than the policy's
-    ``max_passive_trade_gap_seconds`` truncates the evidence: queue position is
-    not assumed to persist across an unobserved gap."""
+    strictly after submission count.
+
+    Continuity is bounded by TWO safeguards, whichever truncates earlier:
+
+    * Observed availability (primary, when supplied): queue-ahead accumulation
+      continues only while observation continuity holds. The first
+      continuity-breaking interval after submission (COLLECTOR_UNAVAILABLE,
+      UNKNOWN, MARKET_NOT_ELIGIBLE, or -- unless ``allow_likely_observed`` --
+      LIKELY_OBSERVED) truncates the evidence. A later trade never bridges an
+      unobserved interval.
+    * Trade-data gap (secondary safeguard): a gap between consecutive qualifying
+      trades wider than ``max_passive_trade_gap_seconds`` also truncates. It
+      never OVERRIDES an availability interruption -- both apply."""
+    avail_break: datetime | None = None
+    if availability is not None:
+        avail_break = availability.first_break_after(
+            intent.submitted_at, allow_likely=allow_likely_observed
+        )
+
     qualifying = sorted(
         (
             t
             for t in subsequent_trades
             if t.executed_at > intent.submitted_at
+            and (avail_break is None or t.executed_at < avail_break)
             and _would_fill_passive(intent, t)
             and _direction_ok(intent, t, policy)
         ),
         key=lambda t: t.executed_at,
     )
-    # Truncate at the first gap between consecutive qualifying trades that is
-    # wider than the policy allows -- an unobserved interval, across which we do
-    # not assume the order held its queue position. (The wait from submission to
-    # the first fill-trade is normal resting, not a data gap.)
+    # Secondary safeguard: truncate at the first gap between consecutive
+    # qualifying trades wider than the policy allows (an unobserved interval,
+    # across which we do not assume the order held its queue position). The wait
+    # from submission to the first fill-trade is normal resting, not a data gap.
     volume_through = 0
     prev: datetime | None = None
     for t in qualifying:

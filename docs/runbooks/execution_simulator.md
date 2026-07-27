@@ -134,6 +134,32 @@ quality are separate; a fill is never graded HIGH just because the ledger balanc
   621s > 300s) with a `MEDIUM` fill — thresholds are not loosened to preserve a
   prior result.
 
+## Observed-availability & strategy presets (ADR 0019)
+Passive continuity is bounded by an **observed-availability timeline** built
+read-only from `collector_runs` (per-cycle uptime) + per-market observation
+points, not by the trade-gap proxy alone.
+- **States**: OBSERVED / LIKELY_OBSERVED / COLLECTOR_UNAVAILABLE /
+  MARKET_NOT_ELIGIBLE / UNKNOWN. Between two direct observations with the
+  collector continuously up, the span is OBSERVED (deduped books ≠ gaps).
+  Collector gaps/failed cycles → COLLECTOR_UNAVAILABLE; no collector run →
+  UNKNOWN. Missing evidence is never counted as observed.
+- **Passive fills**: queue-ahead continues only across OBSERVED (and
+  LIKELY_OBSERVED only if the policy opts in). The first break after submission
+  truncates evidence; a later trade never bridges an outage. The trade-gap proxy
+  remains a secondary safeguard that never overrides an availability break.
+- **Presets** (`--coverage-preset` / `--preset`): `strict-marketable` (fresh
+  books, settlement, production; passive disabled), `passive-research` (trades +
+  observed continuity + low unknown tolerance), `exploratory` (LOW FIDELITY;
+  never relaxes the fatal conflict/provenance gates). All thresholds + preset
+  name/version are recorded; no preset uses an unsafe override.
+- **CLI**: `paper inspect-availability --start --end --tickers <file>
+  [--output <dir>]` (read-only, from the DB); export writes
+  `availability_timeline.parquet` + `availability_summary.*`.
+- **Limitation**: availability is cycle-granular (~5-10 min) and collector-wide
+  (no per-ticker polling record); LIKELY_OBSERVED is inferred, not per-cycle
+  proof. No migration; historical rows are never backfilled with guessed
+  availability.
+
 ## H0019 isolation
 No import of `experiments`, no read of H0019/H0018 artifacts, no model-perf
 calc -- including the historical adapter (market-data tables only). Pinned by

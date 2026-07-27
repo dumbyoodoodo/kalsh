@@ -202,6 +202,13 @@ class QualityReport:
     environments_seen: dict[str, int] = field(default_factory=dict)
     malformed_records: int = 0
     limitations: list[str] = field(default_factory=list)
+    #: Per-ticker raw counters the emitted events can't recover (env exclusions,
+    #: conflicts, malformed). Book/trade counts and gaps are derived from events.
+    per_market: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def bump(self, ticker: str, key: str, n: int = 1) -> None:
+        self.per_market.setdefault(ticker, {})
+        self.per_market[ticker][key] = self.per_market[ticker].get(key, 0) + n
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -217,6 +224,7 @@ class QualityReport:
             "median_book_staleness_seconds": self.median_book_staleness_seconds,
             "environments_seen": self.environments_seen,
             "malformed_records": self.malformed_records,
+            "per_market": self.per_market,
             "limitations": self.limitations,
         }
 
@@ -299,6 +307,7 @@ async def load_order_books(
         )
         if not query.env_policy.admits(r.environment, data_type="order_books"):
             counts.excluded_by_environment += 1
+            quality.bump(r.market_ticker, "env_excluded_books")
             continue
         if not r.yes_levels_json and not r.no_levels_json:
             # an empty book is legitimate (no resting depth); not malformed. Keep.
@@ -315,8 +324,11 @@ async def load_order_books(
                 books = [b for b in books if not (b.ticker == key[0] and b.captured_at == key[1])]
                 conflict_keys.add(key)
                 counts.conflicts_rejected += 2
+                quality.bump(r.market_ticker, "book_conflicts", 2)
             continue
         seen[key] = r.content_hash
+        if r.environment != "production":
+            quality.bump(r.market_ticker, "admitted_nonproduction")
         books.append(normalize_book(r))
         per_ticker[r.market_ticker].append(key[1])
     quality.order_book_events = len(books)
@@ -368,6 +380,7 @@ async def load_trades(
         )
         if not query.env_policy.admits(r.environment, data_type="trades"):
             counts.excluded_by_environment += 1
+            quality.bump(r.market_ticker, "env_excluded_trades")
             continue
         if r.trade_id in seen_ids:  # trade_id is the immutable dedup key
             counts.exact_duplicates_removed += 1
@@ -375,6 +388,7 @@ async def load_trades(
         if r.price_cents is None or r.count is None or r.count <= 0:
             counts.excluded_malformed += 1
             quality.malformed_records += 1
+            quality.bump(r.market_ticker, "malformed_trades")
             continue
         if query.mode is TimestampMode.COLLECTOR_AVAILABLE and (
             r.raw_payload_id is None or r.raw_payload_id not in rat_map
@@ -383,8 +397,11 @@ async def load_trades(
             # what-we-knew-in-real-time mode (do not guess).
             counts.excluded_malformed += 1
             quality.malformed_records += 1
+            quality.bump(r.market_ticker, "malformed_trades")
             continue
         seen_ids.add(r.trade_id)
+        if r.environment != "production":
+            quality.bump(r.market_ticker, "admitted_nonproduction")
         taker = Side(r.taker_side) if r.taker_side in ("yes", "no") else None
         trades.append(
             Trade(

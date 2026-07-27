@@ -104,6 +104,36 @@ Read-only adapter from archived PostgreSQL market data into replay events.
   checks how orders would have executed; it is not an edge claim, and (like the
   rest of the simulator) submits nothing.
 
+## Coverage gates & confidence (ADR 0018)
+A deterministic, reconciled replay can still be a poor representation of real
+execution when source data is sparse. Accounting correctness and execution-data
+quality are separate; a fill is never graded HIGH just because the ledger balances.
+- **`ReplayCoveragePolicy`** (versioned; all thresholds in the manifest): ticker
+  book/trade/settlement coverage %, median/max book age, book/trade gaps, min
+  snapshots/trades per market, malformed rate, max conflicts, required production
+  %, strategy-requirement flags.
+- **Verdict**: gates are PASS/WARNING/FAIL. A FAIL on a *required* gate →
+  `INSUFFICIENT_DATA`; any WARNING → `LIMITED_CONFIDENCE`; else `HIGH_CONFIDENCE`.
+  FAIL is never downgraded to WARNING.
+- **Enforcement**: `simulate-history` refuses to run on `INSUFFICIENT_DATA`
+  unless `--allow-insufficient-coverage` (never default) — then everything is
+  labelled `UNSAFE_COVERAGE_OVERRIDE` and no fidelity is claimed.
+- **Per-market** quality (never a single average): a bad market in a set is named.
+  **Per-fill** confidence `HIGH/MEDIUM/LOW/UNSUPPORTED` from execution-data quality
+  only — fresh marketable → HIGH; passive on sparse trades → LOW; beyond max book
+  age → UNSUPPORTED (should not occur).
+- **Trade direction**: a resting order fills only from compatible taker-side
+  trades (`compatible_taker_side`); unknown direction excluded by default.
+  **Gaps**: a trade gap wider than `max_passive_trade_gap_seconds` truncates
+  passive evidence (queue position not assumed across an unobserved gap).
+- **Artifacts**: `coverage_policy.json`, `coverage_results.json`,
+  `market_quality.parquet`, `order_confidence.parquet`, `coverage_summary.md`
+  (all hashed). **CLI**: `--coverage-policy` on export/simulate;
+  `--allow-insufficient-coverage`; read-only `paper inspect-coverage`.
+- **Honest example**: the smoke market is `LIMITED_CONFIDENCE` (median book age
+  621s > 300s) with a `MEDIUM` fill — thresholds are not loosened to preserve a
+  prior result.
+
 ## H0019 isolation
 No import of `experiments`, no read of H0019/H0018 artifacts, no model-perf
 calc -- including the historical adapter (market-data tables only). Pinned by

@@ -12,13 +12,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 
+from kalshi_weather.execution.coverage import (
+    CoverageResults,
+    FillConfidence,
+    ReplayConfidence,
+    ReplayCoveragePolicy,
+    fill_confidence,
+)
 from kalshi_weather.execution.engine import Simulator
 from kalshi_weather.execution.history import HistoricalReplayData, HistoryQuery
 from kalshi_weather.execution.market import MarketData, OrderBook, Trade
@@ -29,11 +36,16 @@ from kalshi_weather.execution.replay import (
     ReplayConfig,
     SettlementEvent,
     _git_commit,
+    _latest_book_before,
     run_replay,
     write_artifacts,
 )
 
 HISTORICAL_BANNER = "SIMULATION ONLY -- HISTORICAL REPLAY -- NO EXCHANGE ORDERS WILL BE SUBMITTED"
+
+
+class InsufficientCoverageError(RuntimeError):
+    """Raised when a required coverage gate fails and no unsafe override is set."""
 
 
 # --- canonical (deterministic) serialization -------------------------------
@@ -170,6 +182,25 @@ class LoadedExport:
     settlements: list[SettlementEvent]
     market_status: list[MarketStatusEvent]
     manifest: dict[str, Any]
+    quality_report: dict[str, Any] = field(default_factory=dict)
+
+    def tickers(self) -> tuple[str, ...]:
+        return tuple(self.manifest.get("query", {}).get("tickers", []))
+
+    def as_historical_data(self) -> HistoricalReplayData:
+        """Rebuild a HistoricalReplayData (for coverage evaluation) from the export,
+        carrying the exported per-market quality counters."""
+        from kalshi_weather.execution.history import ExclusionCounts, QualityReport
+
+        q = QualityReport()
+        q.per_market = self.quality_report.get("per_market", {})
+        return HistoricalReplayData(
+            market_data=self.market_data,
+            settlements=self.settlements,
+            market_status=self.market_status,
+            counts=ExclusionCounts(),
+            quality=q,
+        )
 
 
 def _dt(v: str) -> datetime:
@@ -216,11 +247,14 @@ def load_exported_data(export_dir: Path) -> LoadedExport:
         )
         for s in json.loads((export_dir / "settlements.json").read_text())
     ]
+    quality_path = export_dir / "quality_report.json"
+    quality_report = json.loads(quality_path.read_text()) if quality_path.exists() else {}
     return LoadedExport(
         market_data=MarketData(order_books=books, trades=trades),
         settlements=settlements,
         market_status=status,
         manifest=manifest,
+        quality_report=quality_report,
     )
 
 
@@ -300,26 +334,224 @@ def build_history_replay_config(
     )
 
 
+def load_coverage_policy(path: Path | None) -> ReplayCoveragePolicy:
+    """Load a coverage policy from JSON, or the default policy when no path."""
+    if path is None:
+        return ReplayCoveragePolicy()
+    raw = json.loads(path.read_text())
+    fields = ReplayCoveragePolicy.__dataclass_fields__
+    return ReplayCoveragePolicy(**{k: v for k, v in raw.items() if k in fields})
+
+
+def enforce_coverage(coverage: CoverageResults, *, allow_insufficient: bool) -> None:
+    """Pre-run gate: refuse to proceed on INSUFFICIENT_DATA unless the caller
+    explicitly overrides. Never downgrades a FAIL into a WARNING."""
+    if coverage.verdict is ReplayConfidence.INSUFFICIENT_DATA and not allow_insufficient:
+        failed = ", ".join(g.name for g in coverage.failed_gates())
+        raise InsufficientCoverageError(
+            f"coverage verdict INSUFFICIENT_DATA (failed required gates: {failed}); "
+            f"pass an explicit unsafe override to run anyway"
+        )
+
+
+def _is_passive(config: ReplayConfig, order_type_value: str) -> bool:
+    return order_type_value == "passive_limit" or config.policy.fill_mode.value == "passive"
+
+
+def compute_order_confidence(
+    sim: Simulator,
+    config: ReplayConfig,
+    coverage: CoverageResults,
+    *,
+    unsafe_override: bool,
+) -> list[dict[str, Any]]:
+    """Per-order/per-fill execution confidence (Phase 7). Not derived from ledger
+    reconciliation -- only from execution-data quality."""
+    by_ticker = {m.ticker: m for m in coverage.markets}
+    books = list(config.market_data.order_books)
+    trades = list(config.market_data.trades)
+    rows: list[dict[str, Any]] = []
+    filled_orders = {f.order_id for f in sim.fills}
+    for o in sim.orders:
+        oi = o.intent
+        book = _latest_book_before(books, oi.ticker, oi.submitted_at)
+        book_age = (oi.submitted_at - book.captured_at).total_seconds() if book else None
+        trades_after = sum(
+            1 for t in trades if t.ticker == oi.ticker and t.executed_at > oi.submitted_at
+        )
+        passive = _is_passive(config, oi.order_type.value)
+        mq = by_ticker.get(oi.ticker)
+        if o.intent.order_id in filled_orders:
+            conf = fill_confidence(
+                fill_mode=config.policy.fill_mode.value,
+                is_passive=passive,
+                book_age_seconds=book_age,
+                market=mq,
+                policy=coverage.policy,
+                unsafe_override=unsafe_override,
+            )
+        else:
+            conf = FillConfidence.UNSUPPORTED  # no fill produced
+        warnings: list[str] = list(mq.reasons) if mq else []
+        rows.append(
+            {
+                "order_id": oi.order_id,
+                "ticker": oi.ticker,
+                "state": o.state.value,
+                "filled_quantity": o.filled_quantity,
+                "reject_reason": o.reject_reason,
+                "coverage_policy_version": coverage.policy.version,
+                "market_confidence": mq.confidence.value if mq else "unknown",
+                "book_age_seconds": round(book_age, 2) if book_age is not None else None,
+                "trades_after_submission": trades_after,
+                "fill_confidence": conf.value,
+                "warnings": "; ".join(warnings),
+                "unsafe_coverage_override": unsafe_override,
+            }
+        )
+    return rows
+
+
 def run_history_replay(config: ReplayConfig) -> Simulator:
     """Run a replay over historical data with market-status gating (delegates to
     the single deterministic engine)."""
     return run_replay(config)
 
 
+def _coverage_summary_md(
+    coverage: CoverageResults, order_conf: list[dict[str, Any]], unsafe_override: bool
+) -> str:
+    excluded = [
+        m.ticker for m in coverage.markets if m.confidence is ReplayConfidence.INSUFFICIENT_DATA
+    ]
+    rejected = [r["order_id"] for r in order_conf if r["reject_reason"]]
+    low = [r["order_id"] for r in order_conf if r["fill_confidence"] in ("LOW", "UNSUPPORTED")]
+
+    def _gate_lines(gs: list[Any]) -> list[str]:
+        return [
+            f"- {g.name}: actual {g.actual} vs threshold {g.threshold} ({g.reason})" for g in gs
+        ] or ["- none"]
+
+    lines = [
+        f"# {HISTORICAL_BANNER}",
+        "",
+        f"## Overall quality verdict: **{coverage.verdict.value}**",
+    ]
+    if unsafe_override:
+        lines += [
+            "",
+            "> **UNSAFE_COVERAGE_OVERRIDE ACTIVE** -- a required gate failed; results",
+            "> are NOT a high-fidelity execution estimate.",
+        ]
+    lines += [
+        "",
+        "### Failed gates",
+        *_gate_lines(coverage.failed_gates()),
+        "",
+        "### Warning gates",
+        *_gate_lines(coverage.warning_gates()),
+        "",
+        f"### Markets excluded (insufficient data): {excluded or 'none'}",
+        f"### Orders rejected due to coverage/state: {rejected or 'none'}",
+        f"### Orders/fills carrying low or unsupported confidence: {low or 'none'}",
+        f"### Unsafe override used: {unsafe_override}",
+        "",
+        "Note: a deterministic, reconciled replay can still be a poor representation of",
+        "real execution when source market data is sparse. Accounting correctness and",
+        "execution-data quality are separate.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def write_history_artifacts(
-    config: ReplayConfig, sim: Simulator, loaded: LoadedExport, out_dir: Path
+    config: ReplayConfig,
+    sim: Simulator,
+    loaded: LoadedExport,
+    out_dir: Path,
+    *,
+    coverage: CoverageResults | None = None,
+    order_confidence: list[dict[str, Any]] | None = None,
+    unsafe_override: bool = False,
 ) -> dict[str, Any]:
-    """Write the standard run artifacts plus the historical provenance/quality."""
+    """Write the standard run artifacts plus historical provenance and (when a
+    coverage policy was applied) the coverage/confidence artifacts, hashing each."""
     manifest = write_artifacts(config, sim, out_dir)
     (out_dir / "history_source.json").write_text(
         json.dumps(
-            {
-                "banner": HISTORICAL_BANNER,
-                "export_manifest": loaded.manifest,
-            },
+            {"banner": HISTORICAL_BANNER, "export_manifest": loaded.manifest},
             indent=2,
             sort_keys=True,
             default=str,
         )
     )
+    if coverage is None:
+        return manifest
+    order_confidence = order_confidence or []
+    extra_hashes: dict[str, str] = {}
+
+    def _dump_json(name: str, obj: Any) -> None:
+        text = json.dumps(obj, indent=2, sort_keys=True, default=str)
+        (out_dir / name).write_text(text)
+        extra_hashes[name] = hashlib.sha256(text.encode()).hexdigest()
+
+    _dump_json("coverage_policy.json", coverage.policy.to_manifest())
+    _dump_json("coverage_results.json", coverage.to_manifest())
+    _write_parquet(
+        out_dir / "market_quality.parquet",
+        [m.to_dict() | {"reasons": "; ".join(m.reasons)} for m in coverage.markets],
+        _MARKET_QUALITY_SCHEMA,
+    )
+    _write_parquet(out_dir / "order_confidence.parquet", order_confidence, _ORDER_CONF_SCHEMA)
+    summary = _coverage_summary_md(coverage, order_confidence, unsafe_override)
+    (out_dir / "coverage_summary.md").write_text(summary)
+    extra_hashes["coverage_summary.md"] = hashlib.sha256(summary.encode()).hexdigest()
+    # market_quality/order_confidence content hashes (canonical JSON)
+    extra_hashes["market_quality"] = hashlib.sha256(
+        json.dumps([m.to_dict() for m in coverage.markets], sort_keys=True).encode()
+    ).hexdigest()
+    extra_hashes["order_confidence"] = hashlib.sha256(
+        json.dumps(order_confidence, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+    manifest["coverage_verdict"] = coverage.verdict.value
+    manifest["coverage_policy_version"] = coverage.policy.version
+    manifest["unsafe_coverage_override"] = unsafe_override
+    manifest["coverage_hashes"] = extra_hashes
+    (out_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, default=str)
+    )
     return manifest
+
+
+_MARKET_QUALITY_SCHEMA = {
+    "ticker": pl.Utf8,
+    "book_count": pl.Int64,
+    "trade_count": pl.Int64,
+    "has_settlement": pl.Boolean,
+    "median_book_age_seconds": pl.Float64,
+    "max_book_age_seconds": pl.Float64,
+    "max_book_gap_seconds": pl.Float64,
+    "max_trade_gap_seconds": pl.Float64,
+    "malformed_rows": pl.Int64,
+    "conflicts": pl.Int64,
+    "production_pct": pl.Float64,
+    "marketable_eligible": pl.Boolean,
+    "passive_eligible": pl.Boolean,
+    "confidence": pl.Utf8,
+    "reasons": pl.Utf8,
+}
+_ORDER_CONF_SCHEMA = {
+    "order_id": pl.Utf8,
+    "ticker": pl.Utf8,
+    "state": pl.Utf8,
+    "filled_quantity": pl.Int64,
+    "reject_reason": pl.Utf8,
+    "coverage_policy_version": pl.Utf8,
+    "market_confidence": pl.Utf8,
+    "book_age_seconds": pl.Float64,
+    "trades_after_submission": pl.Int64,
+    "fill_confidence": pl.Utf8,
+    "warnings": pl.Utf8,
+    "unsafe_coverage_override": pl.Boolean,
+}

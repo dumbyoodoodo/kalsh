@@ -286,19 +286,27 @@ def paper_export_replay_data(
     allow_null_provenance: str = typer.Option(
         "", help="Comma-separated data types allowed with NULL/unknown env (default none)."
     ),
+    coverage_policy: str = typer.Option(
+        "", help="Optional JSON coverage-policy file; writes a coverage report into the export."
+    ),
 ) -> None:
     """Export a bounded historical production interval into an immutable replay
     dataset. HISTORICAL REPLAY -- read-only, no exchange orders."""
     import asyncio
 
+    from kalshi_weather.execution.coverage import evaluate_coverage
     from kalshi_weather.execution.history import (
         HistoryEnvironmentPolicy,
         HistoryQuery,
         TimestampMode,
         load_historical_replay_data,
     )
-    from kalshi_weather.execution.history_replay import HISTORICAL_BANNER, export_replay_data
-    from kalshi_weather.execution.replay import _git_commit
+    from kalshi_weather.execution.history_replay import (
+        HISTORICAL_BANNER,
+        _coverage_summary_md,
+        export_replay_data,
+        load_coverage_policy,
+    )
 
     typer.echo(HISTORICAL_BANNER)
     ticker_list = tuple(t.strip() for t in Path(tickers).read_text().splitlines() if t.strip())
@@ -306,6 +314,7 @@ def paper_export_replay_data(
         raise typer.BadParameter("ticker file is empty; explicit market selection is required")
     allow_null = frozenset(x.strip() for x in allow_null_provenance.split(",") if x.strip())
     settings = get_settings()
+    result: dict[str, object] = {}
 
     async def _run() -> dict[str, object]:
         from sqlalchemy import text
@@ -323,16 +332,32 @@ def paper_export_replay_data(
                 source_db_revision=revision,
             )
             data = await load_historical_replay_data(session, query)
-        return export_replay_data(
+        manifest = export_replay_data(
             query, data, Path(output), source_db_revision=query.source_db_revision
         )
+        if coverage_policy:
+            pol = load_coverage_policy(Path(coverage_policy))
+            cov = evaluate_coverage(data, ticker_list, pol)
+            out = Path(output)
+            (out / "coverage_policy.json").write_text(
+                json.dumps(pol.to_manifest(), indent=2, sort_keys=True, default=str)
+            )
+            (out / "coverage_results.json").write_text(
+                json.dumps(cov.to_manifest(), indent=2, sort_keys=True, default=str)
+            )
+            (out / "coverage_summary.md").write_text(_coverage_summary_md(cov, [], False))
+            manifest["coverage_verdict"] = cov.verdict.value
+        return manifest
 
     manifest = asyncio.run(_run())
-    counts = manifest["counts"]
+    result = manifest
+    counts = result["counts"]
     typer.echo(
-        f"export {manifest['export_id']} (git {str(manifest['git_commit'])[:10]}) -> {output}"
+        f"export {result['export_id']} (git {str(result['git_commit'])[:10]}) -> {output}"
     )
     typer.echo(f"counts: {json.dumps(counts)}")
+    if "coverage_verdict" in result:
+        typer.echo(f"coverage verdict: {result['coverage_verdict']}")
 
 
 @paper_app.command("simulate-history")
@@ -342,12 +367,25 @@ def paper_simulate_history(
     config: str = typer.Option(..., help="JSON execution config (policy/risk/initial_cash)."),
     output: str = typer.Option(..., help="Immutable run directory (must not exist)."),
     run_id: str = typer.Option("history-replay", help="Run identifier."),
+    coverage_policy: str = typer.Option(
+        "", help="Optional JSON coverage-policy file; gates the run on data quality."
+    ),
+    allow_insufficient_coverage: bool = typer.Option(
+        False,
+        help="UNSAFE override: run even when a required coverage gate fails. Never default.",
+    ),
 ) -> None:
     """Replay explicit order intents against an exported historical interval.
-    HISTORICAL REPLAY -- offline, no exchange orders, no strategy signal."""
+    HISTORICAL REPLAY -- offline, no exchange orders, no strategy signal. Refuses
+    to run on INSUFFICIENT_DATA unless an explicit unsafe override is passed."""
+    from kalshi_weather.execution.coverage import evaluate_coverage
     from kalshi_weather.execution.history_replay import (
         HISTORICAL_BANNER,
+        InsufficientCoverageError,
         build_history_replay_config,
+        compute_order_confidence,
+        enforce_coverage,
+        load_coverage_policy,
         load_exec_config,
         load_exported_data,
         load_order_intents,
@@ -359,6 +397,20 @@ def paper_simulate_history(
     loaded = load_exported_data(Path(data))
     intents = load_order_intents(Path(orders))
     cash, policy, risk, marks = load_exec_config(Path(config))
+
+    cov_policy = load_coverage_policy(Path(coverage_policy) if coverage_policy else None)
+    coverage = evaluate_coverage(loaded.as_historical_data(), loaded.tickers(), cov_policy)
+    typer.echo(f"coverage verdict: {coverage.verdict.value}")
+    for g in coverage.failed_gates():
+        typer.echo(f"  FAILED gate {g.name}: {g.actual} vs {g.threshold} ({g.reason})")
+    try:
+        enforce_coverage(coverage, allow_insufficient=allow_insufficient_coverage)
+    except InsufficientCoverageError as exc:
+        typer.echo(f"REFUSING TO RUN: {exc}")
+        raise typer.Exit(code=2) from exc
+    if allow_insufficient_coverage and coverage.verdict.value == "INSUFFICIENT_DATA":
+        typer.echo("!!! UNSAFE_COVERAGE_OVERRIDE ACTIVE -- results are NOT high-fidelity !!!")
+
     cfg = build_history_replay_config(
         run_id=run_id,
         initial_cash_cents=cash,
@@ -369,11 +421,50 @@ def paper_simulate_history(
         marks=marks,
     )
     sim = run_history_replay(cfg)
-    write_history_artifacts(cfg, sim, loaded, Path(output))
+    order_conf = compute_order_confidence(
+        sim, cfg, coverage, unsafe_override=allow_insufficient_coverage
+    )
+    write_history_artifacts(
+        cfg,
+        sim,
+        loaded,
+        Path(output),
+        coverage=coverage,
+        order_confidence=order_conf,
+        unsafe_override=allow_insufficient_coverage,
+    )
     typer.echo(
         f"run {run_id}: orders={len(sim.orders)} fills={len(sim.fills)} "
-        f"rejections={len(sim.rejections)} -> {output}"
+        f"rejections={len(sim.rejections)} verdict={coverage.verdict.value} -> {output}"
     )
+
+
+@paper_app.command("inspect-coverage")
+def paper_inspect_coverage(
+    data: str = typer.Option(..., help="An export directory produced by export-replay-data."),
+    coverage_policy: str = typer.Option("", help="Optional JSON coverage-policy file."),
+) -> None:
+    """Report historical-data coverage quality WITHOUT running a simulation."""
+    from kalshi_weather.execution.coverage import evaluate_coverage
+    from kalshi_weather.execution.history_replay import (
+        HISTORICAL_BANNER,
+        load_coverage_policy,
+        load_exported_data,
+    )
+
+    typer.echo(HISTORICAL_BANNER)
+    loaded = load_exported_data(Path(data))
+    cov_policy = load_coverage_policy(Path(coverage_policy) if coverage_policy else None)
+    coverage = evaluate_coverage(loaded.as_historical_data(), loaded.tickers(), cov_policy)
+    typer.echo(f"verdict: {coverage.verdict.value} (policy {cov_policy.version})")
+    for g in coverage.gates:
+        if g.severity.value != "PASS":
+            typer.echo(f"  {g.severity.value} {g.name}: {g.actual} vs {g.threshold} ({g.reason})")
+    for m in coverage.markets:
+        typer.echo(
+            f"  {m.ticker}: {m.confidence.value} books={m.book_count} trades={m.trade_count} "
+            f"settle={m.has_settlement} marketable={m.marketable_eligible} passive={m.passive_eligible}"
+        )
 
 
 @experiment_app.command("h0018")

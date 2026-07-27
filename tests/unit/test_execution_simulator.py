@@ -90,7 +90,8 @@ def test_no_fill() -> None:
 
 def test_passive_order_later_fills() -> None:
     s = _sim(FillMode.PASSIVE)
-    trades = [Trade("M", T(10), yes_price_cents=39, quantity=8)]  # sold through our 40 bid
+    # taker aggressively sells YES (taker_side NO) through our resting YES bid
+    trades = [Trade("M", T(10), yes_price_cents=39, quantity=8, taker_side=Side.NO)]
     o = s.submit(
         _oi("o", "M", Side.YES, Action.BUY, 40, 5, T(9), tif=TimeInForce.GTC),
         book=None,

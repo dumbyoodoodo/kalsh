@@ -348,6 +348,35 @@ async def test_synthetic_and_historical_produce_identical_replay(throwaway_db: s
 
 
 @pytest.mark.asyncio
+async def test_coverage_over_postgres_flags_book_gap(throwaway_db: str) -> None:
+    # The seeded books span 20:10..20:30 with a same-instant conflict pair at
+    # 20:30 (rejected). Add a coverage evaluation over the real DB load: the
+    # median/max book gaps are computed from tz-naive-normalized timestamps.
+    from kalshi_weather.execution.coverage import ReplayCoveragePolicy, evaluate_coverage
+
+    await _seed(throwaway_db)
+    eng = create_async_engine(throwaway_db)
+    Session = async_sessionmaker(eng, expire_on_commit=False)
+    try:
+        async with Session() as s:
+            data = await load_historical_replay_data(s, _query(TimestampMode.EXCHANGE_TIME))
+    finally:
+        await eng.dispose()
+    # a tight book-age policy makes the ~10 min gap fatal; a loose one only warns.
+    # (max_conflicts raised so the seeded conflict pair doesn't mask the gap gate.)
+    tight = evaluate_coverage(
+        data, (TK,), ReplayCoveragePolicy(max_individual_book_age_seconds=60, max_conflicts=5)
+    )
+    loose = evaluate_coverage(
+        data, (TK,), ReplayCoveragePolicy(max_individual_book_age_seconds=3600, max_conflicts=5)
+    )
+    assert tight.verdict.value == "INSUFFICIENT_DATA"
+    assert loose.verdict.value in ("HIGH_CONFIDENCE", "LIMITED_CONFIDENCE")
+    # conflicts surfaced per-market from the real load
+    assert loose.markets[0].conflicts == 2
+
+
+@pytest.mark.asyncio
 async def test_adapter_is_read_only_and_deterministic(throwaway_db: str) -> None:
     await _seed(throwaway_db)
     eng = create_async_engine(throwaway_db)

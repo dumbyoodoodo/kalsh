@@ -55,6 +55,16 @@ class ExecutionPolicy:
     #: Mode B queue model: assume this many contracts sit ahead of ours at our
     #: price; a passive order needs MORE subsequent volume-through than this.
     queue_ahead_contracts: int = 0
+    #: Mode B trade-direction gate: a resting order fills only from taker trades
+    #: on the compatible aggressive side (ADR 0018). Default True (conservative).
+    passive_require_taker_direction: bool = True
+    #: Whether unknown (NULL) taker-direction trades count as passive fill
+    #: evidence. Default False -- unknown direction is excluded, not guessed.
+    passive_allow_unknown_taker: bool = False
+    #: A gap between qualifying subsequent trades larger than this (seconds) makes
+    #: passive fill evidence incomplete: only volume before the first such gap
+    #: counts (queue position is not assumed to persist across an unobserved gap).
+    max_passive_trade_gap_seconds: float = 900.0
     #: Reject a fill attempt if the referenced book is older than this (seconds).
     max_book_age_seconds: float = 300.0
     #: Reject if the book's spread exceeds this.
@@ -75,6 +85,9 @@ class ExecutionPolicy:
             "fee_model": self.fee_model.to_manifest(),
             "slippage_extra_cents": self.slippage_extra_cents,
             "queue_ahead_contracts": self.queue_ahead_contracts,
+            "passive_require_taker_direction": self.passive_require_taker_direction,
+            "passive_allow_unknown_taker": self.passive_allow_unknown_taker,
+            "max_passive_trade_gap_seconds": self.max_passive_trade_gap_seconds,
             "max_book_age_seconds": self.max_book_age_seconds,
             "max_spread_cents": self.max_spread_cents,
             "cancel_remainder_on_ioc": self.cancel_remainder_on_ioc,

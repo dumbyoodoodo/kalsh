@@ -12,6 +12,7 @@ passive order, and never uses any pre-submission information as fill evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from kalshi_weather.execution.market import CONTRACT_VALUE_CENTS, OrderBook, Trade
 from kalshi_weather.execution.models import Action, Liquidity, OrderIntent, Side
@@ -54,17 +55,58 @@ def _would_fill_passive(intent: OrderIntent, trade: Trade) -> bool:
     return no_price <= lim if intent.action is Action.BUY else no_price >= lim
 
 
+def compatible_taker_side(side: Side, action: Action) -> Side:
+    """The taker (aggressor) side whose trades fill a resting order. A resting
+    YES BUY (bid) is hit by a taker aggressively selling YES (taker_side NO); a
+    resting YES SELL (ask) is lifted by a taker buying YES (taker_side YES); and
+    the mirror for NO-side orders."""
+    if side is Side.YES:
+        return Side.NO if action is Action.BUY else Side.YES
+    return Side.YES if action is Action.BUY else Side.NO
+
+
+def _direction_ok(intent: OrderIntent, trade: Trade, policy: ExecutionPolicy) -> bool:
+    """Whether a trade's taker direction is admissible as passive fill evidence."""
+    if not policy.passive_require_taker_direction:
+        return True
+    if trade.taker_side is None:
+        return policy.passive_allow_unknown_taker  # unknown: excluded by default
+    return trade.taker_side is compatible_taker_side(intent.side, intent.action)
+
+
 def simulate_passive(
     intent: OrderIntent, subsequent_trades: list[Trade], policy: ExecutionPolicy
 ) -> list[SimFill]:
     """Mode B: a resting order fills only up to the realized subsequent volume
-    that traded through its price, minus the queue-ahead assumption. Fills at
-    the order's own limit (maker). Only trades strictly after submission count."""
-    volume_through = sum(
-        t.quantity
-        for t in subsequent_trades
-        if t.executed_at > intent.submitted_at and _would_fill_passive(intent, t)
+    that traded through its price on the COMPATIBLE aggressive side, minus the
+    queue-ahead assumption. Fills at the order's own limit (maker). Only trades
+    strictly after submission count. A trade-data gap larger than the policy's
+    ``max_passive_trade_gap_seconds`` truncates the evidence: queue position is
+    not assumed to persist across an unobserved gap."""
+    qualifying = sorted(
+        (
+            t
+            for t in subsequent_trades
+            if t.executed_at > intent.submitted_at
+            and _would_fill_passive(intent, t)
+            and _direction_ok(intent, t, policy)
+        ),
+        key=lambda t: t.executed_at,
     )
+    # Truncate at the first gap between consecutive qualifying trades that is
+    # wider than the policy allows -- an unobserved interval, across which we do
+    # not assume the order held its queue position. (The wait from submission to
+    # the first fill-trade is normal resting, not a data gap.)
+    volume_through = 0
+    prev: datetime | None = None
+    for t in qualifying:
+        if (
+            prev is not None
+            and (t.executed_at - prev).total_seconds() > policy.max_passive_trade_gap_seconds
+        ):
+            break
+        volume_through += t.quantity
+        prev = t.executed_at
     fillable = max(0, volume_through - policy.queue_ahead_contracts)
     take = min(intent.quantity, fillable)
     if take <= 0:

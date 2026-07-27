@@ -814,6 +814,34 @@ def paper_resume(
     typer.echo(f"kill switch released: {reason}")
 
 
+@paper_app.command("settle")
+def paper_settle() -> None:
+    """Settle open paper positions from authoritative Kalshi settlement
+    records (read-only research access; append-only paper records). Each
+    position settles exactly once; ambiguous or unsupported outcomes fail
+    closed with recorded reasons. NO exchange orders."""
+    import asyncio
+
+    from kalshi_weather.paper import runner as paper_runner
+
+    typer.echo(_PAPER_FORWARD_BANNER)
+    settings = get_settings()
+    run_id, result = asyncio.run(
+        paper_runner.execute_paper_settlement(
+            research_database_url=settings.database_url,
+            paper_database_url=settings.paper_database_url,
+        )
+    )
+    typer.echo(f"settlement run {run_id}")
+    for k, v in result.summary.items():
+        typer.echo(f"  {k}: {v}")
+    for d in result.decisions:
+        typer.echo(
+            f"  {d.ticker}: {d.status}"
+            + (f" result={d.result} payout={d.gross_payout_cents}c" if d.result else "")
+        )
+
+
 @paper_app.command("reconcile")
 def paper_reconcile() -> None:
     """Rebuild the paper portfolio by replaying the stored cash ledger through

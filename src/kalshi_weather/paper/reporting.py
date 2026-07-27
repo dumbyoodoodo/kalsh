@@ -19,8 +19,10 @@ from kalshi_weather.paper.store import (
     PaperFillRow,
     PaperOrderIntentRow,
     PaperPnlSnapshotRow,
+    PaperPositionRow,
     PaperRiskDecisionRow,
     PaperRun,
+    PaperSettlementRow,
     PaperSignalRow,
 )
 
@@ -90,6 +92,29 @@ async def build_daily_report(session: AsyncSession, day: date) -> dict[str, Any]
         exposure_by_station[st] = exposure_by_station.get(st, 0) + cost
         exposure_by_family[fam] = exposure_by_family.get(fam, 0) + cost
 
+    settlements = (
+        await session.scalars(
+            select(PaperSettlementRow).where(on_day(PaperSettlementRow.created_at))
+        )
+    ).all()
+    settled = [s for s in settlements if s.status == "settled"]
+    # latest per-run position snapshot = current open/closed position state
+    last_run_with_positions = (
+        await session.scalars(
+            select(PaperPositionRow.run_id).order_by(PaperPositionRow.id.desc()).limit(1)
+        )
+    ).first()
+    latest_positions = (
+        (
+            await session.scalars(
+                select(PaperPositionRow).where(PaperPositionRow.run_id == last_run_with_positions)
+            )
+        ).all()
+        if last_run_with_positions
+        else []
+    )
+    open_positions = [p for p in latest_positions if p.yes_qty or p.no_qty]
+
     last_pnl = pnl_rows[-1] if pnl_rows else None
     return {
         "banner": BANNER,
@@ -110,6 +135,30 @@ async def build_daily_report(session: AsyncSession, day: date) -> dict[str, Any]
         "exposure_by_family_cents": exposure_by_family,
         "attribution_by_signal_source": bucket(signals, lambda s: s.source_type),
         "attribution_by_execution_confidence": bucket(accepted, lambda i: i.execution_confidence),
+        "open_positions": len(open_positions),
+        "settled_positions": len(settled),
+        "settlement_gross_payout_cents": sum(s.gross_payout_cents for s in settled),
+        "settlement_realized_pnl_cents": sum(s.realized_pnl_delta_cents for s in settled),
+        "unresolved_settlements": sum(
+            1 for s in settlements if s.status.endswith("no_authoritative_settlement_yet")
+        ),
+        "unsupported_settlement_outcomes": sum(
+            1
+            for s in settlements
+            if "unsupported" in s.status or "conflicting" in s.status
+        ),
+        "settlement_corrections_detected": sum(
+            1 for s in settlements if s.status == "correction_detected"
+        ),
+        "settlement_provenance": [
+            {
+                "ticker": s.ticker,
+                "result": s.result,
+                "snapshot_source_id": s.snapshot_source_id,
+                "settlement_ts": str(s.settlement_ts),
+            }
+            for s in settled
+        ],
         "rejection_reasons": rejections,
         "stale_data_incidents": sum(
             v for k, v in rejections.items() if k.startswith("stale_") or k == "no_market_snapshot"

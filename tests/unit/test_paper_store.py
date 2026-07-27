@@ -246,3 +246,80 @@ async def test_store_is_append_only_and_ledger_replays(tmp_path: Path, paper_url
     # cash conservation: bankroll = cash + reserved + position cost + fees paid
     assert portfolio.cash_cents + portfolio.reserved_cents + cost + portfolio.fees_cents == 10_000
     assert all(row.payload_json for row in ledger_rows)  # payloads stored verbatim
+
+
+async def test_settlement_end_to_end_with_report(tmp_path: Path, paper_url: str) -> None:
+    """Fill -> authoritative settlement -> exact payout -> report totals."""
+    from datetime import datetime as dt
+
+    from kalshi_weather.paper.reporting import build_daily_report
+    from kalshi_weather.paper.store import PaperSettlementRow
+
+    research_url = RESEARCH_URL.format(path=tmp_path)
+    await make_research_db(research_url)
+    signals = constant_signals(tickers=[TICKER], probability=Decimal("0.7"), generated_at=NOW)
+    _, fill_result = await runner.execute_paper_run(
+        research_database_url=research_url,
+        paper_database_url=paper_url,
+        signals=signals,
+        signal_source="constant",
+        initial_cash_cents=10_000,
+        now=NOW,
+    )
+    assert len(fill_result.fills) == 1
+    fill = fill_result.fills[0]  # 1 YES @ 55c + fee
+
+    # authoritative settlement appears in the research DB: result = yes
+    r_engine = create_async_engine(research_url)
+    r_factory = async_sessionmaker(r_engine, expire_on_commit=False)
+    async with r_factory() as s:
+        s.add(
+            MarketSnapshot(
+                market_ticker=TICKER,
+                status="finalized",
+                result="yes",
+                settlement_ts=NOW + timedelta(hours=10),
+                observed_at=NOW + timedelta(hours=11),
+                environment="production",
+            )
+        )
+        await s.commit()
+    await r_engine.dispose()
+
+    settle_now = NOW + timedelta(hours=12)
+    _run_id, res = await runner.execute_paper_settlement(
+        research_database_url=research_url,
+        paper_database_url=paper_url,
+        now=settle_now,
+    )
+    settled = [d for d in res.decisions if d.status == "settled"]
+    assert len(settled) == 1
+    assert settled[0].gross_payout_cents == 100  # 1 winning YES contract
+    assert settled[0].realized_pnl_delta_cents == 100 - fill.price_cents
+    # bankroll identity after settlement: deposit + realized - fees == cash
+    assert res.pnl["cash_cents"] == 10_000 - fill.price_cents - fill.fee_cents + 100
+    assert res.pnl["position_cost_cents"] == 0
+
+    # idempotent rerun: no second payout, decision recorded as skip/none
+    _, res2 = await runner.execute_paper_settlement(
+        research_database_url=research_url,
+        paper_database_url=paper_url,
+        now=settle_now + timedelta(minutes=5),
+    )
+    assert not [d for d in res2.decisions if d.status == "settled"]
+    assert not res2.new_ledger_entries
+
+    engine = paper_engine(paper_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        srows = (await s.scalars(select(PaperSettlementRow))).all()
+        # report on the day the rows were actually created (wall clock)
+        report = await build_daily_report(s, dt.now(UTC).date())
+    await engine.dispose()
+    paid = [r for r in srows if r.status == "settled"]
+    assert len(paid) == 1 and paid[0].snapshot_source_id is not None  # provenance
+    assert report["settled_positions"] == 1
+    assert report["settlement_gross_payout_cents"] == 100
+    assert report["settlement_realized_pnl_cents"] == 100 - fill.price_cents
+    assert report["open_positions"] == 0
+    assert report["banner"].startswith("SYNTHETIC")

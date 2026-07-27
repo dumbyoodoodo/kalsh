@@ -65,6 +65,11 @@ def test_reports_are_labelled_synthetic_operational() -> None:
 def test_store_has_no_update_or_delete() -> None:
     for path, text in paper_sources():
         for token in (".update(", "delete(", "DELETE FROM", "UPDATE "):
-            if token == ".update(" and path.name in ("signals.py", "engine.py", "runner.py"):
-                continue  # dict.update on plain dicts is fine outside the store
+            if token == ".update(" and path.name in (
+                "signals.py",
+                "engine.py",
+                "runner.py",
+                "settlement.py",  # in-memory set/dict updates only, no DB update
+            ):
+                continue
             assert token not in text, f"{path.name} contains {token!r} (append-only violation)"

@@ -61,5 +61,18 @@ integration tests cover the evidence-backed fill path; a live controlled
 session proved the fail-closed stale-data path during a real Kalshi API
 outage). When a hypothesis someday earns a paper pilot, only a signal
 source needs to be added — behind its own preregistration, per
-`docs/research/backtest_to_paper_bridge.md`. Settlement of open paper
-positions and any recurring schedule are deliberately out of scope.
+`docs/research/backtest_to_paper_bridge.md`. Any recurring schedule
+remains deliberately out of scope.
+
+**Update 2026-07-27 — settlement implemented.** `paper/settlement.py` +
+`paper settle` close the position lifecycle: authoritative outcomes come
+from append-only `market_snapshots` results (`yes`/`no`, `settlement_ts`,
+terminal status); the full recorded result history per ticker must agree
+(conflicts fail closed as ambiguous); payouts flow through the audited
+`Simulator.settle`/`Position.settle` arithmetic into the same paper cash
+ledger; each position settles exactly once (idempotent reruns skip via
+recorded `paper_settlements` state); void/unsupported outcomes are
+recorded skips; and evidence contradicting an already-paid settlement
+appends a `correction_detected` successor (`supersedes_id`) with **no
+automatic money movement** — reversal is a human decision. No settlement
+fee is charged (Kalshi assesses trading fees, not settlement).

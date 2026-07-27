@@ -276,3 +276,141 @@ async def execute_paper_run(
         await ps.commit()
     await p_engine.dispose()
     return run_id, result
+
+
+SETTLEMENT_STRATEGY_ID = "paper-settlement"
+
+
+async def execute_paper_settlement(
+    *,
+    research_database_url: str,
+    paper_database_url: str,
+    now: datetime | None = None,
+) -> tuple[str, Any]:
+    """Settle open paper positions from authoritative settlement records.
+
+    Read-only against the research database; append-only against the paper
+    database. Returns (run_id, SettlementSessionResult).
+    """
+    from kalshi_weather.execution.ledger import EntryKind as _EK
+    from kalshi_weather.execution.ledger import LedgerEntry as _LE
+    from kalshi_weather.execution.ledger import replay as _replay
+    from kalshi_weather.paper.settlement import (
+        load_settlement_evidence,
+        run_settlement_session,
+    )
+    from kalshi_weather.paper.store import PaperSettlementRow, latest_settlements
+
+    now = now or datetime.now(UTC)
+    exec_policy = default_exec_policy()
+
+    p_engine = paper_engine(paper_database_url)
+    await open_paper_db(p_engine)
+    p_factory = async_sessionmaker(p_engine, expire_on_commit=False)
+    async with p_factory() as ps:
+        prior_entries = await stored_ledger_entries(ps)
+        prior_settled = await latest_settlements(ps)
+        peak = await peak_equity_cents(ps)
+
+    # candidate tickers: open positions (from an audited replay) + previously
+    # settled tickers (to detect corrections against new evidence)
+    portfolio = _replay(
+        0,
+        [
+            _LE(
+                seq=i,
+                at=at,
+                kind=_EK(kind),
+                cash_delta_cents=c,
+                reserved_delta_cents=r,
+                payload=p,
+            )
+            for i, (_s, at, kind, c, r, p) in enumerate(prior_entries)
+        ],
+    )
+    open_tickers = sorted(
+        t
+        for t, pos in portfolio.positions.items()
+        if not pos.settled and (pos.yes_qty or pos.no_qty)
+    )
+    candidates = sorted(set(open_tickers) | set(prior_settled))
+
+    evidence = {}
+    if candidates:
+        r_engine = create_async_engine(research_database_url)
+        try:
+            r_factory = async_sessionmaker(r_engine, expire_on_commit=False)
+            async with r_factory() as rs:
+                evidence = await load_settlement_evidence(rs, candidates)
+        finally:
+            await r_engine.dispose()
+
+    result = run_settlement_session(
+        now=now,
+        prior_entries=prior_entries,
+        evidence=evidence,
+        prior_settled=prior_settled,
+        exec_policy=exec_policy,
+        sim_risk=default_sim_risk(0),
+        peak_equity_cents=peak,
+    )
+
+    run_id = "run-" + uuid.uuid4().hex[:16]
+    cfg_hash = config_hash(
+        {"exec": exec_policy.version, "fees": exec_policy.fee_model.version},
+        {"settlement": "paper-settlement-v1"},
+    )
+    async with p_factory() as ps:
+        ps.add(
+            PaperRun(
+                id=run_id,
+                status="completed",
+                strategy_id=SETTLEMENT_STRATEGY_ID,
+                strategy_version="settlement-v1",
+                signal_source="settlement",
+                code_commit=_git_commit(),
+                config_hash=cfg_hash,
+                fee_model_version=exec_policy.fee_model.version,
+                fill_policy_version=exec_policy.version,
+                sim_risk_version="n/a-settlement",
+                paper_risk_version="n/a-settlement",
+                initial_cash_cents=0,
+                summary_json=result.summary,
+            )
+        )
+        for d in result.decisions:
+            ps.add(
+                PaperSettlementRow(
+                    run_id=run_id,
+                    ticker=d.ticker,
+                    status=d.status,
+                    result=d.result,
+                    settlement_ts=d.settlement_ts,
+                    snapshot_source_id=d.snapshot_source_id,
+                    gross_payout_cents=d.gross_payout_cents,
+                    position_cost_cents=d.position_cost_cents,
+                    realized_pnl_delta_cents=d.realized_pnl_delta_cents,
+                    fee_cents=d.fee_cents,
+                    distinct_results=d.distinct_results,
+                    supersedes_id=d.supersedes_row_id,
+                )
+            )
+        for e in result.new_ledger_entries:
+            ps.add(
+                PaperCashLedgerRow(
+                    run_id=run_id,
+                    global_seq=e.global_seq,
+                    at=e.at,
+                    kind=e.kind,
+                    cash_delta_cents=e.cash_delta_cents,
+                    reserved_delta_cents=e.reserved_delta_cents,
+                    payload_json=json.dumps(e.payload, sort_keys=True, default=str),
+                )
+            )
+        for pos in result.positions:
+            ps.add(PaperPositionRow(run_id=run_id, **pos))
+        if result.pnl:
+            ps.add(PaperPnlSnapshotRow(run_id=run_id, at=now, **result.pnl))
+        await ps.commit()
+    await p_engine.dispose()
+    return run_id, result

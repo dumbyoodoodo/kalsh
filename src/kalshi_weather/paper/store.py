@@ -216,6 +216,31 @@ class PaperPnlSnapshotRow(PaperBase):
     drawdown_cents: Mapped[int] = mapped_column(Integer)
 
 
+class PaperSettlementRow(PaperBase):
+    """One settlement event or deterministic skip for one paper position.
+
+    Append-only: a correction never edits the prior row -- it appends a
+    successor whose ``supersedes_id`` points at the superseded settlement,
+    with status ``correction_detected`` and NO automatic money movement
+    (human review required before any reversal)."""
+
+    __tablename__ = "paper_settlements"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    ticker: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(48))  # settled | skipped_* | correction_detected
+    result: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    settlement_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    snapshot_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gross_payout_cents: Mapped[int] = mapped_column(Integer, default=0)
+    position_cost_cents: Mapped[int] = mapped_column(Integer, default=0)
+    realized_pnl_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+    fee_cents: Mapped[int] = mapped_column(Integer, default=0)  # Kalshi charges none at settlement
+    distinct_results: Mapped[str] = mapped_column(String(40), default="")
+    supersedes_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class PaperAttributionRow(PaperBase):
     __tablename__ = "paper_attribution"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -286,6 +311,21 @@ async def stored_ledger_entries(
         )
         for r in rows
     ]
+
+
+async def latest_settlements(session: AsyncSession) -> dict[str, tuple[int, str]]:
+    """Latest *paid* settlement per ticker: ticker -> (row id, result)."""
+    rows = (
+        await session.scalars(
+            select(PaperSettlementRow)
+            .where(PaperSettlementRow.status == "settled")
+            .order_by(PaperSettlementRow.id)
+        )
+    ).all()
+    out: dict[str, tuple[int, str]] = {}
+    for r in rows:
+        out[r.ticker] = (r.id, r.result or "")
+    return out
 
 
 async def peak_equity_cents(session: AsyncSession) -> int | None:

@@ -14,6 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kalshi_weather.domain.time import utc_now
 from kalshi_weather.ingestion.discovery import discover_and_snapshot_weather_markets
+from kalshi_weather.ingestion.poll_ledger import (
+    EndpointType,
+    PollAttempt,
+    PollOutcome,
+    classify_exception,
+)
 from kalshi_weather.ingestion.settlement_sync import capture_settled_transitions
 from kalshi_weather.ingestion.validation import MalformedPayloadError, validate_price_cents
 from kalshi_weather.kalshi.client import KalshiClient
@@ -22,6 +28,7 @@ from kalshi_weather.storage.database import session_scope
 from kalshi_weather.storage.repositories import (
     get_latest_trade_timestamp,
     record_collector_run,
+    record_poll_attempts,
     save_orderbook_snapshot,
     save_trade,
 )
@@ -44,13 +51,44 @@ class CycleStats:
     settle_errors: int = 0
     invalid_items: int = 0
     errors: int = 0
+    # --- per-ticker polling-evidence metrics (ADR 0020; flat int map) --------
+    poll_attempts_total: int = 0
+    poll_success_new_total: int = 0
+    poll_success_unchanged_total: int = 0
+    poll_success_empty_total: int = 0
+    poll_rate_limited_total: int = 0
+    poll_api_failure_total: int = 0
+    poll_persistence_failure_total: int = 0
+    poll_unique_tickers: int = 0
+    polling_ledger_write_failures: int = 0
     #: Per-outcome settlement metrics (ADR 0012). Flattened into as_dict so
     #: `collector_runs.stats_json` stays a flat int map for `ops health`.
     settle_detail: dict[str, int] = field(default_factory=dict)
+    #: Buffered per-ticker polling evidence (ADR 0020), written with the cycle's
+    #: collector_runs record. NOT part of the flat stats map -- popped in as_dict.
+    poll_attempts: list[PollAttempt] = field(default_factory=list)
+
+    def record_poll(self, attempt: PollAttempt) -> None:
+        self.poll_attempts.append(attempt)
+        self.poll_attempts_total += 1
+        o = attempt.outcome
+        if o is PollOutcome.SUCCEEDED_NEW_DATA:
+            self.poll_success_new_total += 1
+        elif o is PollOutcome.SUCCEEDED_UNCHANGED:
+            self.poll_success_unchanged_total += 1
+        elif o is PollOutcome.SUCCEEDED_EMPTY:
+            self.poll_success_empty_total += 1
+        elif o is PollOutcome.RATE_LIMITED:
+            self.poll_rate_limited_total += 1
+        elif o is PollOutcome.API_FAILURE:
+            self.poll_api_failure_total += 1
+        elif o is PollOutcome.PERSISTENCE_FAILURE:
+            self.poll_persistence_failure_total += 1
 
     def as_dict(self) -> dict[str, int]:
         data = asdict(self)
         detail = data.pop("settle_detail", {}) or {}
+        data.pop("poll_attempts", None)  # buffered records are not a metric
         data.update(detail)
         return data
 
@@ -102,6 +140,8 @@ async def run_collection_cycle(
     stats.invalid_items += discovery.invalid_items
 
     for ticker in discovery.market_tickers:
+        requested_at = utc_now()
+        r0, rl0 = client.retries, client.rate_limit_hits
         try:
             book = await client.get_orderbook(ticker)
             orderbook_result = await save_orderbook_snapshot(
@@ -112,14 +152,55 @@ async def run_collection_cycle(
                 raw_payload_id=client.last_raw_payload_id,
                 environment=client.source_environment,
             )
+            empty = not book.orderbook.yes and not book.orderbook.no
             if orderbook_result.was_duplicate:
                 stats.orderbooks_duplicate += 1
+                outcome, rows, dedup = PollOutcome.SUCCEEDED_UNCHANGED, 0, True
+            elif empty:
+                stats.orderbooks_saved += 1
+                outcome, rows, dedup = PollOutcome.SUCCEEDED_EMPTY, 1, False
             else:
                 stats.orderbooks_saved += 1
-        except Exception:
+                outcome, rows, dedup = PollOutcome.SUCCEEDED_NEW_DATA, 1, False
+            stats.record_poll(
+                PollAttempt.attempted(
+                    ticker=ticker,
+                    endpoint_type=EndpointType.ORDERBOOK,
+                    environment=client.source_environment,
+                    outcome=outcome,
+                    requested_at=requested_at,
+                    completed_at=utc_now(),
+                    http_status=200,
+                    retry_count=client.retries - r0,
+                    rate_limited=client.rate_limit_hits - rl0 > 0,
+                    persisted_row_count=rows,
+                    deduplicated=dedup,
+                    raw_payload_id=None if dedup else client.last_raw_payload_id,
+                )
+            )
+        except Exception as exc:
             logger.exception("collector.orderbook.failed", ticker=ticker)
             stats.errors += 1
+            outcome_f, status, rl = classify_exception(exc)
+            stats.record_poll(
+                PollAttempt.attempted(
+                    ticker=ticker,
+                    endpoint_type=EndpointType.ORDERBOOK,
+                    environment=client.source_environment,
+                    outcome=outcome_f,
+                    requested_at=requested_at,
+                    completed_at=utc_now(),
+                    http_status=status,
+                    retry_count=client.retries - r0,
+                    rate_limited=rl or client.rate_limit_hits - rl0 > 0,
+                    error_class=type(exc).__name__,
+                    error_detail=str(exc),
+                )
+            )
 
+        trade_requested_at = utc_now()
+        tr0, trl0 = client.retries, client.rate_limit_hits
+        trades_saved_this = 0
         try:
             latest_trade_at = await get_latest_trade_timestamp(session, ticker)
             if latest_trade_at is not None:
@@ -169,9 +250,52 @@ async def run_collection_cycle(
                     stats.trades_duplicate += 1
                 else:
                     stats.trades_saved += 1
-        except Exception:
+                    trades_saved_this += 1
+            if not trades:
+                t_outcome, t_rows, t_dedup = PollOutcome.SUCCEEDED_EMPTY, 0, False
+            elif trades_saved_this > 0:
+                t_outcome, t_rows, t_dedup = (
+                    PollOutcome.SUCCEEDED_NEW_DATA,
+                    trades_saved_this,
+                    False,
+                )
+            else:
+                t_outcome, t_rows, t_dedup = PollOutcome.SUCCEEDED_UNCHANGED, 0, True
+            stats.record_poll(
+                PollAttempt.attempted(
+                    ticker=ticker,
+                    endpoint_type=EndpointType.TRADES,
+                    environment=client.source_environment,
+                    outcome=t_outcome,
+                    requested_at=trade_requested_at,
+                    completed_at=utc_now(),
+                    http_status=200,
+                    retry_count=client.retries - tr0,
+                    rate_limited=client.rate_limit_hits - trl0 > 0,
+                    persisted_row_count=t_rows,
+                    deduplicated=t_dedup,
+                    raw_payload_id=client.last_raw_payload_id if trades_saved_this else None,
+                )
+            )
+        except Exception as exc:
             logger.exception("collector.trades.failed", ticker=ticker)
             stats.errors += 1
+            t_outcome_f, t_status, t_rl = classify_exception(exc)
+            stats.record_poll(
+                PollAttempt.attempted(
+                    ticker=ticker,
+                    endpoint_type=EndpointType.TRADES,
+                    environment=client.source_environment,
+                    outcome=t_outcome_f,
+                    requested_at=trade_requested_at,
+                    completed_at=utc_now(),
+                    http_status=t_status,
+                    retry_count=client.retries - tr0,
+                    rate_limited=t_rl or client.rate_limit_hits - trl0 > 0,
+                    error_class=type(exc).__name__,
+                    error_detail=str(exc),
+                )
+            )
 
     # Settled-transition capture: isolated like everything else -- a failure
     # here is logged and counted, never allowed to fail the cycle.
@@ -192,6 +316,7 @@ async def run_collection_cycle(
         logger.exception("collector.settle_capture.pass_failed")
         stats.errors += 1
 
+    stats.poll_unique_tickers = len({a.ticker for a in stats.poll_attempts})
     return stats
 
 
@@ -221,6 +346,7 @@ async def run_collector_loop(
         run_stats: dict[str, Any] = {}
         run_requests = run_retries = 0
         run_error: str | None = None
+        poll_attempts: list[PollAttempt] = []
         try:
             async with session_scope(session_factory) as session:
                 client = client_factory(session)
@@ -237,6 +363,7 @@ async def run_collector_loop(
                     )
                     run_stats = stats.as_dict()
                     run_requests, run_retries = client.requests_attempted, client.retries
+                    poll_attempts = stats.poll_attempts
             logger.info(
                 "collector.cycle_complete",
                 cycle=cycle_number,
@@ -255,7 +382,7 @@ async def run_collector_loop(
         # abort collection itself.
         try:
             async with session_scope(session_factory) as session:
-                await record_collector_run(
+                run = await record_collector_run(
                     session,
                     collector="kalshi",
                     started_at=started_at,
@@ -266,6 +393,22 @@ async def run_collector_loop(
                     stats=run_stats,
                     error=run_error,
                 )
+                # Per-ticker polling evidence (ADR 0020) is written WITH the run
+                # record, but only when the cycle committed its data (a failed
+                # cycle rolled back, so per-ticker success claims would be false;
+                # collector-wide unavailability is represented by the run row).
+                # A savepoint isolates a ledger-write failure so it can never
+                # abort the operational run record.
+                if run_error is None and poll_attempts:
+                    try:
+                        async with session.begin_nested():
+                            await record_poll_attempts(
+                                session,
+                                collector_run_id=run.id,
+                                attempts=poll_attempts,
+                            )
+                    except Exception:
+                        logger.exception("collector.poll_ledger_write_failed", cycle=cycle_number)
         except Exception:
             logger.exception("collector.run_record_failed", cycle=cycle_number)
 

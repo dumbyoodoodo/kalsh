@@ -10,7 +10,7 @@ and save_orderbook_snapshot, and docs/adr/0002-ingestion-collector.md.
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from kalshi_weather.storage.models import (
     CollectorRun,
     EventRecord,
     MarketCandlestick,
+    MarketPollAttempt,
     MarketSnapshot,
     OrderbookSnapshot,
     RawApiPayload,
@@ -32,6 +33,47 @@ from kalshi_weather.storage.models import (
     WeatherStation,
     content_hash,
 )
+
+if TYPE_CHECKING:
+    from kalshi_weather.ingestion.poll_ledger import PollAttempt
+
+
+async def record_poll_attempts(
+    session: AsyncSession,
+    *,
+    collector_run_id: int,
+    attempts: "list[PollAttempt]",
+) -> int:
+    """Append per-ticker polling-evidence rows for one cycle. Append-only: never
+    updates or deletes. Returns the number of rows written. Deterministic column
+    mapping; ``created_at`` is stamped at write time."""
+    now = utc_now()
+    rows = [
+        MarketPollAttempt(
+            collector_run_id=collector_run_id,
+            ticker=a.ticker,
+            endpoint_type=a.endpoint_type.value,
+            environment=a.environment,
+            eligibility_state=a.eligibility_state.value,
+            attempt_state=a.attempt_state.value,
+            outcome=a.outcome.value,
+            requested_at=a.requested_at,
+            completed_at=a.completed_at,
+            http_status=a.http_status,
+            retry_count=a.retry_count,
+            rate_limited=a.rate_limited,
+            persisted_row_count=a.persisted_row_count,
+            deduplicated=a.deduplicated,
+            raw_payload_id=a.raw_payload_id,
+            error_class=a.error_class,
+            bounded_error_detail=a.bounded_error_detail,
+            created_at=now,
+        )
+        for a in attempts
+    ]
+    session.add_all(rows)
+    await session.flush()
+    return len(rows)
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,9 +429,7 @@ async def save_trade(
     return SaveResult(record=record, was_duplicate=False)
 
 
-async def get_latest_trade_timestamp(
-    session: AsyncSession, market_ticker: str
-) -> datetime | None:
+async def get_latest_trade_timestamp(session: AsyncSession, market_ticker: str) -> datetime | None:
     """Latest stored trade's executed_at for a ticker, used to compute an
     incremental min_ts for the next trade-collection fetch."""
     result: datetime | None = await session.scalar(

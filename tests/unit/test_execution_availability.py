@@ -89,6 +89,28 @@ def test_intervals_are_sorted_nonoverlapping_and_timezone_aware() -> None:
         assert a.start.tzinfo is UTC and a.end.tzinfo is UTC
 
 
+def test_direct_poll_failure_downgrades_to_unknown_and_breaks_continuity() -> None:
+    # collector up; a direct per-ticker poll FAILED in the 10:10 cycle (no success)
+    cycles = [_cyc(1, 10, 0, 10, 5), _cyc(2, 10, 10, 10, 15)]
+    obs = [(T(10, 2), "market_poll_attempts:1")]  # success in cycle 1
+    failures = [T(10, 12)]  # failure in cycle 2
+    ta = _build_ticker("A", T(10, 0), T(10, 15), cycles, obs, POL, failures)
+    assert ta.state_at(T(10, 2)) is IntervalState.OBSERVED
+    assert ta.state_at(T(10, 12)) is IntervalState.UNKNOWN  # failed poll != observed
+    # a passive order at 10:2 loses continuity at the failed poll
+    brk = ta.first_break_after(T(10, 2), allow_likely=True)
+    assert brk is not None and brk <= T(10, 15)
+
+
+def test_direct_success_never_overridden_by_a_failure_elsewhere() -> None:
+    cycles = [_cyc(1, 10, 0, 10, 5), _cyc(2, 10, 10, 10, 15)]
+    obs = [(T(10, 2), "mpa:1"), (T(10, 12), "mpa:2")]  # both cycles witnessed
+    failures = [T(10, 12)]  # a failure coincides with a witnessed success cycle
+    ta = _build_ticker("A", T(10, 0), T(10, 15), cycles, obs, POL, failures)
+    # the witnessed cycle stays OBSERVED (success is not overridden)
+    assert ta.state_at(T(10, 12)) is IntervalState.OBSERVED
+
+
 def test_reconstruct_round_trip() -> None:
     cycles = [_cyc(1, 10, 0, 10, 5)]
     obs = [(T(10, 2), "orderbook_snapshots:1")]

@@ -34,7 +34,7 @@ writes to PostgreSQL or mutates source rows.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -42,7 +42,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kalshi_weather.storage.models import CollectorRun, MarketSnapshot, OrderbookSnapshot
+from kalshi_weather.storage.models import (
+    CollectorRun,
+    MarketPollAttempt,
+    MarketSnapshot,
+    OrderbookSnapshot,
+)
 
 
 def _utc(dt: datetime) -> datetime:
@@ -58,7 +63,9 @@ class IntervalState(StrEnum):
 
 
 class EvidenceType(StrEnum):
-    DIRECT_PER_MARKET = "direct_per_market"  # witnessed observation point(s)
+    DIRECT_POLL_SUCCESS = "direct_poll_success"  # per-ticker poll ledger: observed (0011+)
+    DIRECT_POLL_FAILED = "direct_poll_failed"  # per-ticker poll ledger: attempted, failed
+    DIRECT_PER_MARKET = "direct_per_market"  # legacy witnessed observation point(s)
     CYCLE_ELIGIBLE = "cycle_eligible"  # collector up + ticker in active window
     COLLECTOR_GAP = "collector_gap"  # gap between cycles beyond cadence
     FAILED_CYCLE = "failed_cycle"  # a cycle that did not succeed
@@ -160,6 +167,8 @@ class AvailabilityTimeline:
     collector_runs_considered: int = 0
     failed_runs: int = 0
     downtime_gaps: int = 0
+    #: Per-ticker direct-vs-inferred poll-evidence summary (Phase 8).
+    poll_evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def rows(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -189,7 +198,7 @@ class AvailabilityTimeline:
                     breaks += 1
                 prev_continuous = cont
         pct = {k: round(100.0 * v / total, 2) if total else 0.0 for k, v in by_state.items()}
-        return {
+        out = {
             "ticker": ticker,
             "observed_pct": pct[IntervalState.OBSERVED.value],
             "likely_observed_pct": pct[IntervalState.LIKELY_OBSERVED.value],
@@ -201,6 +210,14 @@ class AvailabilityTimeline:
             "continuity_breaks": breaks,
             "availability_policy_version": self.policy.version,
         }
+        # Phase 8: direct-vs-inferred poll-evidence provenance (empty pre-0011).
+        out.update(
+            self.poll_evidence.get(
+                ticker,
+                {"evidence_source": "legacy_inferred", "evidence_schema_era": "pre-0011-inferred"},
+            )
+        )
+        return out
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -287,9 +304,13 @@ def _build_ticker(
     cycles: list[_Cycle],
     obs_points: list[tuple[datetime, str]],
     policy: ObservationAvailabilityPolicy,
+    failure_times: list[datetime] | None = None,
 ) -> TickerAvailability:
     pv = policy.version
-    obs_times = sorted(t for t, _ in obs_points)
+    failure_times = sorted(failure_times or [])
+    # A direct per-ticker poll FAILURE also establishes eligibility (the ticker
+    # was attempted), so failures extend the active window alongside successes.
+    obs_times = sorted([t for t, _ in obs_points] + failure_times)
     active_start = obs_times[0] if obs_times else None
     active_end = obs_times[-1] if obs_times else None
 
@@ -413,7 +434,41 @@ def _build_ticker(
     # witnessed at both ends; unchanged books deduped).
     merged = _merge_adjacent([iv for iv in intervals if iv.end > iv.start])
     merged = _bridge_observed(merged, ticker, pv)
+    if failure_times:
+        merged = _apply_direct_failures(merged, ticker, pv, failure_times)
     return TickerAvailability(ticker=ticker, intervals=tuple(_merge_adjacent(merged)))
+
+
+def _apply_direct_failures(
+    intervals: list[ObservationInterval],
+    ticker: str,
+    pv: str,
+    failure_times: list[datetime],
+) -> list[ObservationInterval]:
+    """A direct per-ticker poll failure proves the ticker was NOT observed that
+    cycle. Any non-OBSERVED interval containing a failure is downgraded to
+    UNKNOWN (evidence DIRECT_POLL_FAILED) so it breaks passive continuity.
+    Successful direct observations (OBSERVED) are never overridden."""
+    out: list[ObservationInterval] = []
+    for iv in intervals:
+        if iv.state is not IntervalState.OBSERVED and any(
+            iv.start <= t < iv.end for t in failure_times
+        ):
+            out.append(
+                _mk(
+                    ticker,
+                    iv.start,
+                    iv.end,
+                    IntervalState.UNKNOWN,
+                    EvidenceType.DIRECT_POLL_FAILED,
+                    "high",
+                    "direct per-ticker poll failed (attempted, not observed)",
+                    pv,
+                )
+            )
+        else:
+            out.append(iv)
+    return out
 
 
 def _eligible_state(
@@ -525,29 +580,54 @@ async def build_availability_timeline(
         if (b.start - a.end).total_seconds() > policy.max_normal_cycle_gap_seconds:
             downtime += 1
 
-    # per-ticker direct observation points (production provenance only).
+    # per-ticker evidence. Direct per-ticker poll evidence (market_poll_attempts,
+    # migration 0011+) is preferred; otherwise legacy snapshot observation points.
     ta: dict[str, TickerAvailability] = {}
+    poll_evidence: dict[str, dict[str, Any]] = {}
     for tk in tickers:
-        books = await session.execute(
-            select(OrderbookSnapshot.captured_at, OrderbookSnapshot.id).where(
-                OrderbookSnapshot.market_ticker == tk,
-                OrderbookSnapshot.environment == "production",
-                OrderbookSnapshot.captured_at >= start,
-                OrderbookSnapshot.captured_at <= end,
+        polls = list(
+            await session.execute(
+                select(
+                    MarketPollAttempt.requested_at,
+                    MarketPollAttempt.id,
+                    MarketPollAttempt.outcome,
+                ).where(
+                    MarketPollAttempt.ticker == tk,
+                    MarketPollAttempt.environment == "production",
+                    MarketPollAttempt.requested_at >= start,
+                    MarketPollAttempt.requested_at <= end,
+                )
             )
         )
-        snaps = await session.execute(
-            select(MarketSnapshot.observed_at, MarketSnapshot.id).where(
-                MarketSnapshot.market_ticker == tk,
-                MarketSnapshot.environment == "production",
-                MarketSnapshot.observed_at >= start,
-                MarketSnapshot.observed_at <= end,
+        if polls:
+            direct_obs = [
+                (_utc(t), f"market_poll_attempts:{i}") for t, i, o in polls if o in _POLL_OBSERVED
+            ]
+            failures = [_utc(t) for t, _i, o in polls if o in _POLL_BREAKING]
+            ta[tk] = _build_ticker(tk, start, end, cycles, direct_obs, policy, failures)
+            poll_evidence[tk] = _poll_evidence_summary(polls, direct=True, start=start)
+        else:
+            books = await session.execute(
+                select(OrderbookSnapshot.captured_at, OrderbookSnapshot.id).where(
+                    OrderbookSnapshot.market_ticker == tk,
+                    OrderbookSnapshot.environment == "production",
+                    OrderbookSnapshot.captured_at >= start,
+                    OrderbookSnapshot.captured_at <= end,
+                )
             )
-        )
-        obs: list[tuple[datetime, str]] = [
-            (_utc(t), f"orderbook_snapshots:{i}") for t, i in books.all()
-        ] + [(_utc(t), f"market_snapshots:{i}") for t, i in snaps.all()]
-        ta[tk] = _build_ticker(tk, start, end, cycles, obs, policy)
+            snaps = await session.execute(
+                select(MarketSnapshot.observed_at, MarketSnapshot.id).where(
+                    MarketSnapshot.market_ticker == tk,
+                    MarketSnapshot.environment == "production",
+                    MarketSnapshot.observed_at >= start,
+                    MarketSnapshot.observed_at <= end,
+                )
+            )
+            obs: list[tuple[datetime, str]] = [
+                (_utc(t), f"orderbook_snapshots:{i}") for t, i in books.all()
+            ] + [(_utc(t), f"market_snapshots:{i}") for t, i in snaps.all()]
+            ta[tk] = _build_ticker(tk, start, end, cycles, obs, policy)
+            poll_evidence[tk] = _poll_evidence_summary([], direct=False, start=start)
 
     return AvailabilityTimeline(
         policy=policy,
@@ -558,4 +638,32 @@ async def build_availability_timeline(
         collector_runs_considered=len(cycles),
         failed_runs=failed,
         downtime_gaps=downtime,
+        poll_evidence=poll_evidence,
     )
+
+
+#: Poll outcomes that prove observation / that break continuity (mirror
+#: ingestion.poll_ledger; kept as strings to avoid an execution->ingestion import).
+_POLL_OBSERVED = frozenset({"succeeded_new_data", "succeeded_unchanged", "succeeded_empty"})
+_POLL_BREAKING = frozenset(
+    {"rate_limited", "api_failure", "malformed_payload", "persistence_failure", "unknown_failure"}
+)
+
+
+def _poll_evidence_summary(polls: list[Any], *, direct: bool, start: datetime) -> dict[str, Any]:
+    total = len(polls)
+    observed = sum(1 for _t, _i, o in polls if o in _POLL_OBSERVED)
+    failed = sum(1 for _t, _i, o in polls if o in _POLL_BREAKING)
+    rate_limited = sum(1 for _t, _i, o in polls if o == "rate_limited")
+    unchanged = sum(1 for _t, _i, o in polls if o == "succeeded_unchanged")
+    first = min((_utc(t) for t, _i, _o in polls), default=None) if polls else None
+    return {
+        "evidence_source": "direct_per_ticker" if direct else "legacy_inferred",
+        "evidence_schema_era": "poll-ledger-0011" if direct else "pre-0011-inferred",
+        "direct_poll_evidence_pct": round(100.0 * observed / total, 2) if total else 0.0,
+        "inferred_poll_evidence_pct": 0.0 if direct else 100.0,
+        "failed_poll_pct": round(100.0 * failed / total, 2) if total else 0.0,
+        "rate_limited_poll_pct": round(100.0 * rate_limited / total, 2) if total else 0.0,
+        "unchanged_success_pct": round(100.0 * unchanged / total, 2) if total else 0.0,
+        "polling_evidence_start": first.isoformat() if first else None,
+    }

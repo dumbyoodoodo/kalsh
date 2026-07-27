@@ -542,3 +542,64 @@ class SettlementAttempt(Base):
     # Kalshi source environment (ADR 0013): demo | production | unknown; NULL on
     # pre-0010 rows. Stamped from the settlement client (currently demo).
     environment: Mapped[str | None] = mapped_column(String(16))
+
+
+class MarketPollAttempt(Base):
+    """One ticker-endpoint polling attempt or explicit polling decision within a
+    collection cycle (migration 0011; ADR 0020).
+
+    Exists because ``collector_runs`` proves only that the collector ran a cycle
+    collector-wide; it cannot prove a SPECIFIC ticker was eligible, requested,
+    succeeded, returned unchanged content, failed, or was skipped. Order-book and
+    market snapshots dedup unchanged content, so a successful poll that returned
+    an identical book leaves NO row -- indistinguishable, from the snapshot tables
+    alone, from a ticker that was never polled. This ledger records that
+    distinction directly (``succeeded_unchanged`` with ``deduplicated=true`` still
+    proves the ticker was observed).
+
+    Append-only: one row per logical ticker-endpoint attempt, never updated or
+    deleted. HTTP-level retries the client performed internally are summarized in
+    ``retry_count`` (one logical row per collector decision, not one per HTTP
+    attempt). PROSPECTIVE ONLY -- no historical row is ever backfilled; the
+    availability builder treats pre-0011 periods as legacy/inferred evidence.
+    """
+
+    __tablename__ = "market_poll_attempts"
+    __table_args__ = (
+        Index("ix_market_poll_attempts_ticker_time", "ticker", "requested_at"),
+        Index("ix_market_poll_attempts_run", "collector_run_id"),
+        Index("ix_market_poll_attempts_endpoint_outcome", "endpoint_type", "outcome"),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    #: The cycle this attempt belongs to. Written with the run record post-cycle.
+    collector_run_id: Mapped[int] = mapped_column(
+        ForeignKey("collector_runs.id"), nullable=False
+    )
+    ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: market_snapshot | orderbook | trades | settlement | metadata_revision
+    endpoint_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    #: Kalshi source environment (ADR 0013): demo | production | unknown.
+    environment: Mapped[str | None] = mapped_column(String(16))
+    #: eligible | not_eligible -- whether the ticker was in the poll-eligible set.
+    eligibility_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    #: attempted | skipped | not_attempted -- what the collector did about it.
+    attempt_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    #: The deterministic outcome taxonomy (see ingestion.poll_ledger.PollOutcome).
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    #: Internal client HTTP retries for this one logical request (not a new row).
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rate_limited: Mapped[bool] = mapped_column(nullable=False, default=False)
+    #: Rows persisted by this attempt; 0 for unchanged/empty/failed.
+    persisted_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: True when a successful response deduped to no new row (still observed).
+    deduplicated: Mapped[bool] = mapped_column(nullable=False, default=False)
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+    error_class: Mapped[str | None] = mapped_column(String(64))
+    #: Bounded, sanitized detail -- never a full payload or credential.
+    bounded_error_detail: Mapped[str | None] = mapped_column(String(500))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
+    created_at: Mapped[datetime] = mapped_column(nullable=False)

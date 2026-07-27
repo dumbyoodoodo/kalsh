@@ -593,6 +593,76 @@ def paper_inspect_availability(
         typer.echo(f"availability artifacts -> {output}")
 
 
+@collector_app.command("inspect-polling-evidence")
+def collector_inspect_polling_evidence(
+    start: str = typer.Option(..., help="Start timestamp (ISO 8601, inclusive)."),
+    end: str = typer.Option(..., help="End timestamp (ISO 8601, inclusive)."),
+    tickers: str = typer.Option(
+        "", help="Optional newline-delimited ticker file for ticker-level detail."
+    ),
+    endpoint: str = typer.Option("", help="Optional endpoint filter (orderbook|trades|...)."),
+    environment: str = typer.Option("production", help="Environment filter (default production)."),
+) -> None:
+    """Read-only summary of per-ticker polling evidence (market_poll_attempts,
+    migration 0011+) over a bounded window. Never prints raw payloads/secrets."""
+    import asyncio
+
+    from sqlalchemy import func, select
+
+    from kalshi_weather.storage.models import MarketPollAttempt
+
+    start_dt = datetime.fromisoformat(start)
+    end_dt = datetime.fromisoformat(end)
+    if end_dt <= start_dt:
+        raise typer.BadParameter("end must be after start")
+    ticker_list = (
+        tuple(t.strip() for t in Path(tickers).read_text().splitlines() if t.strip())
+        if tickers
+        else ()
+    )
+    settings = get_settings()
+
+    async def _run() -> None:
+        async with _open_readonly_session(settings) as session:
+            conds = [
+                MarketPollAttempt.requested_at >= start_dt,
+                MarketPollAttempt.requested_at <= end_dt,
+                MarketPollAttempt.environment == environment,
+            ]
+            if endpoint:
+                conds.append(MarketPollAttempt.endpoint_type == endpoint)
+            if ticker_list:
+                conds.append(MarketPollAttempt.ticker.in_(ticker_list))
+            rows = (
+                await session.execute(
+                    select(
+                        MarketPollAttempt.endpoint_type,
+                        MarketPollAttempt.outcome,
+                        func.count(),
+                    )
+                    .where(*conds)
+                    .group_by(MarketPollAttempt.endpoint_type, MarketPollAttempt.outcome)
+                    .order_by(MarketPollAttempt.endpoint_type, MarketPollAttempt.outcome)
+                )
+            ).all()
+            total = sum(c for _e, _o, c in rows)
+            observed = sum(
+                c
+                for _e, o, c in rows
+                if o in ("succeeded_new_data", "succeeded_unchanged", "succeeded_empty")
+            )
+            typer.echo(f"poll attempts: {total} (environment={environment})")
+            typer.echo(f"direct-observed: {round(100.0 * observed / total, 2) if total else 0.0}%")
+            for e, o, c in rows:
+                typer.echo(f"  {e:16s} {o:22s} {c}")
+            uniq = await session.scalar(
+                select(func.count(func.distinct(MarketPollAttempt.ticker))).where(*conds)
+            )
+            typer.echo(f"unique tickers: {uniq or 0}")
+
+    asyncio.run(_run())
+
+
 @experiment_app.command("h0018")
 def experiment_h0018(
     out_dir: str = typer.Option(

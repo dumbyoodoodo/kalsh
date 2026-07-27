@@ -91,6 +91,15 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
 
+    #: Dedicated forward paper-trading database (NEVER the research database).
+    #: Isolation by construction: simulated fills must not share a database
+    #: with authoritative collected history. SQLite file by default; the
+    #: directory is created on first use.
+    paper_database_url: str = Field(
+        default="sqlite+aiosqlite:///data/paper/paper_trading.db",
+        alias="PAPER_DATABASE_URL",
+    )
+
     kalshi_prod_base_url: str = Field(
         default="https://api.elections.kalshi.com/trade-api/v2",
         alias="KALSHI_PROD_BASE_URL",

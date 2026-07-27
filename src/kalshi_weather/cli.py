@@ -593,6 +593,298 @@ def paper_inspect_availability(
         typer.echo(f"availability artifacts -> {output}")
 
 
+_PAPER_FORWARD_BANNER = (
+    "FORWARD PAPER SKELETON -- SYNTHETIC/MANUAL SIGNALS ONLY. "
+    "No exchange orders. Not strategy performance."
+)
+
+
+@paper_app.command("forward-run")
+def paper_forward_run(
+    tickers: str = typer.Option("", help="Comma-separated tickers (for synthetic sources)."),
+    synthetic_probability: str = typer.Option(
+        "", help="Constant synthetic probability, e.g. 0.55 (source: constant)."
+    ),
+    threshold_offset_cents: int = typer.Option(
+        0, help="Mid+offset deterministic rule (source: threshold_rule; used with --use-rule)."
+    ),
+    use_rule: bool = typer.Option(False, help="Use the deterministic threshold rule source."),
+    signal_file: str = typer.Option("", help="Manual probability-signal JSON file."),
+    intent_file: str = typer.Option("", help="Manual order-intent JSON file."),
+    bankroll_cents: int = typer.Option(10_000, help="Initial paper bankroll (first run only)."),
+    dry_run: bool = typer.Option(False, help="Evaluate and print, but persist nothing."),
+) -> None:
+    """Run ONE forward paper session against live production market data
+    (read-only) with synthetic or manual signals. Writes only to the dedicated
+    paper database. NO exchange order can be created by this command."""
+    import asyncio
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from kalshi_weather.paper import runner as paper_runner
+    from kalshi_weather.paper.signals import (
+        constant_signals,
+        load_intent_file,
+        load_probability_file,
+        threshold_rule_signals,
+    )
+
+    typer.echo(_PAPER_FORWARD_BANNER)
+    settings = get_settings()
+    now = datetime.now(UTC)
+    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+
+    sources = [bool(synthetic_probability), use_rule, bool(signal_file), bool(intent_file)]
+    if sum(sources) != 1:
+        raise typer.BadParameter(
+            "choose exactly one signal source: --synthetic-probability | --use-rule "
+            "| --signal-file | --intent-file"
+        )
+
+    if synthetic_probability:
+        if not ticker_list:
+            raise typer.BadParameter("--tickers is required with --synthetic-probability")
+        signals = constant_signals(
+            tickers=ticker_list, probability=Decimal(synthetic_probability), generated_at=now
+        )
+        source = "constant"
+    elif use_rule:
+        if not ticker_list:
+            raise typer.BadParameter("--tickers is required with --use-rule")
+
+        async def _quotes() -> list[tuple[str, int | None, int | None]]:
+            eng = create_async_engine(settings.database_url)
+            try:
+                factory = async_sessionmaker(eng, expire_on_commit=False)
+                async with factory() as session:
+                    from kalshi_weather.paper.evidence import load_market_evidence
+
+                    ev = await load_market_evidence(session, ticker_list, now=now)
+                    return [
+                        (t, e.yes_bid_cents, e.yes_ask_cents) for t, e in sorted(ev.items())
+                    ]
+            finally:
+                await eng.dispose()
+
+        signals = threshold_rule_signals(
+            quotes=asyncio.run(_quotes()),
+            offset_cents=threshold_offset_cents,
+            generated_at=now,
+        )
+        source = "threshold_rule"
+    elif signal_file:
+        signals = load_probability_file(Path(signal_file))
+        source = "probability_file"
+    else:
+        signals = load_intent_file(Path(intent_file))
+        source = "intent_file"
+
+    if dry_run:
+        typer.echo(f"[dry-run] {len(signals)} signal(s) prepared; nothing persisted")
+        for s in signals:
+            typer.echo(
+                f"  {s.ticker} p={s.probability} side={s.side} v={s.version} "
+                f"hash={s.provenance_hash[:12]}"
+            )
+        return
+
+    run_id, result = asyncio.run(
+        paper_runner.execute_paper_run(
+            research_database_url=settings.database_url,
+            paper_database_url=settings.paper_database_url,
+            signals=signals,
+            signal_source=source,
+            initial_cash_cents=bankroll_cents,
+        )
+    )
+    typer.echo(f"paper run {run_id}: status={result.status}")
+    for k, v in result.summary.items():
+        typer.echo(f"  {k}: {v}")
+
+
+@paper_app.command("forward-status")
+def paper_forward_status() -> None:
+    """Latest forward paper run, kill-switch state, and equity (read-only)."""
+    import asyncio
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from kalshi_weather.paper.store import (
+        PaperPnlSnapshotRow,
+        PaperRun,
+        kill_switch_active,
+        open_paper_db,
+        paper_engine,
+    )
+
+    async def _status() -> None:
+        engine = paper_engine(get_settings().paper_database_url)
+        await open_paper_db(engine)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            kill, reason = await kill_switch_active(session)
+            run = (
+                await session.scalars(
+                    select(PaperRun).order_by(PaperRun.created_at.desc()).limit(1)
+                )
+            ).first()
+            pnl = (
+                await session.scalars(
+                    select(PaperPnlSnapshotRow).order_by(PaperPnlSnapshotRow.id.desc()).limit(1)
+                )
+            ).first()
+            typer.echo(_PAPER_FORWARD_BANNER)
+            typer.echo(f"kill_switch: {'ACTIVE (' + reason + ')' if kill else 'inactive'}")
+            if run is None:
+                typer.echo("no forward paper runs recorded")
+            else:
+                typer.echo(f"latest run: {run.id} at {run.created_at} status={run.status}")
+                typer.echo(f"  summary: {run.summary_json}")
+            if pnl is not None:
+                typer.echo(
+                    f"  equity_at_cost={pnl.equity_at_cost_cents}c cash={pnl.cash_cents}c "
+                    f"fees={pnl.fees_cents}c drawdown={pnl.drawdown_cents}c"
+                )
+        await engine.dispose()
+
+    asyncio.run(_status())
+
+
+@paper_app.command("forward-report")
+def paper_forward_report(
+    date_str: str = typer.Option(..., "--date", help="UTC calendar day, YYYY-MM-DD."),
+) -> None:
+    """Daily forward paper report (synthetic/manual operational testing)."""
+    import asyncio
+    from datetime import date as date_type
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from kalshi_weather.paper.reporting import build_daily_report, render_report
+    from kalshi_weather.paper.store import open_paper_db, paper_engine
+
+    async def _report() -> None:
+        engine = paper_engine(get_settings().paper_database_url)
+        await open_paper_db(engine)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            report = await build_daily_report(session, date_type.fromisoformat(date_str))
+        typer.echo(render_report(report))
+        await engine.dispose()
+
+    asyncio.run(_report())
+
+
+def _paper_control(kind: str, reason: str) -> None:
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from kalshi_weather.paper.store import PaperControl, open_paper_db, paper_engine
+
+    async def _write() -> None:
+        engine = paper_engine(get_settings().paper_database_url)
+        await open_paper_db(engine)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            session.add(PaperControl(kind=kind, reason=reason))
+            await session.commit()
+        await engine.dispose()
+
+    asyncio.run(_write())
+
+
+@paper_app.command("kill")
+def paper_kill(reason: str = typer.Option(..., help="Why the kill switch is engaged.")) -> None:
+    """Engage the forward paper kill switch: subsequent runs are refused until
+    an explicit `paper resume`."""
+    _paper_control("kill", reason)
+    typer.echo(f"kill switch ENGAGED: {reason}")
+
+
+@paper_app.command("resume")
+def paper_resume(
+    reason: str = typer.Option(..., help="Why it is safe to resume (recorded)."),
+) -> None:
+    """Explicitly release the forward paper kill switch (manual act, recorded)."""
+    _paper_control("resume", reason)
+    typer.echo(f"kill switch released: {reason}")
+
+
+@paper_app.command("reconcile")
+def paper_reconcile() -> None:
+    """Rebuild the paper portfolio by replaying the stored cash ledger through
+    the audited accounting and compare with the latest stored snapshot."""
+    import asyncio
+    import json as json_mod
+
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from kalshi_weather.execution.ledger import EntryKind, LedgerEntry, replay
+    from kalshi_weather.paper.store import (
+        PaperPnlSnapshotRow,
+        open_paper_db,
+        paper_engine,
+        stored_ledger_entries,
+    )
+
+    async def _reconcile() -> None:
+        engine = paper_engine(get_settings().paper_database_url)
+        await open_paper_db(engine)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            entries = await stored_ledger_entries(session)
+            snap = (
+                await session.scalars(
+                    select(PaperPnlSnapshotRow).order_by(PaperPnlSnapshotRow.id.desc()).limit(1)
+                )
+            ).first()
+        await engine.dispose()
+        if not entries:
+            typer.echo("reconcile: no ledger entries recorded yet")
+            return
+        ledger_entries = [
+            LedgerEntry(
+                seq=i,
+                at=at,
+                kind=EntryKind(kind),
+                cash_delta_cents=cash_d,
+                reserved_delta_cents=res_d,
+                payload=payload,
+            )
+            for i, (_seq, at, kind, cash_d, res_d, payload) in enumerate(entries)
+        ]
+        portfolio = replay(0, ledger_entries)
+        cost = sum(p.yes_cost_cents + p.no_cost_cents for p in portfolio.positions.values())
+        equity = portfolio.cash_cents + portfolio.reserved_cents + cost
+        typer.echo(
+            f"replayed {len(entries)} entries: cash={portfolio.cash_cents}c "
+            f"reserved={portfolio.reserved_cents}c position_cost={cost}c equity={equity}c "
+            f"fees={portfolio.fees_cents}c"
+        )
+        if snap is None:
+            typer.echo("reconcile: no pnl snapshot to compare against")
+            return
+        checks = {
+            "cash": (portfolio.cash_cents, snap.cash_cents),
+            "reserved": (portfolio.reserved_cents, snap.reserved_cents),
+            "position_cost": (cost, snap.position_cost_cents),
+            "equity_at_cost": (equity, snap.equity_at_cost_cents),
+            "fees": (portfolio.fees_cents, snap.fees_cents),
+        }
+        mismatches = {k: v for k, v in checks.items() if v[0] != v[1]}
+        if mismatches:
+            typer.echo(f"RECONCILE MISMATCH: {json_mod.dumps(mismatches)}")
+            raise typer.Exit(code=1)
+        typer.echo("reconcile OK: replayed ledger matches the stored snapshot exactly")
+
+    asyncio.run(_reconcile())
+
+
 @collector_app.command("inspect-polling-evidence")
 def collector_inspect_polling_evidence(
     start: str = typer.Option(..., help="Start timestamp (ISO 8601, inclusive)."),

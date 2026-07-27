@@ -102,6 +102,8 @@ app.add_typer(ops_app, name="ops")
 ops_app.add_typer(backup_app, name="backup")
 experiment_app = typer.Typer(help="Run formal modeling experiments on frozen canonical datasets.")
 app.add_typer(experiment_app, name="experiment")
+research_app = typer.Typer(help="Generic research-workbench utilities (leakage audit, ledger).")
+app.add_typer(research_app, name="research")
 paper_app = typer.Typer(
     help="SIMULATION ONLY -- deterministic paper-trading/execution simulator (no exchange orders)."
 )
@@ -1067,6 +1069,137 @@ def experiment_readiness(
             f.write(_json.dumps({"as_of": str(now), "state": report.state}) + "\n")
 
     asyncio.run(run())
+
+
+#: Latest-state patterns ALLOWED in research paths, each with its audited
+#: invariant (2026-07-27 lineage audit). Everything else the scan finds in
+#: these modules is a warning to investigate.
+_LEAKAGE_SCAN_MODULES = (
+    "src/kalshi_weather/dataset/asof.py",
+    "src/kalshi_weather/dataset/pit.py",
+    "src/kalshi_weather/dataset/builder.py",
+    "src/kalshi_weather/experiments/decision_grain.py",
+    "src/kalshi_weather/experiments/h0020_readiness.py",
+    "src/kalshi_weather/settlement/labels.py",
+    "src/kalshi_weather/research/splits.py",
+    "src/kalshi_weather/research/benchmark.py",
+)
+_LEAKAGE_SCAN_ALLOWLIST = (
+    # identity fields are environment/time-invariant (ADR 0013); every
+    # snapshot carries the same strike/type, so first-non-null is safe
+    "drop_nulls().first()",
+)
+
+
+@research_app.command("leakage-audit")
+def research_leakage_audit(
+    as_json: bool = typer.Option(False, "--json", help="Emit findings as JSON."),
+    fail_on: str = typer.Option("error", help="Exit nonzero at this severity (error|warning)."),
+    scope: str = typer.Option("all", help="'static', 'production', or 'all'."),
+) -> None:
+    """READ-ONLY research leakage audit: static latest-state pattern scan of
+    the research-critical modules (with the audited allowlist) plus bounded
+    production temporal-invariant sampling. Computes no predictive metric;
+    writes nothing."""
+    from kalshi_weather.research import leakage_lint as ll
+
+    report = ll.LintReport()
+    inspected: dict[str, Any] = {"modules": [], "production_checks": []}
+
+    if scope in ("static", "all"):
+        for rel in _LEAKAGE_SCAN_MODULES:
+            path = Path(rel)
+            if not path.exists():
+                continue
+            inspected["modules"].append(rel)
+            report.extend(
+                ll.scan_latest_state(
+                    path.read_text(), path=rel, allowlist=_LEAKAGE_SCAN_ALLOWLIST
+                )
+            )
+
+    if scope in ("production", "all"):
+        from sqlalchemy import text as _text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        async def prod_checks() -> None:
+            settings = get_settings()
+            engine = create_async_engine(settings.database_url)
+            checks = [
+                (
+                    "forecast_observed_before_issue",
+                    "select count(*) from weather_forecasts "
+                    "where observed_at < issue_time - interval '10 minutes'",
+                    "forecasts ingested before their claimed issuance "
+                    "(clock skew beyond tolerance)",
+                ),
+                (
+                    "poll_completed_before_requested",
+                    "select count(*) from market_poll_attempts "
+                    "where completed_at < requested_at",
+                    "poll attempts completing before they were requested",
+                ),
+                (
+                    "future_timestamps",
+                    "select (select count(*) from orderbook_snapshots "
+                    "where captured_at > now() + interval '5 minutes') + "
+                    "(select count(*) from weather_forecasts "
+                    "where observed_at > now() + interval '5 minutes')",
+                    "rows timestamped in the future",
+                ),
+                (
+                    "result_on_nonterminal_status",
+                    "select count(*) from market_snapshots "
+                    "where result in ('yes','no') and status not in "
+                    "('finalized','determined','settled')",
+                    "terminal results recorded on non-terminal snapshots",
+                ),
+                (
+                    "duplicate_forecast_publications",
+                    "select coalesce(sum(c-1),0) from (select count(*) c "
+                    "from weather_forecasts group by station_id, variable, "
+                    "issue_time, valid_start) x where c > 1",
+                    "duplicate forecast publication rows",
+                ),
+            ]
+            try:
+                async with engine.connect() as conn:
+                    for name, sql, meaning in checks:
+                        n = int((await conn.execute(_text(sql))).scalar() or 0)
+                        inspected["production_checks"].append({"check": name, "count": n})
+                        if n > 0:
+                            report.add(
+                                ll.LintFinding(
+                                    rule_id="P-" + name,
+                                    severity=ll.Severity.WARNING,
+                                    message=f"{n} {meaning}",
+                                    count=n,
+                                )
+                            )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(prod_checks())
+
+    payload = {
+        "scope": scope,
+        "inspected": inspected,
+        **report.to_dict(),
+    }
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"leakage audit ({scope}): {report.verdict()}")
+        typer.echo(f"  modules scanned: {len(inspected['modules'])}")
+        for c in inspected["production_checks"]:
+            typer.echo(f"  [prod] {c['check']}: {c['count']}")
+        for f in report.findings:
+            typer.echo(f"  [{f.severity.value.upper()}] {f.rule_id}: {f.message}")
+        if not report.findings:
+            typer.echo("  no findings")
+    threshold = ll.Severity.ERROR if fail_on == "error" else ll.Severity.WARNING
+    if report.verdict(fail_on=threshold) == "FAIL":
+        raise typer.Exit(code=1)
 
 
 def _experiment_readiness_h0020(log_path: str | None) -> None:

@@ -44,6 +44,11 @@ MONITOR_OUT_LOG="${LOG_DIR}/monitor.out.log"
 MONITOR_ERR_LOG="${LOG_DIR}/monitor.err.log"
 MONITOR_STATE_PATH="${LOG_DIR}/monitor_state.json"
 MONITOR_HISTORY_PATH="${LOG_DIR}/alert_history.jsonl"
+# Kalshi recovery watch (ops recovery-watch): runs inside the SAME monitor
+# cycle (no separate launchd agent) -- state/history alongside the monitor's,
+# matching where the watch already persisted them when run manually.
+RECOVERY_WATCH_STATE_PATH="${LOG_DIR}/recovery_watch_state.json"
+RECOVERY_WATCH_HISTORY_PATH="${LOG_DIR}/recovery_watch_history.jsonl"
 # How often launchd fires the monitor, in seconds. Override with
 # MONITOR_INTERVAL_SECONDS (environment wins over .env); 900s (15 min) is
 # the default the monitoring runbook documents.

@@ -2275,7 +2275,10 @@ def ops_recovery_watch(
     """Kalshi outage/recovery watch for the pending paper-fill validation.
     Read-only against research + paper data; unauthenticated reachability
     probe only; exactly-once notifications per state transition. NEVER runs
-    the paper validation itself -- human approval remains required."""
+    the paper validation itself -- human approval remains required. A
+    non-blocking lock (<state-path>.lock, the `ops monitor` mechanism)
+    makes an overlapping invocation skip cleanly -- a skip is logged, never
+    treated as a state transition."""
     import subprocess as sp
 
     import httpx
@@ -2284,6 +2287,11 @@ def ops_recovery_watch(
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from kalshi_weather.ops import recovery_watch as rw
+
+    lock_handle = monitor.try_acquire_lock(Path(f"{state_path}.lock"))
+    if lock_handle is None:
+        typer.echo("another `ops recovery-watch` run is still in progress; skipping this cycle")
+        return
 
     async def run() -> None:
         settings = get_settings()
@@ -2501,7 +2509,10 @@ def ops_recovery_watch(
             typer.echo(f"  paper_validation_ready: {payload['paper_validation_ready']}")
             typer.echo(f"  notified: {delivered} detail={detail!r}")
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        lock_handle.close()
 
 
 @ops_app.command("heartbeat")

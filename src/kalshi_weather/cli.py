@@ -915,6 +915,198 @@ def paper_reconcile() -> None:
     asyncio.run(_reconcile())
 
 
+@paper_app.command("closeout")
+def paper_closeout(
+    ticker: str = typer.Option(..., "--ticker", help="Exact paper-position ticker."),
+    as_of: str = typer.Option("", help="ISO UTC as-of (default: now)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the closeout report as JSON."),
+    no_write: bool = typer.Option(False, help="Never write the archival artifact."),
+    fail_on_not_ready: bool = typer.Option(False, help="Exit nonzero if NOT_READY."),
+    output: str = typer.Option("", "--output", help="Artifact path (only written if COMPLETE)."),
+) -> None:
+    """READ-ONLY post-settlement closeout for one live paper-validation episode.
+
+    Verifies lineage, original fill accounting, authoritative terminal
+    settlement, exactly-once payout, final realized P&L, reconciliation, and
+    correction consistency. It NEVER settles a position, moves money, submits
+    an exchange order, or touches an experiment. If the position has not
+    settled authoritatively it reports NOT_READY and writes nothing."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+
+    from sqlalchemy import select as _select
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import async_sessionmaker as _asm
+
+    from kalshi_weather.execution.ledger import EntryKind, LedgerEntry, replay
+    from kalshi_weather.paper import closeout as co
+    from kalshi_weather.paper.store import (
+        PaperFillRow,
+        PaperMarketSnapshotRow,
+        PaperOrderIntentRow,
+        PaperPnlSnapshotRow,
+        PaperPositionRow,
+        PaperSettlementRow,
+        PaperSignalRow,
+        open_paper_db,
+        paper_engine,
+        stored_ledger_entries,
+    )
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_utc)
+    settings = get_settings()
+
+    holder: dict[str, Any] = {}
+
+    async def load() -> None:
+        eng = paper_engine(settings.paper_database_url)
+        await open_paper_db(eng)
+        factory = _asm(eng, expire_on_commit=False)
+        async with factory() as ps:
+            def by_ticker(model: Any) -> Any:
+                return _select(model).where(model.ticker == ticker)
+
+            signals = (await ps.scalars(by_ticker(PaperSignalRow))).all()
+            intents = (await ps.scalars(by_ticker(PaperOrderIntentRow))).all()
+            fills = (await ps.scalars(by_ticker(PaperFillRow))).all()
+            evidence = (await ps.scalars(by_ticker(PaperMarketSnapshotRow))).all()
+            positions = (await ps.scalars(by_ticker(PaperPositionRow))).all()
+            settlements = (await ps.scalars(by_ticker(PaperSettlementRow))).all()
+            entries = await stored_ledger_entries(ps)
+            pnl = (
+                await ps.scalars(
+                    _select(PaperPnlSnapshotRow).order_by(PaperPnlSnapshotRow.id.desc()).limit(1)
+                )
+            ).first()
+        await eng.dispose()
+
+        led = [
+            LedgerEntry(seq=i, at=at, kind=EntryKind(kind), cash_delta_cents=cd,
+                        reserved_delta_cents=rd, payload=pl)
+            for i, (_s, at, kind, cd, rd, pl) in enumerate(entries)
+        ]
+        pf = replay(0, led)
+        cost = sum(p.yes_cost_cents + p.no_cost_cents for p in pf.positions.values())
+        equity = pf.cash_cents + pf.reserved_cents + cost
+        replayed = co.AccountLite(
+            cash_cents=pf.cash_cents, reserved_cents=pf.reserved_cents,
+            position_cost_cents=cost, equity_at_cost_cents=equity,
+            realized_pnl_cents=equity - pf.total_deposits_cents, fees_cents=pf.fees_cents,
+        )
+        stored = (
+            co.AccountLite(
+                cash_cents=pnl.cash_cents, reserved_cents=pnl.reserved_cents,
+                position_cost_cents=pnl.position_cost_cents,
+                equity_at_cost_cents=pnl.equity_at_cost_cents,
+                realized_pnl_cents=pnl.realized_pnl_cents, fees_cents=pnl.fees_cents,
+            )
+            if pnl is not None
+            else None
+        )
+        reconcile_ok = stored is not None and (
+            replayed.cash_cents == stored.cash_cents
+            and replayed.reserved_cents == stored.reserved_cents
+            and replayed.position_cost_cents == stored.position_cost_cents
+            and replayed.fees_cents == stored.fees_cents
+        )
+
+        # Authoritative terminal evidence from the production market snapshots.
+        async with _open_session(settings) as session:
+            rows = (
+                await session.execute(
+                    _text(
+                        "select id, status, result, settlement_ts from market_snapshots "
+                        "where market_ticker=:t order by id desc limit 40"
+                    ),
+                    {"t": ticker},
+                )
+            ).all()
+        latest = rows[0] if rows else None
+        later_results = tuple(
+            r.result for r in rows if r.result in ("yes", "no")
+        )
+        terminal = co.TerminalEvidence(
+            status=latest.status if latest else None,
+            result=(latest.result if latest and latest.result in ("yes", "no") else ""),
+            settlement_ts=latest.settlement_ts if latest else None,
+            later_results=later_results,
+            later_settlement_ts=tuple(
+                r.settlement_ts.isoformat() for r in rows if r.settlement_ts is not None
+            ),
+            snapshot_ids=tuple(r.id for r in rows[:5]),
+        )
+
+        pos = positions[-1] if positions else None
+        inp = co.CloseoutInputs(
+            ticker=ticker,
+            signals=tuple(
+                co.SignalLite(s.provenance_hash, s.version, s.side, s.source_type, s.accepted)
+                for s in signals
+            ),
+            intents=tuple(
+                co.IntentLite(i.order_id, i.side, i.quantity, i.limit_price_cents,
+                              i.final_state, i.execution_confidence, i.signal_provenance)
+                for i in intents
+            ),
+            fills=tuple(
+                co.FillLite(f.order_id, f.side, f.quantity, f.price_cents, f.fee_cents,
+                            f.liquidity, f.book_source_ref)
+                for f in fills
+            ),
+            evidence=tuple(
+                co.EvidenceLite(e.snapshot_source_id, e.book_source_id, e.poll_evidence_at,
+                                e.market_status)
+                for e in evidence
+            ),
+            position=co.PositionLite(
+                pos.ticker, pos.yes_qty, pos.no_qty, pos.yes_cost_cents, pos.no_cost_cents,
+                pos.realized_pnl_cents, pos.fees_cents,
+            ) if pos else None,
+            settlements=tuple(
+                co.SettlementLite(s.status, s.result, s.settlement_ts, s.gross_payout_cents,
+                                  s.position_cost_cents, s.realized_pnl_delta_cents, s.fee_cents,
+                                  s.supersedes_id)
+                for s in settlements
+            ),
+            replayed_account=replayed,
+            stored_account=stored,
+            terminal=terminal,
+            ledger=tuple(
+                co.LedgerEntryLite(seq, kind, cd, rd)
+                for (seq, _at, kind, cd, rd, _pl) in entries
+            ),
+            reconcile_ok=reconcile_ok,
+            as_of=now,
+        )
+        holder["report"] = co.evaluate_closeout(inp)
+
+    asyncio.run(load())
+    report = holder["report"]
+    payload = report.to_dict()
+
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo("OPERATIONAL VALIDATION ONLY — NOT A TRADING RESULT")
+        typer.echo(f"paper closeout {ticker} as of {now.isoformat()}: {report.state.value}")
+        for c in report.checks:
+            typer.echo(f"  [{'PASS' if c.ok else 'FAIL'}] {c.name}: {c.detail}")
+        if report.blockers:
+            typer.echo(f"  blockers: {report.blockers}")
+        typer.echo(f"  conclusion: {payload['operational_conclusion']}")
+
+    if report.state is co.CloseoutState.COMPLETE and output and not no_write:
+        _Path(output).parent.mkdir(parents=True, exist_ok=True)
+        _Path(output).write_text(json.dumps(payload, indent=2, default=str) + "\n")
+        typer.echo(f"artifact written: {output}")
+
+    if fail_on_not_ready and report.state is co.CloseoutState.NOT_READY:
+        raise typer.Exit(code=1)
+
+
 @collector_app.command("inspect-polling-evidence")
 def collector_inspect_polling_evidence(
     start: str = typer.Option(..., help="Start timestamp (ISO 8601, inclusive)."),

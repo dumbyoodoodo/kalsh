@@ -1202,6 +1202,181 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
+@research_app.command("book-continuity")
+def research_book_continuity(
+    start: str = typer.Option("", help="ISO UTC lower bound (default: 48h before as-of)."),
+    as_of: str = typer.Option("", help="ISO UTC as-of / upper bound (default: now)."),
+    ticker: str = typer.Option("", help="Restrict to one exact market ticker."),
+    family: str = typer.Option("", help="Restrict to a series-family ticker prefix."),
+    environment: str = typer.Option("production", help="Environment provenance frame."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the full summary as JSON."),
+    sample_limit: int = typer.Option(
+        10, help="Max example intervals echoed per classification (display only)."
+    ),
+) -> None:
+    """READ-ONLY order-book continuity audit: classifies each inter-snapshot
+    interval as confirmed-unchanged / changed / failed-poll / no-evidence /
+    collection-gap / ambiguous / legacy / open, from stored book metadata,
+    the per-ticker poll ledger, and collector-run lineage. Measurement
+    tooling only — reads no prices, levels, outcomes, or results; writes
+    nothing."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.research import book_continuity as bc
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    if now.tzinfo is not None:
+        now = now.astimezone(_utc).replace(tzinfo=None)
+    lower = _dt.fromisoformat(start) if start else now - timedelta(hours=48)
+    if lower.tzinfo is not None:
+        lower = lower.astimezone(_utc).replace(tzinfo=None)
+
+    def _naive(ts: Any) -> Any:
+        return ts.astimezone(_utc).replace(tzinfo=None) if ts.tzinfo is not None else ts
+
+    books: list[bc.BookMeta] = []
+    polls: list[bc.PollMeta] = []
+    runs: list[bc.RunMeta] = []
+    ledger_start: Any = None
+
+    async def load() -> None:
+        nonlocal ledger_start
+        settings = get_settings()
+        engine = create_async_engine(settings.database_url)
+        ticker_sql = " and market_ticker = :ticker" if ticker else ""
+        family_sql = " and market_ticker like :family" if family else ""
+        params: dict[str, Any] = {"lo": lower, "hi": now}
+        if ticker:
+            params["ticker"] = ticker
+        if family:
+            params["family"] = family + "%"
+        try:
+            async with engine.connect() as conn:
+                ledger_start = (
+                    await conn.execute(
+                        _text("select min(requested_at) from market_poll_attempts")
+                    )
+                ).scalar()
+                rows = await conn.execute(
+                    _text(
+                        "select market_ticker, id, captured_at, content_hash, "
+                        "environment from orderbook_snapshots "
+                        "where captured_at >= :lo and captured_at <= :hi"
+                        + ticker_sql
+                        + family_sql
+                    ),
+                    params,
+                )
+                for r in rows:
+                    books.append(
+                        bc.BookMeta(
+                            ticker=r.market_ticker,
+                            snapshot_id=r.id,
+                            captured_at=_naive(r.captured_at),
+                            content_hash=r.content_hash,
+                            environment=r.environment,
+                        )
+                    )
+                p_ticker_sql = (" and ticker = :ticker" if ticker else "") + (
+                    " and ticker like :family" if family else ""
+                )
+                rows = await conn.execute(
+                    _text(
+                        "select ticker, requested_at, completed_at, outcome, "
+                        "environment, collector_run_id, deduplicated, "
+                        "persisted_row_count, raw_payload_id "
+                        "from market_poll_attempts "
+                        "where endpoint_type = 'orderbook' "
+                        "and completed_at >= :lo and completed_at <= :hi" + p_ticker_sql
+                    ),
+                    params,
+                )
+                for r in rows:
+                    polls.append(
+                        bc.PollMeta(
+                            ticker=r.ticker,
+                            requested_at=_naive(r.requested_at),
+                            completed_at=_naive(r.completed_at),
+                            outcome=r.outcome,
+                            environment=r.environment,
+                            collector_run_id=r.collector_run_id,
+                            deduplicated=r.deduplicated,
+                            persisted_row_count=r.persisted_row_count,
+                            raw_payload_id=r.raw_payload_id,
+                        )
+                    )
+                rows = await conn.execute(
+                    _text(
+                        "select id, started_at, finished_at, success from collector_runs "
+                        "where collector = 'kalshi' "
+                        "and finished_at >= :lo and started_at <= :hi"
+                    ),
+                    {"lo": lower, "hi": now},
+                )
+                for r in rows:
+                    runs.append(
+                        bc.RunMeta(
+                            run_id=r.id,
+                            started_at=_naive(r.started_at),
+                            finished_at=_naive(r.finished_at),
+                            success=r.success,
+                        )
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(load())
+    if ledger_start is None:
+        typer.echo("no poll-ledger rows exist; nothing classifiable")
+        raise typer.Exit(code=1)
+    config = bc.ContinuityConfig(
+        as_of=now, poll_ledger_start=_naive(ledger_start), environment=environment
+    )
+    report = bc.classify_intervals(books, polls, runs, config)
+    summary = report.summary()
+    payload = {
+        "window": {"start": lower.isoformat(), "as_of": now.isoformat()},
+        "environment_frame": environment,
+        "poll_ledger_start": _naive(ledger_start).isoformat(),
+        **summary,
+    }
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+        return
+    typer.echo(
+        f"book continuity {lower.isoformat()} -> {now.isoformat()} "
+        f"(env={environment}, poll ledger from {payload['poll_ledger_start']})"
+    )
+    typer.echo(
+        f"  intervals={summary['intervals']} tickers={summary['tickers']} "
+        f"classified_ratio={summary['classified_ratio']}"
+    )
+    for cls, v in summary["by_classification"].items():
+        typer.echo(f"  {cls}: n={v['count']} hours={v['seconds'] / 3600:.1f}")
+    typer.echo(f"  confidence: {summary['by_confidence']}")
+    shown = 0
+    for iv in report.intervals:
+        if shown >= sample_limit:
+            break
+        if iv.classification in (
+            bc.IntervalClass.AMBIGUOUS_PROVENANCE,
+            bc.IntervalClass.COLLECTION_GAP,
+        ):
+            typer.echo(
+                f"    example {iv.classification.value}: {iv.ticker} "
+                f"{iv.start.isoformat()} +{iv.elapsed_seconds:.0f}s ({iv.reason_code})"
+            )
+            shown += 1
+    for v in summary["invariant_violations"]:
+        typer.echo(f"  [VIOLATION] {v['check']}: {v['detail']}")
+    if not summary["invariant_violations"]:
+        typer.echo("  invariants: all clean")
+
+
 exploratory_app = typer.Typer(help="Clearly-labeled exploratory analyses (never confirmatory).")
 research_app.add_typer(exploratory_app, name="exploratory")
 

@@ -122,6 +122,35 @@ depth (median 9–17 contracts) and participation gaps (10–26% zero-trade
 ticker-days). These are inputs for the eventual cost model (B-01), not
 evidence of edge, profitability, or tradability of any strategy.
 
+## Future measurement input: book-continuity classifier
+
+The stored-book gap measurement above (finding 7) conflates "unchanged
+across polls" with "not polled". A read-only classifier now exists to
+resolve that at the interval level for the next remeasurement:
+`research/book_continuity.py` + `kalshi-weather research book-continuity`.
+It classifies each interval between consecutive stored books for an exact
+ticker, using the per-ticker poll ledger (`market_poll_attempts`,
+prospective from 2026-07-27T02:52:20Z, ADR 0020) and collector-run
+lineage, into: `CHANGED_AFTER_SUCCESSFUL_POLL`,
+`UNCHANGED_CONFIRMED_BY_SUCCESSFUL_POLL` (proof: a successful same-ticker
+order-book poll with outcome `succeeded_unchanged`/`deduplicated=True`
+and matching environment completed inside the interval),
+`FAILED_POLL_INTERVAL`, `NO_DIRECT_POLL_EVIDENCE`, `COLLECTION_GAP`,
+`AMBIGUOUS_PROVENANCE`, `LEGACY_PRE_POLL_LEDGER`, and
+`OPEN_INTERVAL_NOT_YET_CLASSIFIABLE`, each with a confidence level
+(HIGH/MEDIUM/LOW/UNKNOWN) and a stable reason code. It fails closed:
+intervals without proof are never called unchanged, and pre-ledger
+history keeps the original conflation caveat permanently (no synthetic
+backfill).
+
+**Integration contract for the 14-day remeasurement:** replace the
+single "stored-book change gap" distribution with duration decomposed
+into unchanged-confirmed, changed-book, failed-poll, no-evidence,
+collection-gap, and legacy seconds per ticker and in aggregate. The
+numerical findings in this report remain the checked-in as-of
+2026-07-28 baseline and are deliberately NOT restated using the
+classifier.
+
 ## Candidate generation
 
 Outcome: **COLLECT_MORE_DATA — no new hypothesis draft.** The measured

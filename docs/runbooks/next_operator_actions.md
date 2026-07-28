@@ -4,6 +4,39 @@ Written 2026-07-27 at `bc9a4bc`. Covers exactly: (A) Kalshi recovery →
 one-contract paper-fill validation, (B) H0019 final-test readiness after
 2026-08-25, (C) H0020 readiness through 2026-09-22 / 2026-10-06.
 
+## Start here: `ops status`
+
+```
+uv run kalshi-weather ops status            # full dashboard
+uv run kalshi-weather ops status --compact   # fast (skips observatory)
+uv run kalshi-weather ops status --json       # machine-readable
+uv run kalshi-weather ops status --section paper
+```
+
+One **read-only** command that summarizes every pending checkpoint — paper
+settlement, SEA/PHX/MIA pilot, E0002 remeasurement, H0012r/H0019/H0020
+readiness, backups, restore-drill, collector, recovery-watch, storage,
+observatory — with, per area: state, blocker, earliest permitted timestamp,
+the exact command, and whether human approval is required. It executes
+nothing: no experiment, no settlement, no service restart, no exchange call,
+no production write. Run it first, whenever you sit down, before any action.
+
+**Interpreting states** (urgency order): `ACTION_REQUIRED` (integrity/kill
+switch — stop and investigate) → `READY_FOR_HUMAN_APPROVAL` → `WAITING_FOR_EVIDENCE`
+→ `WAITING_FOR_TIME` → `COLLECTING` → `HEALTHY`/`COMPLETE`; `BLOCKED` (final,
+e.g. deferred / reserved-window) and `NOT_APPLICABLE` (status not readable this
+run — run that area's own command) sit outside the flow. The header prints the
+overall posture, the single next recommended action, and the standing
+forbidden-action list.
+
+**Two things `ops status` never means.** `READY_FOR_HUMAN_APPROVAL` is *not*
+authorization — it means the time/structural gates are clear and a human may
+now decide; every execution still needs the area's full gate sequence + explicit
+approval. And scientific *readiness is never scientific support* — the research
+rows pass through a counts-only readiness *state* only; the dashboard computes
+and shows no Brier score, calibration, P&L, or any H0019/H0020 outcome. The
+authoritative counts live behind each `experiment readiness` command.
+
 ## Safety invariants (read first — they override everything below)
 
 - **NO exchange order may ever be submitted** (live or demo).

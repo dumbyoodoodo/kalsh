@@ -3160,6 +3160,418 @@ def ops_health(
     asyncio.run(run())
 
 
+@ops_app.command("status")
+def ops_status(
+    as_of: str = typer.Option("", help="ISO UTC clock to inject (default: now)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the dashboard as JSON."),
+    section: str = typer.Option("", help="Show only one checkpoint area (e.g. paper)."),
+    fail_on_action_required: bool = typer.Option(
+        False, help="Exit nonzero if any checkpoint is ACTION_REQUIRED."
+    ),
+    no_network: bool = typer.Option(False, help="Skip any check that would touch the network."),
+    compact: bool = typer.Option(False, help="Terse output; skip the heavier observatory build."),
+) -> None:
+    """READ-ONLY unified operator status. Summarizes every pending research
+    and ops checkpoint -- what is healthy, time-blocked, evidence-blocked,
+    the next permitted action, and what must not be run early. Executes NO
+    experiment, settlement, service, or exchange call and writes nothing.
+    Research checkpoints pass through their counts-only readiness *state*
+    only; no performance metric or H0019/H0020 outcome is computed."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+
+    from kalshi_weather.ops import operator_status as ost
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_utc)
+    settings = get_settings()
+
+    checkpoints: list[ost.Checkpoint] = []
+
+    # --- paper (production DB read + paper DB reconcile) --------------------
+    paper_reconcile_ok = True
+    paper_kill = False
+    paper_open = False
+    paper_terminal = False
+    paper_close: datetime | None = None
+    paper_ticker = ""
+    try:
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker as _asm
+
+        from kalshi_weather.execution.ledger import EntryKind, LedgerEntry, replay
+        from kalshi_weather.paper.store import (
+            PaperPnlSnapshotRow,
+            PaperPositionRow,
+            kill_switch_active,
+            open_paper_db,
+            paper_engine,
+            stored_ledger_entries,
+        )
+
+        async def _paper() -> None:
+            nonlocal paper_reconcile_ok, paper_kill, paper_open, paper_terminal
+            nonlocal paper_close, paper_ticker
+            eng = paper_engine(settings.paper_database_url)
+            await open_paper_db(eng)
+            factory = _asm(eng, expire_on_commit=False)
+            async with factory() as ps:
+                entries = await stored_ledger_entries(ps)
+                snap = (
+                    await ps.scalars(
+                        select(PaperPnlSnapshotRow).order_by(PaperPnlSnapshotRow.id.desc()).limit(1)
+                    )
+                ).first()
+                paper_kill = (await kill_switch_active(ps))[0]
+                last_run = (
+                    await ps.scalars(
+                        select(PaperPositionRow.run_id).order_by(PaperPositionRow.id.desc()).limit(1)
+                    )
+                ).first()
+                positions = (
+                    (
+                        await ps.scalars(
+                            select(PaperPositionRow).where(PaperPositionRow.run_id == last_run)
+                        )
+                    ).all()
+                    if last_run
+                    else []
+                )
+            await eng.dispose()
+            open_pos = [p for p in positions if p.yes_qty or p.no_qty]
+            paper_open = bool(open_pos)
+            if entries and snap is not None:
+                led = [
+                    LedgerEntry(
+                        seq=i, at=at, kind=EntryKind(kind),
+                        cash_delta_cents=cash_d, reserved_delta_cents=res_d, payload=payload,
+                    )
+                    for i, (_s, at, kind, cash_d, res_d, payload) in enumerate(entries)
+                ]
+                pf = replay(0, led)
+                cost = sum(p.yes_cost_cents + p.no_cost_cents for p in pf.positions.values())
+                paper_reconcile_ok = (
+                    pf.cash_cents == snap.cash_cents
+                    and pf.reserved_cents == snap.reserved_cents
+                    and cost == snap.position_cost_cents
+                    and pf.fees_cents == snap.fees_cents
+                )
+            if open_pos:
+                paper_ticker = open_pos[0].ticker
+                async with _open_session(settings) as session:
+                    row = (
+                        await session.execute(
+                            _text(
+                                "select status, result, settlement_ts, close_time "
+                                "from market_snapshots where market_ticker=:t "
+                                "order by id desc limit 1"
+                            ),
+                            {"t": paper_ticker},
+                        )
+                    ).first()
+                if row is not None:
+                    paper_terminal = (row.result in ("yes", "no")) and (
+                        row.settlement_ts is not None
+                        and str(row.status).lower() in ("finalized", "determined", "settled")
+                    )
+                    paper_close = row.close_time
+
+        asyncio.run(_paper())
+        checkpoints.append(
+            ost.classify_paper(
+                has_open_position=paper_open,
+                terminal_result_available=paper_terminal,
+                reconcile_ok=paper_reconcile_ok,
+                kill_switch_active=paper_kill,
+                close_time=paper_close,
+                now=now,
+            )
+        )
+    except Exception as exc:
+        checkpoints.append(
+            ost.classify_operational(
+                "paper", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
+                evidence="paper store", command="uv run kalshi-weather paper reconcile",
+                unavailable=True,
+            )
+        )
+
+    # --- station pilot (pure time gate) ------------------------------------
+    from kalshi_weather.ops.station_pilot_review import (
+        PILOT_INTEGRITY_ISSUE,
+        PILOT_REVIEW_READY,
+        review_window,
+    )
+
+    rw = review_window(now)
+    checkpoints.append(
+        ost.classify_station_pilot(
+            review_ready=(rw.state == PILOT_REVIEW_READY),
+            integrity_ok=(rw.state != PILOT_INTEGRITY_ISSUE),
+            earliest=rw.review_ready_at,
+            now=now,
+        )
+    )
+
+    # --- E0002 fourteen-day remeasurement (complete production days) --------
+    try:
+        prod_days = 0
+
+        async def _e0002() -> None:
+            nonlocal prod_days
+            async with _open_session(settings) as session:
+                row = (
+                    await session.execute(
+                        _text(
+                            "select count(*) from (select date(captured_at) d "
+                            "from orderbook_snapshots where environment='production' "
+                            "and captured_at < date_trunc('day', cast(:now as timestamp)) "
+                            "group by 1) x"
+                        ),
+                        {"now": now.replace(tzinfo=None)},
+                    )
+                ).first()
+                prod_days = int(row[0]) if row else 0
+
+        asyncio.run(_e0002())
+        checkpoints.append(
+            ost.classify_e0002(
+                complete_production_days=prod_days, required_days=14, now=now,
+                earliest=ost.E0002_REMEASURE_BOUNDARY,
+            )
+        )
+    except Exception as exc:
+        checkpoints.append(
+            ost.classify_operational(
+                "e0002", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
+                evidence="orderbook_snapshots",
+                command="uv run kalshi-weather research exploratory e0002", unavailable=True,
+            )
+        )
+
+    # --- research readiness passthrough (calendar-derived state labels) -----
+    # Pre-boundary the calendar binds regardless of counts; the authoritative
+    # counts-only detail lives behind each `experiment readiness` command.
+    def _h0020_stage(d: date) -> str:
+        if d < date(2026, 8, 12):
+            return "COLLECTING_TRAIN"
+        if d < date(2026, 8, 26):
+            return "EXCLUDED_GAP"
+        if d < date(2026, 9, 9):
+            return "COLLECTING_VALIDATION"
+        return "COLLECTING_TEST"
+
+    checkpoints.append(ost.classify_h0012r(readiness_state="CALENDAR_GATED", now=now))
+    checkpoints.append(ost.classify_h0019(readiness_state="NOT_READY", now=now))
+    checkpoints.append(ost.classify_h0020(readiness_state=_h0020_stage(now.date()), now=now))
+
+    # --- operational health (persisted state files; no network) ------------
+    try:
+        coll_healthy = True
+        coll_msg = "recent successful cycle"
+
+        async def _coll() -> None:
+            nonlocal coll_healthy, coll_msg
+            async with _open_session(settings) as session:
+                row = (
+                    await session.execute(
+                        _text(
+                            "select success, finished_at from collector_runs "
+                            "where collector='kalshi' order by id desc limit 1"
+                        )
+                    )
+                ).first()
+            if row is None:
+                coll_healthy, coll_msg = False, "no collector runs recorded"
+                return
+            age = (now.replace(tzinfo=None) - row.finished_at).total_seconds()
+            coll_healthy = bool(row.success) and age < 3600
+            coll_msg = f"last cycle {'ok' if row.success else 'FAILED'}, {int(age)}s ago"
+
+        asyncio.run(_coll())
+    except Exception as exc:
+        coll_healthy, coll_msg = None, f"unavailable: {type(exc).__name__}"
+    checkpoints.append(
+        ost.classify_operational(
+            "collector", healthy=coll_healthy, detail_msg=coll_msg,
+            evidence="collector_runs", command="uv run kalshi-weather ops health",
+        )
+    )
+
+    # backups (persisted status file)
+    try:
+        bstatus = backup.read_backup_status(_backup_dir(settings) / backup.STATUS_FILENAME)
+        b_healthy = bool(bstatus and bstatus.local_outcome == "success")
+        b_msg = (
+            f"local {bstatus.local_outcome}, remote {bstatus.remote_outcome}"
+            if bstatus
+            else "no backup recorded"
+        )
+    except Exception as exc:
+        b_healthy, b_msg = None, f"unavailable: {type(exc).__name__}"
+    checkpoints.append(
+        ost.classify_operational(
+            "backups", healthy=b_healthy, detail_msg=b_msg, evidence="last_backup_status.json",
+            command="uv run kalshi-weather backup status",
+        )
+    )
+
+    # restore drill (persisted state file)
+    try:
+        from kalshi_weather.ops.restore_drill import STATE_FILENAME, read_drill_state
+
+        dstate = read_drill_state(_backup_dir(settings) / STATE_FILENAME)
+        d_healthy = bool(dstate and str(dstate.get("status", "")).lower() == "success")
+        d_msg = f"last drill {dstate.get('status') if dstate else 'never run'}"
+    except Exception as exc:
+        d_healthy, d_msg = None, f"unavailable: {type(exc).__name__}"
+    checkpoints.append(
+        ost.classify_operational(
+            "restore_drill", healthy=d_healthy, detail_msg=d_msg,
+            evidence="restore_drill_state.json",
+            command="uv run kalshi-weather ops restore-drill",
+            unavailable=no_network and d_healthy is None,
+        )
+    )
+
+    # recovery watch (persisted state file)
+    try:
+        from pathlib import Path as _P
+
+        from kalshi_weather.ops.recovery_watch import WatchState, load_watch_state
+
+        wpath = _P.home() / "Library/Logs/kalshi-weather" / "recovery_watch_state.json"
+        wrec = load_watch_state(wpath)
+        wstate = str(wrec.state) if wrec else None
+        if wstate is None:
+            rc_healthy, rc_msg = None, "no recovery-watch state recorded"
+        elif wstate == WatchState.OUTAGE_ACTIVE.value:
+            rc_healthy, rc_msg = False, "upstream outage active"
+        else:
+            rc_healthy, rc_msg = True, f"watch state {wstate}"
+    except Exception as exc:
+        rc_healthy, rc_msg = None, f"unavailable: {type(exc).__name__}"
+    checkpoints.append(
+        ost.classify_operational(
+            "recovery_watch", healthy=rc_healthy, detail_msg=rc_msg,
+            evidence="recovery_watch_state.json",
+            command="uv run kalshi-weather ops recovery-watch --no-notify",
+        )
+    )
+
+    # storage (DB reachable + backup dir present)
+    storage_ok = coll_healthy is not None
+    checkpoints.append(
+        ost.classify_operational(
+            "storage", healthy=storage_ok, detail_msg="database reachable",
+            evidence="database + backup dir", command="uv run kalshi-weather ops health",
+        )
+    )
+
+    # observatory (DB-only; skip under --compact)
+    if compact:
+        checkpoints.append(
+            ost.classify_operational(
+                "observatory", healthy=None, detail_msg="skipped (--compact)",
+                evidence="observatory report", command="uv run kalshi-weather ops observatory",
+                unavailable=True,
+            )
+        )
+    else:
+        try:
+            obs_sev = "INFO"
+
+            async def _obs() -> None:
+                nonlocal obs_sev
+                async with _open_session(settings) as session:
+                    report = await build_observatory_report(
+                        session,
+                        ObservatoryConfig(
+                            kalshi_interval_seconds=settings.collector_interval_seconds,
+                            weather_interval_seconds=settings.weather_interval_seconds,
+                            price_sync_interval_seconds=settings.price_sync_interval_seconds,
+                            stale_after_intervals=settings.ops_stale_after_intervals,
+                            cadence_run_window_hours=settings.cadence_run_window_hours,
+                            backup_health=_backup_health_config(settings),
+                        ),
+                    )
+                obs_sev = report.status.value.upper()
+
+            asyncio.run(_obs())
+            obs_healthy = obs_sev != "CRITICAL"
+            checkpoints.append(
+                ost.classify_operational(
+                    "observatory", healthy=obs_healthy, detail_msg=f"severity {obs_sev}",
+                    evidence="observatory report",
+                    command="uv run kalshi-weather ops observatory",
+                )
+            )
+        except Exception as exc:
+            checkpoints.append(
+                ost.classify_operational(
+                    "observatory", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
+                    evidence="observatory report",
+                    command="uv run kalshi-weather ops observatory", unavailable=True,
+                )
+            )
+
+    import subprocess as _sp
+
+    try:
+        commit = _sp.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        ).stdout.strip() or "unknown"
+    except Exception:
+        commit = "unknown"
+    dash = ost.Dashboard(generated_at=now, git_commit=commit, checkpoints=checkpoints)
+    payload = dash.to_dict()
+
+    if section:
+        payload = {
+            "banners": payload["banners"],
+            "generated_at": payload["generated_at"],
+            section: payload.get(section),
+        }
+
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        for b in ost.BANNERS:
+            typer.echo(f"*** {b} ***")
+        typer.echo(f"generated_at: {payload['generated_at']}  commit: {commit}")
+        typer.echo(f"OVERALL: {payload['overall_state']}")
+        nxt = payload["next_action"]
+        typer.echo(f"NEXT: {nxt['area']} — {nxt['action']}" if nxt else "NEXT: nothing actionable")
+        typer.echo("")
+        typer.echo(f"{'AREA':14s} {'STATE':26s} {'APPR':5s} BLOCKER / EARLIEST")
+        rows = dash.ordered()
+        if section:
+            rows = [c for c in rows if c.area == section]
+        for c in rows:
+            appr = "yes" if c.approval_required else "no"
+            earliest = f"  [earliest {c.earliest_ts}]" if c.earliest_ts else ""
+            typer.echo(f"{c.area:14s} {c.state.value:26s} {appr:5s} {c.blocker}{earliest}")
+            if not compact:
+                typer.echo(f"{'':14s} → {c.next_action}")
+                typer.echo(f"{'':14s}   cmd: {c.command}")
+        typer.echo("")
+        typer.echo("FORBIDDEN NOW:")
+        for f in ost.FORBIDDEN_ACTIONS:
+            typer.echo(f"  - {f}")
+        warnings = [c.area for c in checkpoints if c.state is ost.CheckpointState.NOT_APPLICABLE]
+        if warnings:
+            typer.echo(f"unresolved/unavailable: {', '.join(warnings)}")
+
+    if fail_on_action_required and any(
+        c.state is ost.CheckpointState.ACTION_REQUIRED for c in checkpoints
+    ):
+        raise typer.Exit(code=1)
+
+
 @ops_app.command("observatory")
 def ops_observatory(
     as_json: bool = typer.Option(False, "--json", help="Emit the full report as JSON."),

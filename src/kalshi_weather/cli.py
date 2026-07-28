@@ -3877,7 +3877,10 @@ def ops_recovery_watch(
             kill_switch_inactive=not kill,
             reconcile_ok=reconcile_ok,
         )
-        state, reasons = rw.classify(inputs)
+        # Recovery-HEALTH uses cadence-aware thresholds (DQ-002), independent
+        # of the strict 300s paper-execution fill gate shown below.
+        recovery_policy = rw.RecoveryHealthPolicy()
+        state, reasons = rw.classify(inputs, recovery_policy)
         prior = rw.load_watch_state(Path(state_path))
         decision = rw.decide_notification(state, reasons, inputs, prior, now=now)
 
@@ -3908,10 +3911,13 @@ def ops_recovery_watch(
             detail=detail,
         )
 
+        # Paper-EXECUTION fill gates (strict 300s book) -- unchanged; shown so
+        # the operator sees whether a fill would pass RIGHT NOW. Distinct from
+        # the recovery-HEALTH state, which uses the cadence-aware thresholds.
         from kalshi_weather.paper.engine import PaperRiskPolicy as _PRP
 
         thresholds = _PRP()
-        gates = {
+        paper_fill_gates = {
             "api_reachable": api_reachable,
             f"success_run_age<={thresholds.max_snapshot_age_seconds}s": (
                 inputs.success_run_age_seconds is not None
@@ -3930,6 +3936,21 @@ def ops_recovery_watch(
             "kill_switch_inactive": not kill,
             "paper_reconcile_ok": reconcile_ok,
         }
+        recovery_health_gates = {
+            f"book_age<={recovery_policy.max_book_age_seconds}s": (
+                book_age is not None and book_age <= recovery_policy.max_book_age_seconds
+            ),
+            f"snapshot_age<={recovery_policy.max_snapshot_age_seconds}s": (
+                snap_age is not None and snap_age <= recovery_policy.max_snapshot_age_seconds
+            ),
+            f"poll_age<={recovery_policy.max_poll_evidence_age_seconds}s": (
+                poll_age is not None and poll_age <= recovery_policy.max_poll_evidence_age_seconds
+            ),
+            f"success_run_age<={recovery_policy.success_stale_seconds}s": (
+                inputs.success_run_age_seconds is not None
+                and inputs.success_run_age_seconds <= recovery_policy.success_stale_seconds
+            ),
+        }
         payload = {
             "state": state.value,
             "reasons": reasons,
@@ -3938,13 +3959,15 @@ def ops_recovery_watch(
             "detail": detail,
             "outage_started_at": decision.new_state.outage_started_at,
             "last_notification_at": decision.new_state.last_notification_at,
+            "ready_pending": decision.new_state.ready_pending,
             "latest_run": {"id": inputs.latest_run_id, "success": inputs.latest_run_success},
             "latest_success_run": {
                 "id": inputs.latest_success_run_id,
                 "age_seconds": inputs.success_run_age_seconds,
             },
             "ages_seconds": {"snapshot": snap_age, "book": book_age, "poll": poll_age},
-            "gates": gates,
+            "recovery_health_gates": recovery_health_gates,
+            "paper_fill_gates": paper_fill_gates,
             "paper_validation_ready": state is rw.WatchState.PAPER_VALIDATION_READY,
         }
         if as_json:
@@ -3958,8 +3981,12 @@ def ops_recovery_watch(
                 f"latest success: {inputs.latest_success_run_id} "
                 f"age={inputs.success_run_age_seconds}"
             )
-            for name, ok in gates.items():
-                typer.echo(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+            typer.echo("  recovery-health gates (cadence-aware):")
+            for name, ok in recovery_health_gates.items():
+                typer.echo(f"    [{'PASS' if ok else 'FAIL'}] {name}")
+            typer.echo("  paper-fill gates (strict 300s; re-checked at run time):")
+            for name, ok in paper_fill_gates.items():
+                typer.echo(f"    [{'PASS' if ok else 'FAIL'}] {name}")
             typer.echo(f"  paper_validation_ready: {payload['paper_validation_ready']}")
             typer.echo(f"  notified: {delivered} detail={detail!r}")
 

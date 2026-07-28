@@ -72,31 +72,38 @@ recovery · has a reproducible code-level cause. Cosmetic/one-off warnings are
 - **Reproduce:** `select ticker, count(*) from market_poll_attempts where
   outcome='malformed_payload' group by 1 order by 2 desc;`
 
-### DQ-002 — Recovery-watch flapping → duplicate Telegram notifications · Priority 2 · CODE · MEDIUM · **DRAFT ONLY**
+### DQ-002 — Recovery-watch flapping → duplicate Telegram notifications · Priority 2 · CODE · MEDIUM · **FIXED**
 
-- **Symptom:** the recovery watch oscillates `RECOVERING ↔
-  PAPER_VALIDATION_READY` every ~15–30 min and delivers a Telegram
-  notification on **every** transition (dedup only suppresses same-state
-  repeats). Alert fatigue; risk of masking a genuine outage alert.
+- **Symptom:** the recovery watch oscillated `RECOVERING ↔
+  PAPER_VALIDATION_READY` every ~15–30 min and delivered a Telegram
+  notification on **every** transition (dedup only suppressed same-state
+  repeats) — 50 transitions / 50 deliveries in ~19h, 44 of them flaps.
 - **Root cause (CONFIRMED):** `PaperRiskPolicy.max_book_age_seconds = 300s`
-  (the paper-**execution** fill gate — intentionally strict) is reused by the
+  (the paper-**execution** fill gate — intentionally strict) was reused by the
   watch as a steady-state health gate, but the collector's inherent cadence is
-  ~555s (throttled over ~4675 tickers). The freshest book is therefore >300s
-  old for most of every cycle, so `stale_book_evidence` fires intermittently.
-- **Minimal safe fix (proposed, not applied):** decouple the watch's health
-  signal from the fill gate — either give the watch a cadence-aware book bound
-  (≥ ~2× cadence, e.g. 1200s) **or** add notification hysteresis/cooldown so a
-  re-entry within a cooldown is not re-alerted. **Do NOT loosen the 300s
-  paper-execution fill gate** (a fill still needs a genuinely fresh book).
-- **Why not applied here:** safety-adjacent alerting semantics; the approach
-  needs operator sign-off; validating that flapping stops wants the running
-  monitor (a restart is out of scope). Unrelated to DQ-001 — not bundled.
-- **Reproduce:** `tail recovery_watch_history.jsonl` and look for alternating
-  `entered_recovering` / `entered_paper_validation_ready` with
-  `"detail":"telegram: delivered"`; compare `max_book_age_seconds` (300)
-  against the median kalshi run cadence (~555s).
+  ~555s (throttled over thousands of tickers). The freshest book is therefore
+  >300s old for most of every cycle, so `stale_book_evidence` fired
+  intermittently.
+- **Fix (applied):** two independent policies. (1) A new
+  `RecoveryHealthPolicy` (cadence-aware, 1200s ≈ 2× cadence) drives the watch
+  HEALTH decision — `classify` no longer reads the paper gate. (2)
+  Episode-scoped notifications (`WatchStateRecord.ready_pending`): one per
+  outage, one per recovery, at most one `PAPER_VALIDATION_READY` per recovery
+  episode; a stale-evidence blip out of a healthy state is silent. The strict
+  **300s paper-execution fill gate is unchanged** — `PAPER_VALIDATION_READY`
+  now means "recovered; run the validation, which re-checks the 300s gate at
+  run time." Legacy state files load safely (missing `ready_pending` → False);
+  malformed state fails closed.
+- **Replay (24h, old vs new):** transitions 23 → **3**; notifications 23 →
+  **3**; RECOVERING flap-ticks 12 → **0**; outage ticks identical (25) — the
+  real outage and recovery are still detected, nothing hidden.
+- **Reproduce:** `tail recovery_watch_history.jsonl`; the `recovery-watch`
+  `--json` output now shows separate `recovery_health_gates` (1200s) and
+  `paper_fill_gates` (300s).
 
 ## Resolved / known-issue history
 
+- 2026-07-28: DQ-002 recovery-watch flapping — fixed (RecoveryHealthPolicy +
+  episode-scoped notifications); paper 300s fill gate unchanged.
 - 2026-07-28: DQ-001 order-book price-0 whole-book rejection — fixed
   (`kalshi/orderbook.py`); deployment pending an approved collector restart.

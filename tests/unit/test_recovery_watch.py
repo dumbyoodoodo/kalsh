@@ -8,8 +8,10 @@ from pathlib import Path
 
 from kalshi_weather.ops.recovery_watch import (
     READY_MESSAGE,
+    RecoveryHealthPolicy,
     WatchInputs,
     WatchState,
+    WatchStateRecord,
     append_watch_history,
     classify,
     decide_notification,
@@ -74,20 +76,52 @@ def test_healthy_when_data_fresh_but_paper_side_fails() -> None:
     assert set(reasons2) == {"collector_count_not_one", "paper_reconcile_failed"}
 
 
-def test_thresholds_come_from_paper_policy() -> None:
-    # a custom policy changes the gate: 100s-old book fails a 50s threshold
-    tight = PaperRiskPolicy(max_book_age_seconds=50.0)
+def test_classify_uses_recovery_policy_not_paper_gate() -> None:
+    # DQ-002: the recovery health decision uses cadence-aware thresholds, NOT
+    # the strict 300s paper-fill gate.
+    p = RecoveryHealthPolicy()
+    assert p.max_book_age_seconds == 1200.0
+    # a custom recovery policy changes the gate: 100s-old book fails a 50s bound
+    tight = RecoveryHealthPolicy(max_book_age_seconds=50.0)
     state, reasons = classify(inputs(), tight)
     assert state is WatchState.RECOVERING and reasons == ["stale_book_evidence"]
-    # and the defaults are literally the paper policy's numbers
-    p = PaperRiskPolicy()
+    # inclusive bounds at the recovery thresholds
     edge = inputs(
         snapshot_age_seconds=p.max_snapshot_age_seconds,
         book_age_seconds=p.max_book_age_seconds,
         poll_evidence_age_seconds=p.max_poll_evidence_age_seconds,
-        success_run_age_seconds=p.max_snapshot_age_seconds,
+        success_run_age_seconds=p.success_stale_seconds,
     )
-    assert classify(edge)[0] is WatchState.PAPER_VALIDATION_READY  # inclusive bounds
+    assert classify(edge)[0] is WatchState.PAPER_VALIDATION_READY
+
+
+def test_paper_fill_gate_unchanged_at_300s() -> None:
+    # The paper-execution book gate is untouched by DQ-002.
+    assert PaperRiskPolicy().max_book_age_seconds == 300.0
+
+
+def test_cadence_555s_book_does_not_flap_state() -> None:
+    # A book aged at ~1x cadence (555s) -- stale for the 300s paper gate but
+    # fresh for recovery health -> READY, not RECOVERING (no flap source).
+    for age in (300.0, 555.0, 800.0, 1000.0, 1200.0):
+        assert classify(inputs(book_age_seconds=age))[0] is WatchState.PAPER_VALIDATION_READY
+    # only a genuine multi-cycle stall (>1200s) degrades
+    assert classify(inputs(book_age_seconds=1300.0))[0] is WatchState.RECOVERING
+
+
+def test_between_cycle_aging_does_not_leave_ready_or_notify() -> None:
+    # READY, then normal between-cycle book aging (up to 1200s): stays READY,
+    # no RECOVERING transition, no notification churn.
+    prior = None
+    notifs = 0
+    for age in (100.0, 600.0, 900.0, 1200.0, 200.0, 700.0):
+        state, reasons = classify(inputs(book_age_seconds=age))
+        d = decide_notification(state, reasons, inputs(book_age_seconds=age), prior, now=NOW)
+        assert state is WatchState.PAPER_VALIDATION_READY
+        if d.should_notify:
+            notifs += 1
+        prior = d.new_state
+    assert notifs == 1  # only the initial cold-start ready notification
 
 
 # --- notification decisions --------------------------------------------------
@@ -155,6 +189,81 @@ def test_regression_and_second_recovery_renotify() -> None:
     )
     assert d_ready2.should_notify  # a genuine new recovery re-notifies
     assert d_ready2.message.startswith(READY_MESSAGE)
+
+
+def test_recovering_blip_from_healthy_is_silent_and_no_renotify() -> None:
+    # A single stale-evidence blip out of a healthy state (NOT an outage) must
+    # not notify, and returning to READY must not re-notify (kills DQ-002 flap).
+    ready_i = inputs()
+    d_ready = decide_notification(*classify(ready_i), ready_i, None, now=NOW)
+    assert d_ready.should_notify  # cold-start ready
+    blip_i = inputs(book_age_seconds=1300.0)  # > 1200s recovery threshold
+    d_blip = decide_notification(
+        *classify(blip_i), blip_i, d_ready.new_state, now=NOW + timedelta(minutes=16)
+    )
+    assert classify(blip_i)[0] is WatchState.RECOVERING
+    assert not d_blip.should_notify  # silent: not out of an outage
+    d_back = decide_notification(
+        *classify(ready_i), ready_i, d_blip.new_state, now=NOW + timedelta(minutes=32)
+    )
+    assert d_back.new_state.state == WatchState.PAPER_VALIDATION_READY.value
+    assert not d_back.should_notify  # no re-notification from aging
+
+
+def test_sustained_stale_success_triggers_outage() -> None:
+    # A collector success older than the recovery success-stale bound => OUTAGE.
+    state, reasons = classify(inputs(success_run_age_seconds=1300.0))
+    assert state is WatchState.OUTAGE_ACTIVE and "collector_success_stale" in reasons
+
+
+def test_legacy_state_file_without_ready_pending_loads(tmp_path: Path) -> None:
+    # A state file written before DQ-002 (no ready_pending field) loads with a
+    # conservative default and does not crash / storm.
+    import json as _json
+
+    legacy = {
+        "state": "PAPER_VALIDATION_READY",
+        "since": NOW.isoformat(),
+        "outage_started_at": None,
+        "last_notification_at": NOW.isoformat(),
+        "last_success_run_id": 1400,
+        "transition_reason": "all_gates_pass",
+        "escalated": False,
+        # note: NO ready_pending, plus a stray unknown key
+        "legacy_unknown_field": 123,
+    }
+    p = tmp_path / "state.json"
+    p.write_text(_json.dumps(legacy))
+    rec = load_watch_state(p)
+    assert rec is not None
+    assert rec.ready_pending is False
+    assert rec.state == "PAPER_VALIDATION_READY"
+    # first post-deploy check at READY: same state -> no_change -> no storm
+    d = decide_notification(*classify(inputs()), inputs(), rec, now=NOW + timedelta(minutes=5))
+    assert not d.should_notify and d.transition == "no_change"
+
+
+def test_malformed_state_fails_closed(tmp_path: Path) -> None:
+    p = tmp_path / "bad.json"
+    p.write_text("{ this is not valid json ")
+    assert load_watch_state(p) is None
+    p2 = tmp_path / "wrongtype.json"
+    p2.write_text("[1, 2, 3]")
+    assert load_watch_state(p2) is None
+    p3 = tmp_path / "missing_required.json"
+    p3.write_text('{"escalated": true}')  # missing state/since -> fail closed
+    assert load_watch_state(p3) is None
+
+
+def test_ready_pending_round_trips(tmp_path: Path) -> None:
+    rec = WatchStateRecord(
+        state="OUTAGE_ACTIVE", since=NOW.isoformat(), outage_started_at=NOW.isoformat(),
+        last_notification_at=NOW.isoformat(), last_success_run_id=1, transition_reason="x",
+        escalated=False, ready_pending=True,
+    )
+    p = tmp_path / "s.json"
+    save_watch_state(p, rec)
+    assert load_watch_state(p) == rec
 
 
 def test_healthy_transition_records_but_does_not_notify() -> None:

@@ -11,39 +11,68 @@ pending one-contract paper-fill validation yet?* Four states:
     RECOVERING              endpoint reachable and a recent successful
                             collector cycle exists, but one or more evidence
                             freshness gates still fail
-    PAPER_VALIDATION_READY  every gate passes -- the validation may be rerun
+    PAPER_VALIDATION_READY  collection has recovered and evidence was fresh
+                            enough at transition time -- the operator may now
+                            perform the (separately gated) paper validation
 
-Freshness thresholds are **the paper engine's own** (`PaperRiskPolicy`):
-this module deliberately owns no competing constants, so the watch can
-never declare readiness the paper session would then reject.
+Recovery-HEALTH freshness (``RecoveryHealthPolicy``) is deliberately
+SEPARATE from the paper-EXECUTION fill gate (``PaperRiskPolicy``, 300s book).
+The collector polls thousands of tickers on a proactive throttle, so a full
+cycle takes ~555s and a perfectly healthy book is routinely 300-900s old.
+Gating the watch on the strict 300s fill threshold made it flap
+RECOVERING <-> PAPER_VALIDATION_READY every cycle and re-notify each time
+(DQ-002). The recovery thresholds here tolerate normal between-cycle aging
+(~2x cadence) while still catching a real multi-cycle stall promptly. They
+NEVER permit a paper fill: PAPER_VALIDATION_READY means "recovered, go run
+the validation", and that run re-checks the strict 300s gate at execution
+time. See docs/runbooks/data_quality_exceptions.md (DQ-002).
 
 Pure decision logic only (mirrors ``ops/monitor.py``'s separation): the
 CLI layer gathers inputs and delivers notifications via the existing
-``ops/alerting.py`` transport. Exactly-once notifications per state
-transition, with one optional escalation for a long-running outage.
-Nothing here runs a paper session, touches an experiment, or contacts the
-exchange beyond an unauthenticated reachability probe performed by the
-caller.
+``ops/alerting.py`` transport. Notifications are episode-scoped: one per
+outage episode, one per recovery, at most one PAPER_VALIDATION_READY per
+recovery episode -- normal evidence aging between healthy cycles never
+re-notifies. Nothing here runs a paper session, touches an experiment, or
+contacts the exchange beyond an unauthenticated reachability probe performed
+by the caller.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from kalshi_weather.paper.engine import PaperRiskPolicy
-
 #: The exact ready notification (spec'd verbatim).
 READY_MESSAGE = (
-    "Kalshi production collection has recovered and all paper freshness gates pass. "
-    "The pending one-contract paper-fill validation may now be rerun."
+    "Kalshi production collection has recovered and all recovery-health gates pass. "
+    "The pending one-contract paper-fill validation may now be rerun "
+    "(its own 300s freshness gate is re-checked at run time)."
 )
 #: Escalate a still-active outage once after this long (existing monitor
 #: convention: escalation is a single reminder, never a repeat-per-cycle).
 DEFAULT_ESCALATE_AFTER_SECONDS = 6 * 3600.0
+
+
+@dataclass(frozen=True)
+class RecoveryHealthPolicy:
+    """Cadence-aware freshness for the recovery-HEALTH decision only.
+
+    Independent of ``PaperRiskPolicy`` (the 300s paper-execution fill gate,
+    which is unchanged and still enforced at fill time). Defaults are ~2x the
+    measured ~555s collector cadence, so a healthy book that is merely
+    between cycles never trips RECOVERING, while a genuine multi-cycle stall
+    (book/snapshot/poll evidence older than ~2 cycles) still does. Raising
+    these values NEVER loosens any paper trading gate.
+    """
+
+    max_book_age_seconds: float = 1200.0
+    max_snapshot_age_seconds: float = 1200.0
+    max_poll_evidence_age_seconds: float = 1200.0
+    #: A successful collector run older than this => OUTAGE (collection down).
+    success_stale_seconds: float = 1200.0
 
 
 class WatchState(StrEnum):
@@ -71,22 +100,23 @@ class WatchInputs:
 
 
 def classify(
-    inputs: WatchInputs, thresholds: PaperRiskPolicy | None = None
+    inputs: WatchInputs, policy: RecoveryHealthPolicy | None = None
 ) -> tuple[WatchState, list[str]]:
     """Deterministic state + machine-readable reason codes for failing gates.
 
-    Gate values come from ``PaperRiskPolicy`` -- the same numbers the paper
-    session enforces. "Recent successful collector run" reuses the snapshot
-    threshold (a success necessarily refreshes snapshots).
+    Gate values come from ``RecoveryHealthPolicy`` (cadence-aware), NOT the
+    paper-execution fill gate: the watch judges collection HEALTH, not
+    instantaneous fill-eligibility. "Recent successful collector run" uses the
+    recovery success-stale threshold.
     """
-    t = thresholds or PaperRiskPolicy()
+    t = policy or RecoveryHealthPolicy()
     reasons: list[str] = []
 
     if not inputs.api_reachable:
         reasons.append("api_unreachable")
     stale_success = (
         inputs.success_run_age_seconds is None
-        or inputs.success_run_age_seconds > t.max_snapshot_age_seconds
+        or inputs.success_run_age_seconds > t.success_stale_seconds
     )
     if stale_success:
         reasons.append("collector_success_stale")
@@ -124,7 +154,11 @@ def classify(
 @dataclass(frozen=True)
 class WatchStateRecord:
     """Persisted watch state (JSON, atomic-rename write -- the ops/monitor
-    convention). Survives restarts; the dedup key is (state, since)."""
+    convention). Survives restarts. Dedup is episode-scoped: ``ready_pending``
+    is armed by a genuine degradation (outage, or a recovering step out of an
+    outage) and disarmed when a PAPER_VALIDATION_READY notification fires, so a
+    recovery is announced exactly once per episode and normal between-cycle
+    aging never re-notifies."""
 
     state: str
     since: str  # ISO timestamp the current state was entered
@@ -133,6 +167,9 @@ class WatchStateRecord:
     last_success_run_id: int | None
     transition_reason: str
     escalated: bool = False
+    #: True when a degradation has occurred and the next full recovery should
+    #: notify. New field (defaults False) -- legacy state files load safely.
+    ready_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,16 +206,23 @@ def decide_notification(
     now: datetime,
     escalate_after_seconds: float = DEFAULT_ESCALATE_AFTER_SECONDS,
 ) -> WatchDecision:
-    """Exactly-once per state transition; one optional outage escalation.
+    """Episode-scoped notification: one per outage, one per recovery, at most
+    one PAPER_VALIDATION_READY per recovery episode; one optional outage
+    escalation. Normal evidence aging between healthy cycles never re-notifies.
 
-    Notifies on entering OUTAGE_ACTIVE, RECOVERING, or
-    PAPER_VALIDATION_READY -- never on repeats of the same state, and never
-    for HEALTHY (recorded in history only). A later regression and
-    re-recovery is a new transition, so it re-notifies. Pure and
-    deterministic given its arguments (injectable clock).
+    - OUTAGE_ACTIVE (enter): notify; arm ``ready_pending``.
+    - RECOVERING (enter): notify only out of an outage (or cold start); a
+      RECOVERING blip from a previously-healthy state is silent (kills the
+      DQ-002 flap). Arms ``ready_pending`` only when it notifies.
+    - PAPER_VALIDATION_READY (enter): notify only on cold start or when
+      ``ready_pending`` (a real degradation happened); then disarm.
+    - HEALTHY (enter): never notifies; carries ``ready_pending``.
+
+    Pure and deterministic given its arguments (injectable clock).
     """
     now_iso = now.isoformat()
     reason_text = ",".join(reasons) or "all_gates_pass"
+    prior_ready_pending = prior.ready_pending if prior is not None else False
 
     if prior is not None and prior.state == state.value:
         # Same state: maybe escalate a long outage, exactly once.
@@ -202,18 +246,34 @@ def decide_notification(
             transition="no_change", should_notify=False, message="", new_state=prior
         )
 
-    outage_started = (
-        (prior.outage_started_at if prior is not None else None)
-        if state is not WatchState.OUTAGE_ACTIVE
-        else (
+    # --- transition to a new state: decide notify + episode bookkeeping.
+    cold_start = prior is None
+    prior_state = prior.state if prior is not None else None
+    if state is WatchState.OUTAGE_ACTIVE:
+        should = True
+        ready_pending = True
+        outage_started = (
             prior.outage_started_at
-            if prior is not None and prior.state == WatchState.OUTAGE_ACTIVE.value
+            if prior is not None and prior_state == WatchState.OUTAGE_ACTIVE.value
             else now_iso
         )
-    )
-    if state in (WatchState.PAPER_VALIDATION_READY, WatchState.HEALTHY):
+    elif state is WatchState.RECOVERING:
+        # Notify a recovery-in-progress only when it follows an outage (or on a
+        # cold start into RECOVERING); a stale-evidence blip from a healthy
+        # state is silent and does not arm the recovery notification.
+        from_outage = cold_start or prior_state == WatchState.OUTAGE_ACTIVE.value
+        should = from_outage
+        ready_pending = True if from_outage else prior_ready_pending
+        outage_started = prior.outage_started_at if prior is not None else None
+    elif state is WatchState.PAPER_VALIDATION_READY:
+        should = cold_start or prior_ready_pending
+        ready_pending = False
         outage_started = None  # a full recovery closes the outage window
-    should = state is not WatchState.HEALTHY
+    else:  # HEALTHY: data recovered but a paper-side gate fails; never notifies
+        should = False
+        ready_pending = prior_ready_pending
+        outage_started = None
+
     new = WatchStateRecord(
         state=state.value,
         since=now_iso,
@@ -224,6 +284,7 @@ def decide_notification(
         last_success_run_id=inputs.latest_success_run_id,
         transition_reason=reason_text,
         escalated=False,
+        ready_pending=ready_pending,
     )
     return WatchDecision(
         transition=f"entered_{state.value.lower()}",
@@ -237,9 +298,24 @@ def decide_notification(
 
 
 def load_watch_state(path: Path) -> WatchStateRecord | None:
+    """Read the persisted state, tolerating legacy files. Unknown keys are
+    dropped and missing new fields (e.g. ``ready_pending``) take their
+    conservative defaults, so a file written before DQ-002 loads without a
+    notification storm. A malformed/unreadable file fails closed (returns
+    ``None`` = treated as first run) rather than raising."""
     if not path.exists():
         return None
-    return WatchStateRecord(**json.loads(path.read_text()))
+    try:
+        raw = json.loads(path.read_text())
+        if not isinstance(raw, dict):
+            return None
+        known = {f.name for f in fields(WatchStateRecord)}
+        filtered = {k: v for k, v in raw.items() if k in known}
+        # Missing required fields (state/since/...) raise TypeError below and
+        # are caught -> None (fail closed); missing optionals take defaults.
+        return WatchStateRecord(**filtered)
+    except (json.JSONDecodeError, TypeError, ValueError, OSError):
+        return None
 
 
 def save_watch_state(path: Path, record: WatchStateRecord) -> None:

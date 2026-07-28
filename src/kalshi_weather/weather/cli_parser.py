@@ -32,7 +32,14 @@ from dataclasses import dataclass
 from datetime import date
 
 _TEMPERATURE_SECTION_RE = re.compile(r"TEMPERATURE\s*\(F\)", re.IGNORECASE)
-_VALUE_LINE_RE = re.compile(r"^\s*(MAXIMUM|MINIMUM)\s+(-?\d+)\b", re.IGNORECASE)
+#: The observed value may carry a trailing record flag letter (e.g. "86R" on a
+#: day the maximum tied/broke a record, "E" for estimated). A trailing ``\b``
+#: after the digits would *reject* such values (there is no word boundary
+#: between a digit and a following letter), silently dropping the whole day --
+#: the cause of the LAX 07-17 / MIA 07-16 / NYC 07-02 / PHX 07-24 record-heat
+#: gaps. Capture the leading integer and ignore any trailing flag; a genuinely
+#: missing value ("M", no digits) still fails to match, as intended.
+_VALUE_LINE_RE = re.compile(r"^\s*(MAXIMUM|MINIMUM)\s+(-?\d+)(?=\D|$)", re.IGNORECASE)
 _SUMMARY_DATE_RE = re.compile(
     r"CLIMATE SUMMARY FOR\s+([A-Z]+)\s+(\d{1,2})\s+(\d{4})", re.IGNORECASE
 )

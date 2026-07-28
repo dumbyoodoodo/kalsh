@@ -79,3 +79,50 @@ TEMPERATURE (F)
     result = parse_cli_temperatures(text)
     assert result.tmax_f == -12
     assert result.tmin_f == -35
+
+
+def test_record_flagged_value_parses() -> None:
+    # Regression: a record-tying/breaking value carries a trailing "R" flag
+    # (real LAX 2026-07-17 product). The value 86 must still be extracted --
+    # the whole day was silently dropped before the fix.
+    text = """
+...THE LOS ANGELES CA CLIMATE SUMMARY FOR JULY 17 2026...
+
+TEMPERATURE (F)
+ TODAY
+  MAXIMUM         86R 12:53 PM  85    2003  75     11       73
+  MINIMUM         69   4:19 AM  56    1947  64      5       63
+"""
+    result = parse_cli_temperatures(text)
+    assert result.tmax_f == 86
+    assert result.tmin_f == 69
+
+
+def test_both_values_flagged_parse() -> None:
+    # PHX 2026-07-24: extreme heat, MAXIMUM 117R; an estimated "E" flag also works.
+    text = """
+...THE PHOENIX AZ CLIMATE SUMMARY FOR JULY 24 2026...
+
+TEMPERATURE (F)
+ TODAY
+  MAXIMUM        117R   316 PM 116    2014 106     11
+  MINIMUM         97E   650 AM  68    1913  85     12
+"""
+    result = parse_cli_temperatures(text)
+    assert result.tmax_f == 117
+    assert result.tmin_f == 97
+
+
+def test_genuinely_missing_value_still_raises() -> None:
+    # A value reported as missing ("M", no digits) must still fail closed --
+    # the fix must not fabricate a number for a genuinely absent value.
+    text = """
+...THE CENTRAL PARK NY CLIMATE SUMMARY FOR JULY 20 2026...
+
+TEMPERATURE (F)
+ TODAY
+  MAXIMUM          M    125 PM 101    1980  85     -4       88
+  MINIMUM         63    541 AM  55    1890  71     -8       75
+"""
+    with pytest.raises(CliParseError):
+        parse_cli_temperatures(text)

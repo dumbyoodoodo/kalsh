@@ -1013,22 +1013,30 @@ def experiment_h0018(
 
 @experiment_app.command("readiness")
 def experiment_readiness(
-    hypothesis: str = typer.Argument("h0019", help="Which registered future experiment."),
+    hypothesis: str = typer.Argument("h0019", help="Which registered/documented experiment."),
     log_path: str | None = typer.Option(
         None, help="Append-only readiness-log JSONL (defaults to the registration dir)."
     ),
+    as_of: str = typer.Option("", help="h0012r only: ISO date to inject as the clock."),
+    as_json: bool = typer.Option(False, "--json", help="h0012r only: emit the summary as JSON."),
+    environment: str = typer.Option(
+        "", help="h0012r only: restrict close-time frame to one environment "
+        "(default empty = env-agnostic; labels are env-agnostic by design)."
+    ),
 ) -> None:
-    """READ-ONLY readiness monitor for a registered future experiment (h0019
-    or h0020). Reports whether enough genuinely point-in-time data has
-    accumulated to run the held-out test. It NEVER trains a model, generates
-    test predictions, or computes a test Brier score -- coverage counts only.
-    Each invocation is appended to a readiness log (no outcome-based analysis
-    is recorded)."""
+    """READ-ONLY readiness monitor for a registered/documented experiment
+    (h0019, h0020, or the calendar-gated h0012r retry). Reports whether enough
+    genuinely point-in-time data has accumulated to run -- coverage counts and
+    integrity flags only. It NEVER trains a model, generates predictions,
+    computes a Brier score, or (for h0012r) any stage-difference rate or CI."""
     if hypothesis.lower() == "h0020":
         _experiment_readiness_h0020(log_path)
         return
+    if hypothesis.lower() == "h0012r":
+        _experiment_readiness_h0012r(as_of=as_of, as_json=as_json, environment=environment)
+        return
     if hypothesis.lower() != "h0019":
-        raise typer.BadParameter("only 'h0019' and 'h0020' are registered")
+        raise typer.BadParameter("only 'h0019', 'h0020', and 'h0012r' are supported")
     import json as _json
 
     from kalshi_weather.dataset.builder import load_source_frames as _load_sources
@@ -1873,6 +1881,228 @@ def _experiment_readiness_h0020(log_path: str | None) -> None:
         lp.parent.mkdir(parents=True, exist_ok=True)
         with lp.open("a") as f:
             f.write(_json.dumps({"as_of": str(now), "state": report.state}) + "\n")
+
+    asyncio.run(run())
+
+
+def _experiment_readiness_h0012r(
+    *, as_of: str, as_json: bool, environment: str = ""
+) -> None:
+    """H0012r counts-only readiness (see experiments/h0012r_readiness.py).
+
+    Structural coverage + integrity ONLY over the NYC settlement-label
+    population. NEVER computes claim A, claim B, any stage-difference rate, or
+    any CI. Read-only; writes nothing."""
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    from kalshi_weather.experiments import h0012r_readiness as h12
+    from kalshi_weather.research import close_time_guard as ctg
+    from kalshi_weather.research import leakage_lint as ll
+    from kalshi_weather.settlement.labels import build_labels as _build_labels
+    from kalshi_weather.storage.models import MarketSnapshot as _MS
+
+    now = _date.fromisoformat(as_of) if as_of else utc_now().date()
+
+    def _is_nyc(ticker: str) -> bool:
+        return ticker.startswith(h12.FAMILY_PREFIXES)
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        from sqlalchemy import select as _select
+
+        async with _open_session(settings) as session:
+            labels = await _build_labels(session)
+            # NYC-family latest snapshots for close-time stability + provenance.
+            snaps = (await session.scalars(_select(_MS))).all()
+
+        nyc = [
+            lab
+            for lab in labels
+            if _is_nyc(lab.market_ticker)
+            and lab.usable
+            and lab.station_id
+            and lab.variable
+            and lab.target_date
+        ]
+        # Collapse strikes to one row per (station, variable, target_date).
+        groups: dict[tuple[str, str, date], list[Any]] = {}
+        for lab in nyc:
+            assert lab.station_id and lab.variable and lab.target_date  # narrowed above
+            groups.setdefault((lab.station_id, lab.variable, lab.target_date), []).append(lab)
+
+        # Partition consistency: strikes of one event must agree on the timeline.
+        inconsistent = 0
+        for members in groups.values():
+            if (
+                len({m.value_at_close for m in members}) > 1
+                or len({m.value_at_settlement for m in members}) > 1
+                or len({m.latest_final_value for m in members}) > 1
+            ):
+                inconsistent += 1
+
+        exact = sum(1 for members in groups.values() if members[0].settlement_time_is_exact)
+        bounded = len(groups) - exact
+        tmax = sum(1 for (_s, v, _d) in groups if v == "tmax_f")
+        tmin = sum(1 for (_s, v, _d) in groups if v == "tmin_f")
+        target_dates = sorted(d for (_s, _v, d) in groups)
+        stations = len({s for (s, _v, _d) in groups})
+
+        missing_source = sum(
+            1
+            for lab in labels
+            if _is_nyc(lab.market_ticker) and lab.status.value == "missing_source_data"
+        )
+
+        # Payout-agreement integrity gate (spec Failure-mode 3): reconstruction
+        # vs Kalshi's own expiration_value/result. Integrity, not a hypothesis
+        # outcome.
+        payout_total = 0
+        payout_matches = 0
+        for lab in nyc:
+            if lab.payout_value_agrees is not None and lab.payout_result_agrees is not None:
+                payout_total += 1
+                if lab.payout_value_agrees and lab.payout_result_agrees:
+                    payout_matches += 1
+
+        # Point-in-time leakage: no selected issuance may postdate its boundary
+        # (H0012r's publication availability contract: issuance_time <= boundary).
+        pit_violations = 0
+        for lab in nyc:
+            if (
+                lab.issuance_at_close is not None
+                and lab.close_time is not None
+                and lab.issuance_at_close > lab.close_time
+            ) or (
+                lab.issuance_at_settlement is not None
+                and lab.settlement_time is not None
+                and lab.settlement_time_is_exact
+                and lab.issuance_at_settlement > lab.settlement_time
+            ):
+                pit_violations += 1
+        leakage_status = "PASS" if pit_violations == 0 else "FAIL"
+        # Static latest-state scan of the reconstruction source (warnings only).
+        _static = ll.scan_latest_state(
+            _Path("src/kalshi_weather/settlement/labels.py").read_text(),
+            path="settlement/labels.py",
+        )
+
+        # Reserved-window overlap (informational; never an exclusion).
+        overlap = {
+            name: sum(1 for d in target_dates if start <= d <= end)
+            for (name, start, end) in h12.RESERVED_WINDOWS
+        }
+
+        # Environment provenance of NYC-family latest snapshots (informational).
+        latest_by_ticker: dict[str, Any] = {}
+        for s in snaps:
+            if _is_nyc(s.market_ticker):
+                cur = latest_by_ticker.get(s.market_ticker)
+                if cur is None or s.id > cur.id:
+                    latest_by_ticker[s.market_ticker] = s
+        env_counts: dict[str, int] = {}
+        for s in latest_by_ticker.values():
+            key = s.environment or "unknown"
+            env_counts[key] = env_counts.get(key, 0) + 1
+
+        # Close-time stability over NYC-family tickers (metadata only). H0012r's
+        # settlement-label population is environment-agnostic and predominantly
+        # pre-production-cutover (null/demo), so the DEFAULT frame includes every
+        # environment: each row is normalized to a single sentinel so the guard
+        # measures pure close_time revision (any genuine cross-mirror
+        # disagreement surfaces as a revision, never silently dropped). Passing
+        # --environment restricts to that one frame as a sensitivity check.
+        env_agnostic = not environment
+        lite = [
+            ctg.SnapshotLite(
+                ticker=s.market_ticker,
+                snapshot_id=s.id,
+                observed_at=s.observed_at,
+                close_time=s.close_time,
+                environment="any" if env_agnostic else s.environment,
+            )
+            for s in snaps
+            if _is_nyc(s.market_ticker)
+        ]
+        allowed = ("any",) if env_agnostic else (environment,)
+        guard = ctg.analyze_close_times(
+            lite,
+            name="h0012r-close-time",
+            as_of=utc_now(),
+            horizon_hours=0.0,
+            allowed_environments=allowed,
+        )
+        ct_status = {
+            ctg.PASS: "PASS",
+            ctg.PASS_WITH_NULLS: "PASS",
+            ctg.REVIEW_REQUIRED: "REVIEW_REQUIRED",
+            ctg.BLOCKED_INSUFFICIENT_HISTORY: "BLOCKED_INSUFFICIENT",
+        }.get(guard.status, "UNKNOWN")
+
+        counts = h12.ReadinessCounts(
+            variable_dates=len(groups),
+            exact_settlement=exact,
+            bounded_settlement=bounded,
+            stations=stations,
+            tmax_dates=tmax,
+            tmin_dates=tmin,
+            missing_source_data=missing_source,
+            target_date_min=target_dates[0] if target_dates else None,
+            target_date_max=target_dates[-1] if target_dates else None,
+            reserved_window_overlap=overlap,
+            environment_counts=env_counts,
+        )
+        flags = h12.IntegrityFlags(
+            spec_recovered=True,
+            leakage_status=leakage_status,
+            payout_agreement_ok=(payout_total > 0 and payout_matches == payout_total),
+            payout_matches=payout_matches,
+            payout_total=payout_total,
+            close_time_status=ct_status,
+            close_time_revised=guard.tickers_revised,
+            close_time_null=guard.tickers_null_close,
+            partition_consistent=(inconsistent == 0),
+            partition_inconsistent_groups=inconsistent,
+            provenance_ok=True,
+        )
+        report = h12.classify_readiness(counts, flags, now=now)
+        payload = report.to_dict()
+        payload["static_latest_state_warnings"] = len(_static)
+
+        if as_json:
+            typer.echo(json.dumps(payload, indent=2, default=str))
+            return
+        typer.echo("COUNTS ONLY — NOT AN EXPERIMENT RESULT")
+        typer.echo(f"H0012r readiness as of {now}: {report.state.value}")
+        cal = payload["calendar"]
+        typer.echo(
+            f"  calendar boundary {cal['boundary']} reached={cal['reached']} "
+            f"days_until={cal['days_until_boundary']}"
+        )
+        cc = payload["counts"]
+        typer.echo(
+            f"  variable-dates {cc['variable_dates']}/{cc['min_required']} "
+            f"(shortfall {cc['shortfall']}); exact={cc['exact_settlement']} "
+            f"bounded={cc['bounded_settlement']}; tmax={cc['tmax_dates']} tmin={cc['tmin_dates']}; "
+            f"stations={cc['stations']}"
+        )
+        typer.echo(
+            f"  target_date range {cc['target_date_min']}..{cc['target_date_max']}; "
+            f"missing_source_data_excluded={cc['missing_source_data_excluded']}; "
+            f"reserved_overlap={cc['reserved_window_overlap']}"
+        )
+        ig = payload["integrity"]
+        typer.echo(
+            f"  integrity: leakage={ig['leakage_status']} "
+            f"payout={ig['payout_agreement']}({'ok' if ig['payout_agreement_ok'] else 'FAIL'}) "
+            f"close_time={ig['close_time_status']}(rev={ig['close_time_revised']},"
+            f"null={ig['close_time_null']}) "
+            f"partition={'ok' if ig['partition_consistent'] else 'INCONSISTENT'}"
+        )
+        typer.echo(f"  failing gates: {report.failing_gates}")
+        typer.echo(f"  earliest ready (estimate): {payload['earliest_ready_estimate']}")
+        typer.echo(f"  next action: {report.next_action}")
 
     asyncio.run(run())
 

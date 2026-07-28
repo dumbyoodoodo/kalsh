@@ -64,6 +64,55 @@ appears (kill switch: `uv run kalshi-weather paper kill --reason ...`).
 
 ---
 
+## A2. H0012r — settlement-label stability retry (earliest: 2026-08-19)
+
+H0012r re-runs H0012 **claim B only** (post-settlement correction rate < 2%)
+at the accrued sample. The original run left claim B inconclusive *for sample
+size* (0/132 corrections; 95% upper bound 2.83% missed the 2% bar; zero events
+need n ≥ 189 variable-dates). Single-pass measurement, NYC only
+(KXHIGHNY/KXLOWTNYC), unit = (variable, target_date). No train/val/test split.
+**Not ledger-registered or hash-pinned** — its authoritative spec is the
+HYPOTHESES.md H0012 entry (pre-registered design + decision rule).
+
+Counts-only readiness (safe any time — no outcome, no CI, no stage-difference
+rate; **READY does NOT imply claim B will pass**):
+
+```
+uv run kalshi-weather experiment readiness h0012r        # human
+uv run kalshi-weather experiment readiness h0012r --json  # machine
+```
+
+- States: `CALENDAR_GATED` (before 2026-08-19) / `COLLECTING` (n < 189 after
+  the boundary) / `INTEGRITY_BLOCKED` / `SPECIFICATION_BLOCKED` / `READY`.
+  Never `READY` before 2026-08-19 by construction.
+- The preflight is env-agnostic by design (H0012r's settled population is
+  mostly pre-cutover null/demo); `--environment X` restricts the close-time
+  frame as a sensitivity check only.
+- `CALENDAR_GATED`/`COLLECTING` → wait; re-run the preflight. It reports the
+  exact coverage (n/189) and an earliest-ready estimate.
+
+`READY` → H0012r execution requires, **in order** (readiness ≠ support):
+
+  - [ ] 1. `experiment readiness h0012r` → READY (counts only; calendar
+        boundary reached AND n ≥ 189 AND integrity clean)
+  - [ ] 2. `research leakage-audit` → PASS
+  - [ ] 3. close-time preflight if claim A's `value_at_close` is in scope —
+        the readiness command already runs the close-time guard and reports
+        `close_time=PASS`; any `REVIEW_REQUIRED` is a human decision, never
+        auto-resolved
+  - [ ] 4. verify partition consistency (strikes of one event agree on the
+        timeline — readiness reports `partition=ok`) and payout-agreement
+        integrity (reconstruction vs Kalshi payout, reported `payout=n/n`)
+  - [ ] 5. explicit human approval
+  - [ ] 6. only then the single registered retry (the E-A settlement-labels
+        script over the accrued dataset), archived with a dataset-version +
+        git-commit record per RESEARCH.md
+- A negative or still-inconclusive result is **final for this retry** — record
+  it; do not re-run after seeing the outcome. Readiness must never be used to
+  peek at the correction rate early.
+
+---
+
 ## B. H0019 — earliest action date: after 2026-08-25
 
 - [ ] `uv run kalshi-weather experiment readiness h0019`

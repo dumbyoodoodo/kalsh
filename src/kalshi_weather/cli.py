@@ -2613,9 +2613,6 @@ def collector_run(
                 max_cycles=1 if once else None,
                 settle_check_limit=settings.collector_settle_check_limit,
                 settle_check_days=settings.collector_settle_check_days,
-                startup_grace_seconds=(
-                    0.0 if once else settings.kalshi_startup_grace_seconds
-                ),
             )
         finally:
             await engine.dispose()
@@ -4734,7 +4731,6 @@ def ops_run(
                     stop_event=stop_event,
                     settle_check_limit=settings.collector_settle_check_limit,
                     settle_check_days=settings.collector_settle_check_days,
-                    startup_grace_seconds=settings.kalshi_startup_grace_seconds,
                 ),
                 run_weather_collector_loop(
                     session_factory=session_factory,

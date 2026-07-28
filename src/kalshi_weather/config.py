@@ -168,16 +168,6 @@ class Settings(BaseSettings):
     kalshi_backoff_base_seconds: float = Field(default=0.5, alias="KALSHI_BACKOFF_BASE_SECONDS")
     kalshi_backoff_max_seconds: float = Field(default=8.0, alias="KALSHI_BACKOFF_MAX_SECONDS")
     kalshi_backoff_jitter: float = Field(default=0.25, alias="KALSHI_BACKOFF_JITTER")
-    # One-shot startup grace (seconds) before the Kalshi loop's FIRST cycle only.
-    # A cold-started collector otherwise fires its cycle-critical discovery
-    # request into a rate window still hot from the just-killed prior process,
-    # exhausts its short retry budget, and fails the whole first cycle (the
-    # restart-only 429 self-recovers next cycle). This bounded, once-per-process
-    # pause lets the window clear; it never changes steady-state cadence or
-    # throughput, and the separate weather loop is unaffected. 0 disables it.
-    kalshi_startup_grace_seconds: float = Field(
-        default=10.0, alias="KALSHI_STARTUP_GRACE_SECONDS"
-    )
     weather_min_request_interval_seconds: float = Field(
         default=0.1, alias="WEATHER_MIN_REQUEST_INTERVAL_SECONDS"
     )

@@ -159,37 +159,3 @@ by gaps in this chain. Checklist:
 None of steps 2–4 are code and none can be set from this repo; they are host
 settings recorded here so the recovery posture is auditable. Steps 1 and 5 are
 enforced by this repo (compose restart policy; heartbeat agent).
-
-## Startup rate-limit grace (restart-only Kalshi 429)
-
-**Root cause.** Every collector restart produced exactly one immediate Kalshi
-cycle that failed with HTTP 429 (`too_many_requests`) at `requests_attempted=0`,
-followed by a fully successful cycle. Steady state already runs at Kalshi's rate
-ceiling (~110+ short-backoff 429 retries per cycle, all absorbed and non-fatal),
-but a cold-started process fires its *cycle-critical discovery* request with a
-fresh throttle immediately after launch, while the rate window is still hot from
-the just-killed prior process. The discovery request exhausts its short retry
-budget (3 attempts) and aborts the whole first cycle — whereas the same 429 on a
-per-market request in steady state is tolerated. It always self-recovered on the
-next cycle with no lasting data impact.
-
-**Fix.** `KALSHI_STARTUP_GRACE_SECONDS` (default 10s) applies a single bounded,
-interruptible pause before the Kalshi loop's **first** cycle only. It lets the
-rate window clear before the cold discovery request. It never changes
-steady-state cadence or throughput (subsequent cycles are unaffected), and the
-separate weather loop starts immediately. Set 0 to disable.
-
-**Expected operator log on restart:** one
-`collector.startup_grace seconds=10.0 reason=avoid cold-start kalshi
-rate-limit collision on first cycle` line, then a normal
-`collector.cycle_complete` for the first Kalshi cycle.
-
-**Intentional startup deferral vs outage.** The `collector.startup_grace` log +
-a *successful* first cycle is the intended, healthy path. A *persistent* 429
-across multiple full cycles, or a 401/403, is NOT this — it indicates a real
-rate-budget/auth problem (another credential consumer, or a genuine limit) and
-should be investigated, not masked by a longer grace.
-
-**Rollback.** Revert the startup-grace commit (or set
-`KALSHI_STARTUP_GRACE_SECONDS=0`) and restart only the collector. The change is
-timing-only: no schema, no data, no request-handling change.

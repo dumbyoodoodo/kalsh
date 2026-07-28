@@ -332,35 +332,16 @@ async def run_collector_loop(
     max_cycles: int | None = None,
     settle_check_limit: int = 25,
     settle_check_days: int = 7,
-    startup_grace_seconds: float = 0.0,
 ) -> None:
     """Run collection cycles until `stop_event` is set (or `max_cycles` is
     reached, for `--once`/testing). A fresh session and client are used per
     cycle so a stale DB/HTTP connection can never persist across months of
     runtime. A whole-cycle failure (DB down, network down) is logged and the
     loop waits for the next interval rather than crashing the process.
-
-    ``startup_grace_seconds`` applies a single bounded pause before the FIRST
-    cycle only: a cold-started collector otherwise fires its cycle-critical
-    discovery request into a Kalshi rate window still hot from the just-killed
-    prior process, exhausts its short retry budget, and fails the whole first
-    cycle. The pause is interruptible by ``stop_event`` and never affects
-    steady-state cadence or throughput.
     """
     cycle_number = 0
     while not stop_event.is_set():
         cycle_number += 1
-        if cycle_number == 1 and startup_grace_seconds > 0:
-            logger.info(
-                "collector.startup_grace",
-                seconds=round(startup_grace_seconds, 1),
-                reason="avoid cold-start kalshi rate-limit collision on first cycle",
-            )
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=startup_grace_seconds)
-                break  # shutdown requested during the grace: exit cleanly
-            except TimeoutError:
-                pass  # grace elapsed; proceed with the first cycle
         started_at = utc_now()
         run_stats: dict[str, Any] = {}
         run_requests = run_retries = 0

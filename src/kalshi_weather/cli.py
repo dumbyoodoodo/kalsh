@@ -1202,6 +1202,123 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
+exploratory_app = typer.Typer(help="Clearly-labeled exploratory analyses (never confirmatory).")
+research_app.add_typer(exploratory_app, name="exploratory")
+
+
+@exploratory_app.command("e0002")
+def research_exploratory_e0002(
+    as_of: str = typer.Option("", help="ISO UTC as-of cap (default: now). Echoed in output."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the full summary as JSON."),
+    output: str = typer.Option("", "--output", help="Also write the JSON summary to this path."),
+) -> None:
+    """E0002 exploratory liquidity/microstructure summary (READ-ONLY).
+
+    Descriptive spreads, depth, quote presence, trade volumes, time-of-day
+    activity, and stored-book staleness over the collected weather series.
+    EXPLORATORY ONLY — NOT PREREGISTERED — NOT CONFIRMATORY: this command
+    computes no model, no outcome-scored metric, and no trading claim, and
+    it refuses any row inside the reserved confirmatory windows. It does
+    NOT mean any hypothesis is supported and implies nothing about the
+    frozen program's readiness state or eventual results."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.research import e0002_liquidity as e2
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    if now.tzinfo is not None:
+        now = now.astimezone(_utc).replace(tzinfo=None)
+
+    def _naive(ts: Any) -> Any:
+        return ts.astimezone(_utc).replace(tzinfo=None) if ts.tzinfo is not None else ts
+
+    books: list[e2.BookRow] = []
+    trades: list[e2.TradeRow] = []
+
+    async def load() -> None:
+        settings = get_settings()
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                rows = await conn.execute(
+                    _text(
+                        "select market_ticker, captured_at, best_yes_bid_cents, "
+                        "best_yes_ask_cents, spread_cents, yes_levels_json, "
+                        "no_levels_json, environment from orderbook_snapshots "
+                        "where captured_at <= :as_of"
+                    ),
+                    {"as_of": now},
+                )
+                for r in rows:
+                    yes_levels = r.yes_levels_json or []
+                    no_levels = r.no_levels_json or []
+                    bid_d, ask_d, total_d = e2.book_depths(yes_levels, no_levels)
+                    books.append(
+                        e2.BookRow(
+                            market_ticker=r.market_ticker,
+                            captured_at=_naive(r.captured_at),
+                            best_yes_bid_cents=r.best_yes_bid_cents,
+                            best_yes_ask_cents=r.best_yes_ask_cents,
+                            spread_cents=r.spread_cents,
+                            bid_depth=bid_d,
+                            ask_depth=ask_d,
+                            total_depth=total_d,
+                            environment=r.environment,
+                        )
+                    )
+                rows = await conn.execute(
+                    _text(
+                        "select market_ticker, executed_at, price_cents, "
+                        "count as contract_count, environment from trades "
+                        "where executed_at <= :as_of"
+                    ),
+                    {"as_of": now},
+                )
+                for r in rows:
+                    trades.append(
+                        e2.TradeRow(
+                            market_ticker=r.market_ticker,
+                            executed_at=_naive(r.executed_at),
+                            price_cents=r.price_cents,
+                            count=r.contract_count,
+                            environment=r.environment,
+                        )
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(load())
+    summary = e2.run_liquidity_summary(books, trades, as_of=now)
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(json.dumps(summary, indent=2, default=str) + "\n")
+    if as_json:
+        typer.echo(json.dumps(summary, indent=2, default=str))
+        return
+    typer.echo(summary["banner"])
+    typer.echo(f"as_of: {summary['as_of']}  window: {summary['window']}")
+    prim = summary["primary"]
+    typer.echo(f"  inputs: {prim['inputs']}")
+    typer.echo(f"  quote presence (overall): {prim['quote_presence']['overall']['rates']}")
+    typer.echo(f"  spread cents (two-sided): {prim['spread_cents_two_sided']['overall']}")
+    typer.echo(f"  depth at best bid: {prim['depth_contracts_two_sided']['at_best_bid']}")
+    typer.echo(f"  depth at best ask: {prim['depth_contracts_two_sided']['at_best_ask']}")
+    tr = prim["trades"]
+    typer.echo(
+        f"  trades: {tr['total_trades']} ({tr['total_contracts']} contracts); "
+        f"zero-trade share of quoted ticker-days: "
+        f"{tr['zero_trade_share_of_quoted_ticker_days']}"
+    )
+    gaps = summary["primary"]["stored_book_gap_seconds"]["quantiles"]
+    typer.echo(f"  stored-book gaps s: {gaps}")
+    typer.echo("  (see --json for by-family/by-city/by-hour detail and robustness variants)")
+
+
 #: H0020's frozen family/station scope as a snapshot-metadata regex (frozen
 #: prefixes KXHIGHT*/KXLOWT* at CHI/DEN/LAX/NYC; the legacy KXHIGHNY family
 #: is outside H0020's registered prefixes by design).

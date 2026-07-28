@@ -1,0 +1,119 @@
+{
+  "banner": "EXPLORATORY ONLY \u2014 NOT PREREGISTERED \u2014 NOT CONFIRMATORY",
+  "as_of": "2026-07-28T00:00:00",
+  "window": {
+    "start": "2025-12-30T14:48:26.563449",
+    "end": "2026-07-27T23:59:59.992998"
+  },
+  "reserved_windows_enforced": [
+    {
+      "start": "2026-08-12",
+      "end": "2026-10-06"
+    }
+  ],
+  "primary_frame": "production environment only",
+  "inputs": {
+    "book_rows": 62694,
+    "trade_rows": 306263,
+    "tickers_with_books": 2248,
+    "tickers_with_trades": 2026,
+    "families": 82
+  },
+  "quote_presence_overall": {
+    "n": 62694,
+    "counts": {
+      "two_sided": 42104,
+      "bid_only": 3919,
+      "ask_only": 16264,
+      "empty": 407
+    },
+    "rates": {
+      "two_sided": 0.6716,
+      "bid_only": 0.0625,
+      "ask_only": 0.2594,
+      "empty": 0.0065
+    }
+  },
+  "spread_cents_two_sided_overall": {
+    "n": 42104.0,
+    "mean": 10.494,
+    "p10": 1.0,
+    "p25": 1.0,
+    "p50": 2.0,
+    "p75": 5.0,
+    "p90": 25.0
+  },
+  "depth_contracts_two_sided": {
+    "at_best_bid": {
+      "n": 42104.0,
+      "mean": 218.817,
+      "p10": 1.0,
+      "p25": 4.0,
+      "p50": 17.0,
+      "p75": 100.0,
+      "p90": 286.0
+    },
+    "at_best_ask": {
+      "n": 42104.0,
+      "mean": 287.418,
+      "p10": 2.0,
+      "p25": 3.0,
+      "p50": 9.0,
+      "p75": 72.0,
+      "p90": 200.0
+    },
+    "total_book": {
+      "n": 42104.0,
+      "mean": 11180.951,
+      "p10": 1067.3,
+      "p25": 1716.0,
+      "p50": 4130.0,
+      "p75": 9297.0,
+      "p90": 12311.7
+    }
+  },
+  "trades_headline": {
+    "total_trades": 306263,
+    "total_contracts": 7070716,
+    "contracts_per_traded_ticker_day": {
+      "n": 5875.0,
+      "mean": 1203.526,
+      "p10": 4.0,
+      "p25": 17.0,
+      "p50": 119.0,
+      "p75": 560.5,
+      "p90": 2230.4
+    },
+    "quoted_ticker_days": 3193,
+    "quoted_ticker_days_with_zero_trades": 837,
+    "zero_trade_share_of_quoted_ticker_days": 0.2621
+  },
+  "stored_book_gap_seconds": {
+    "caveat": "stored books are content-hash deduplicated; a gap conflates 'unchanged across polls' with 'not polled'",
+    "quantiles": {
+      "n": 60446.0,
+      "mean": 1365.101,
+      "p10": 500.718,
+      "p25": 557.962,
+      "p50": 627.572,
+      "p75": 742.4,
+      "p90": 1673.142
+    }
+  },
+  "robustness_headlines": {
+    "all_environments_spread_p50": 3.0,
+    "temperature_only_spread_p50": 2.0,
+    "temperature_only_zero_trade_share": 0.1048,
+    "leave_one_city_out_median_spread_range": [
+      2.0
+    ]
+  },
+  "comparisons": [
+    "quote presence overall / by family / by hour (planned)",
+    "spread quantiles overall / by family / by city / by hour (planned)",
+    "depth quantiles at best bid, best ask, total book (planned)",
+    "trade counts and contracts by family / by hour; zero-trade share (planned)",
+    "stored-book gap distribution, dedup caveat (planned; stale-quote note)",
+    "robustness: all-environments, temperature-only, leave-one-city-out (planned)"
+  ]
+}

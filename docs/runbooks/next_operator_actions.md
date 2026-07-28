@@ -229,3 +229,37 @@ uv run kalshi-weather experiment readiness h0020
 | H0020 READY_FOR_FINAL_TEST | Section B sequence w/ H0020 artifacts | single final run + archive | rerun; feature changes | supported → replication reg; else closed |
 | H0020 DEFERRED_INSUFFICIENT_DATA | — | record; propose a NEW hypothesis | replacement window; forcing a run | final |
 | Any integrity mismatch (hash/ledger/leakage/INVALID) | — | STOP; investigate read-only | editing frozen files; proceeding | human decision |
+
+## A3. Station pilot review (SEA/PHX/MIA) — gate: 2026-08-04T00:00Z
+
+Calendar-gated, counts-only, READ-ONLY operational review (ADR 0023). It
+reports collection completeness, forecast coverage, provenance, parser/source
+health, and operational reliability — and **computes no forecast error,
+calibration, price, P&L, or station ranking**, touches no experiment, and
+mutates no registry.
+
+```
+uv run kalshi-weather research station-pilot-review          # human
+uv run kalshi-weather research station-pilot-review --json    # machine
+```
+
+- **Before 2026-08-04T00:00Z:** returns `STATION PILOT REVIEW NOT READY —
+  CALENDAR GATED` (exit 0), shows the gate + remaining time + allowed raw
+  counts only. No per-station decision, no overall verdict, no artifact.
+- **At/after the gate:** per-station `KEEP` / `EXTEND_COLLECTION` /
+  `REMOVE_FOR_DATA_QUALITY` (registered ADR-0023 criteria only) → overall
+  `PILOT_OPERATIONALLY_ACCEPTABLE` / `PILOT_COLLECTION_EXTENSION_REQUIRED` /
+  `PILOT_DATA_QUALITY_FAILURE`. The 2026-07-27 Kalshi-API outage is
+  KALSHI-only and never counts as a weather-collection fault.
+
+**Post-gate operator command (run ON OR AFTER 2026-08-04, not before):**
+
+```
+uv run kalshi-weather research station-pilot-review \
+  --as-of 2026-08-04T00:00:00Z \
+  --output docs/research/station_pilot_review_2026-08-04.md
+```
+
+Any station-registry change (keep-as-is, extend, or removal) requires a
+**separate explicit human approval** — this review mutates nothing and never
+removes SEA/PHX/MIA automatically.

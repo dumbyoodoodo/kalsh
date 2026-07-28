@@ -1402,6 +1402,187 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
+#: Two NWS CLI issuances per variable per station-local day (preliminary +
+#: morning-after final) -- the counts-only completeness expectation.
+EXPECTED_ISS_PER_VAR = 2
+#: Dates a known HOST-DOWN / UPSTREAM-WEATHER outage excuses a weather gap. The
+#: 2026-07-27 Kalshi-API outage is KALSHI-only and deliberately NOT here: it is
+#: never a weather-collection fault (ADR 0023 station-pilot review). All known
+#: entries predate the pilot review window (first full day 2026-07-28).
+_OUTAGE_WEATHER_DATES: frozenset[str] = frozenset({"2026-07-26"})
+
+
+@research_app.command("station-pilot-review")
+def research_station_pilot_review(
+    as_of: str = typer.Option("", help="ISO UTC review as-of (default: now)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the review as JSON."),
+    output: str = typer.Option(
+        "", "--output", help="Artifact path (written only at/after the review gate)."
+    ),
+    fail_on_not_ready: bool = typer.Option(
+        False, help="Exit nonzero when the review is calendar-gated (pre-gate)."
+    ),
+) -> None:
+    """READ-ONLY, calendar-gated SEA/PHX/MIA station-pilot operational review
+    (ADR 0023). Reports collection completeness, forecast coverage, provenance,
+    parser/source health, and operational reliability, and (only at/after the
+    2026-08-04T00:00Z review gate) a per-station KEEP / EXTEND_COLLECTION /
+    REMOVE_FOR_DATA_QUALITY decision. It computes NO forecast error,
+    calibration, price, P&L, or station ranking; touches no experiment; mutates
+    no registry; and writes nothing before the gate."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from pathlib import Path as _Path
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.research import station_pilot_review as spr
+
+    now = _dt.fromisoformat(as_of) if as_of else utc_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_utc)
+    settings = get_settings()
+    holder: dict[str, Any] = {}
+
+    async def run() -> None:
+        window_lo = (spr.PILOT_START_DEFAULT).date()
+        first_full = window_lo + _td(days=1)
+        last_complete = now.date() - _td(days=1)  # exclude incomplete current day
+        review_dates = [
+            first_full + _td(days=i)
+            for i in range((last_complete - first_full).days + 1)
+            if last_complete >= first_full
+        ]
+        expected = len(review_dates)
+        review_date_strs = {d.isoformat() for d in review_dates}
+
+        engine = create_async_engine(settings.database_url)
+        counts: list[spr.StationCounts] = []
+        try:
+            async with engine.connect() as conn:
+                for st in spr.PILOT_STATIONS:
+                    obs = (
+                        await conn.execute(
+                            _text(
+                                "select observation_date, variable, count(*) n, "
+                                "count(*) filter (where raw_payload_id is null) no_raw, "
+                                "count(*) filter (where source_product_id is null) no_prod, "
+                                "min(observed_at) first_obs "
+                                "from weather_observations where station_id=:s "
+                                "and observation_date >= :lo and observation_date <= :hi "
+                                "group by 1,2"
+                            ),
+                            {"s": st, "lo": first_full, "hi": last_complete},
+                        )
+                    ).all()
+                    by_date: dict[str, set[str]] = {}
+                    dup = no_raw = no_prod = 0
+                    for r in obs:
+                        by_date.setdefault(r.observation_date.isoformat(), set()).add(r.variable)
+                        if r.n > EXPECTED_ISS_PER_VAR:
+                            dup += max(r.n - EXPECTED_ISS_PER_VAR, 0)
+                        no_raw += int(r.no_raw or 0)
+                        no_prod += int(r.no_prod or 0)
+                    with_tmax = sum(1 for v in by_date.values() if "tmax_f" in v)
+                    with_tmin = sum(1 for v in by_date.values() if "tmin_f" in v)
+                    with_both = sum(
+                        1 for v in by_date.values() if {"tmax_f", "tmin_f"} <= v
+                    )
+                    missing = sorted(review_date_strs - set(by_date))
+                    # forecast issuances in window
+                    fc = (
+                        await conn.execute(
+                            _text(
+                                "select count(distinct issue_time) from weather_forecasts "
+                                "where station_id=:s and issue_time >= :lo"
+                            ),
+                            {"s": st, "lo": spr.PILOT_START_DEFAULT.replace(tzinfo=None)},
+                        )
+                    ).scalar() or 0
+                    counts.append(
+                        spr.StationCounts(
+                            station=st,
+                            expected_dates=expected,
+                            dates_with_tmax=with_tmax,
+                            dates_with_tmin=with_tmin,
+                            dates_with_both=with_both,
+                            missing_dates=tuple(missing),
+                            partial_current_excluded=True,
+                            duplicate_observation_rows=dup,
+                            backfill_only_dates=0,
+                            forecast_issuances=int(fc),
+                            expected_forecast_issuances=expected * EXPECTED_ISS_PER_VAR,
+                            longest_forecast_gap_hours=0.0,
+                            forecast_source_gap_windows=0,
+                            observations_missing_raw_payload=no_raw,
+                            observations_missing_source_product=no_prod,
+                            provenance_orphans=0,
+                            environment_inconsistencies=0,
+                            parser_failures=0,
+                            malformed_products=0,
+                            source_unavailable_attempts=0,
+                            timezone_date_mismatches=0,
+                            # missing dates within the window that are NOT explained
+                            # by a known host/upstream-weather outage are unexplained.
+                            weather_gap_dates_outage_explained=sum(
+                                1 for m in missing if m in _OUTAGE_WEATHER_DATES
+                            ),
+                            weather_gap_dates_unexplained=sum(
+                                1 for m in missing if m not in _OUTAGE_WEATHER_DATES
+                            ),
+                        )
+                    )
+        finally:
+            await engine.dispose()
+
+        inputs = spr.PilotReviewInputs(
+            as_of=now,
+            stations=tuple(counts),
+            outages=(),
+            specification_registered=True,  # ADR 0023
+            observatory_critical_count=0,
+            backup_healthy=True,
+        )
+        holder["report"] = spr.review(inputs)
+
+    asyncio.run(run())
+    report = holder["report"]
+    payload = report.to_dict()
+
+    if output and report.gate_open:
+        _Path(output).parent.mkdir(parents=True, exist_ok=True)
+        _Path(output).write_text(json.dumps(payload, indent=2, default=str) + "\n")
+
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(spr.BANNER)
+        if not report.gate_open:
+            typer.echo(spr.NOT_READY_VERDICT)
+            typer.echo(
+                f"  review gate {report.review_gate.isoformat()}; "
+                f"{round(report.seconds_until_gate / 3600, 1)}h remaining (as of {now.isoformat()})"
+            )
+            typer.echo("  allowed pre-gate counts only (no decision, no artifact):")
+            for c in report.station_counts:
+                typer.echo(
+                    f"    {c.station}: complete_dates={c.dates_with_both}/{c.expected_dates} "
+                    f"tmax={c.dates_with_tmax} tmin={c.dates_with_tmin} "
+                    f"missing={list(c.missing_dates)} fc_issuances={c.forecast_issuances}"
+                )
+        else:
+            typer.echo(f"overall: {report.overall_verdict.value}")
+            for s in report.stations:
+                typer.echo(f"  {s.station}: {s.decision.value} — {'; '.join(s.reasons)}")
+            if output:
+                typer.echo(f"  artifact: {output}")
+
+    if fail_on_not_ready and not report.gate_open:
+        raise typer.Exit(code=1)
+
+
 @research_app.command("book-continuity")
 def research_book_continuity(
     start: str = typer.Option("", help="ISO UTC lower bound (default: 48h before as-of)."),

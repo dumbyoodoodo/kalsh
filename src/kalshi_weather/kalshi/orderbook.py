@@ -49,14 +49,23 @@ class BestQuote:
         return self.best_no_ask_cents - self.best_no_bid_cents
 
 
-def _validate_levels(levels: list[Level], *, side: str) -> None:
+def _quotable_levels(levels: list[Level], *, side: str) -> list[Level]:
+    """Levels usable for best-bid derivation: a negative quantity is genuine
+    corruption and still fails closed, but a price outside the tradeable
+    [1, 99] range (Kalshi intermittently returns a price-0 level on some
+    long-horizon markets) is not a real resting quote -- it is excluded from
+    quote derivation rather than rejecting the entire book. The raw levels are
+    still preserved verbatim in ``yes_levels_json``/``no_levels_json`` upstream,
+    so nothing is silently discarded from the archive; only the derived
+    best-bid ignores the out-of-range level.
+    """
+    quotable: list[Level] = []
     for price_cents, quantity in levels:
-        if not (MIN_PRICE_CENTS <= price_cents <= MAX_PRICE_CENTS):
-            raise InvalidPriceLevelError(
-                f"{side} price {price_cents} out of [{MIN_PRICE_CENTS}, {MAX_PRICE_CENTS}]"
-            )
         if quantity < 0:
             raise InvalidPriceLevelError(f"{side} quantity {quantity} is negative")
+        if MIN_PRICE_CENTS <= price_cents <= MAX_PRICE_CENTS:
+            quotable.append((price_cents, quantity))
+    return quotable
 
 
 def _best_bid(levels: list[Level]) -> int | None:
@@ -71,13 +80,16 @@ def reconstruct_best_quote(yes_bids: list[Level], no_bids: list[Level]) -> BestQ
 
     An empty side means no resting bids on that side; the corresponding bid
     is ``None`` and the *other* side's ask (which depends on this bid) is
-    also ``None``, since there is nothing to derive it from.
+    also ``None``, since there is nothing to derive it from. Out-of-range
+    price levels are excluded from the derivation (see ``_quotable_levels``);
+    a side that has only such levels reconstructs as "no bid", never a bogus
+    zero bid.
     """
-    _validate_levels(yes_bids, side="yes")
-    _validate_levels(no_bids, side="no")
+    yes_quotable = _quotable_levels(yes_bids, side="yes")
+    no_quotable = _quotable_levels(no_bids, side="no")
 
-    best_yes_bid = _best_bid(yes_bids)
-    best_no_bid = _best_bid(no_bids)
+    best_yes_bid = _best_bid(yes_quotable)
+    best_no_bid = _best_bid(no_quotable)
 
     best_yes_ask = FULL_RANGE_CENTS - best_no_bid if best_no_bid is not None else None
     best_no_ask = FULL_RANGE_CENTS - best_yes_bid if best_yes_bid is not None else None

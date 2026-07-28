@@ -74,12 +74,27 @@ def test_single_level_each_side() -> None:
 
 
 @pytest.mark.parametrize("bad_price", [0, 100, -1, 200])
-def test_rejects_price_outside_1_to_99(bad_price: int) -> None:
-    with pytest.raises(InvalidPriceLevelError):
-        reconstruct_best_quote([(bad_price, 1)], [])
+def test_out_of_range_price_level_is_skipped_not_rejected(bad_price: int) -> None:
+    # Regression: Kalshi intermittently returns a price-0 level on some
+    # long-horizon markets. The whole book must NOT be discarded -- the
+    # out-of-range level is excluded from quote derivation and the valid
+    # levels still produce a quote.
+    quote = reconstruct_best_quote([(bad_price, 5), (40, 10)], [])
+    assert quote.best_yes_bid_cents == 40  # valid level survives
+    assert quote.best_no_ask_cents == 100 - 40
+
+
+def test_side_with_only_out_of_range_levels_has_no_bid() -> None:
+    # A side whose only level is out-of-range reconstructs as "no bid",
+    # never a bogus zero bid.
+    quote = reconstruct_best_quote([(0, 5)], [(30, 2)])
+    assert quote.best_yes_bid_cents is None
+    assert quote.best_no_ask_cents is None  # depends on the (absent) yes bid
+    assert quote.best_no_bid_cents == 30
 
 
 def test_rejects_negative_quantity() -> None:
+    # Negative quantity is genuine corruption and still fails closed.
     with pytest.raises(InvalidPriceLevelError):
         reconstruct_best_quote([(50, -1)], [])
 

@@ -18,6 +18,7 @@ review artifact.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -104,6 +105,12 @@ class StationCounts:
     # operational
     weather_gap_dates_outage_explained: int
     weather_gap_dates_unexplained: int
+    #: Field names whose per-station evidence could NOT be reliably derived from
+    #: existing production data (e.g. a non-zero cycle-level parser-error
+    #: aggregate that cannot be attributed to one station). Unavailable evidence
+    #: is never reported as clean: a station with any unavailable field cannot
+    #: be KEEP (it falls to EXTEND_COLLECTION unless a hard defect forces REMOVE).
+    evidence_unavailable: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +206,7 @@ def _counts_to_dict(c: StationCounts) -> dict[str, Any]:
             "weather_gap_dates_outage_explained": c.weather_gap_dates_outage_explained,
             "weather_gap_dates_unexplained": c.weather_gap_dates_unexplained,
         },
+        "evidence_unavailable": list(c.evidence_unavailable),
     }
 
 
@@ -256,6 +264,13 @@ def classify_station(counts: StationCounts) -> StationReview:
     if counts.parser_failures == 1 or counts.malformed_products >= 1:
         extend.append("isolated parser/malformed-product event(s) need further observation")
 
+    # Unavailable evidence can never be reported as clean: it blocks KEEP.
+    if counts.evidence_unavailable:
+        extend.append(
+            "evidence incomplete — cannot confirm clean for: "
+            + ", ".join(counts.evidence_unavailable)
+        )
+
     if remove:
         return StationReview(counts.station, StationDecision.REMOVE_FOR_DATA_QUALITY, tuple(remove))
     if extend:
@@ -265,7 +280,8 @@ def classify_station(counts: StationCounts) -> StationReview:
         StationDecision.KEEP,
         (
             f"{counts.dates_with_both} complete date(s); no parser/provenance defect; "
-            "no unexplained station-specific gap; timezone/date handling correct",
+            "no unexplained station-specific gap; timezone/date handling correct; "
+            "all registered evidence available",
         ),
     )
 
@@ -320,3 +336,125 @@ def review(inputs: PilotReviewInputs) -> PilotReviewReport:
             f"{inputs.observatory_critical_count} observatory CRITICAL finding(s) — investigate"
         )
     return report
+
+
+# --- pure evidence builder (from read-only production rows) -------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ObsRowLite:
+    """One weather_observation row, only the fields the review may see."""
+
+    observation_date: date
+    variable: str
+    raw_payload_id: int | None
+    raw_payload_orphan: bool  # raw_payload_id set but no matching raw_api_payloads row
+    issuance_time: datetime
+    observed_at: datetime
+    provider: str
+
+
+#: A gap between successive forecast issuances longer than this is a
+#: "source-gap window" (schedule-agnostic; mirrors the observatory cadence
+#: check's 18h threshold for two ~2/day issuances).
+FORECAST_GAP_THRESHOLD_HOURS = 18.0
+#: |observation_date - issuance date| beyond this signals a timezone/date-
+#: assignment defect (a correct CLI reports day D issued on D or D+1).
+TZ_DATE_TOLERANCE_DAYS = 2
+#: An observation whose observed_at is this many days after its
+#: observation_date was collected only via later backfill, not contemporaneously.
+BACKFILL_LAG_DAYS = 2
+
+
+def _naive(dt: datetime) -> datetime:
+    return dt.astimezone(UTC).replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def build_station_counts(
+    station: str,
+    *,
+    review_dates: tuple[date, ...],
+    observations: tuple[ObsRowLite, ...],
+    forecast_issue_times: tuple[datetime, ...],
+    window_weather_errors: int,
+    window_weather_invalid: int,
+    outage_weather_dates: frozenset[str] = frozenset(),
+    expected_iss_per_var: int = EXPECTED_CLI_ISSUANCES_PER_DAY,
+) -> StationCounts:
+    """Derive one pilot station's counts-only evidence from read-only rows.
+
+    Every field comes from the passed rows (already station- and window-scoped
+    by the caller). Fields that cannot be attributed per-station from existing
+    data -- parser failures / malformed products / source-unavailable attempts,
+    which are recorded only as cycle-level aggregates -- are 0 when the whole
+    review window is clean (``window_weather_errors``/``invalid`` == 0, so no
+    station had one) and otherwise marked UNAVAILABLE (never silently 0).
+    """
+    review_date_strs = {d.isoformat() for d in review_dates}
+    by_date: dict[str, set[str]] = {}
+    per_dv: dict[tuple[str, str], int] = {}
+    missing_raw = orphans = provider_mismatch = tz_mismatch = 0
+    backfill_dates: dict[str, bool] = {}
+
+    for o in observations:
+        ds = o.observation_date.isoformat()
+        by_date.setdefault(ds, set()).add(o.variable)
+        per_dv[(ds, o.variable)] = per_dv.get((ds, o.variable), 0) + 1
+        if o.raw_payload_id is None:
+            missing_raw += 1
+        if o.raw_payload_orphan:
+            orphans += 1
+        if o.provider != "nws":
+            provider_mismatch += 1
+        if abs((o.observation_date - _naive(o.issuance_time).date()).days) > TZ_DATE_TOLERANCE_DAYS:
+            tz_mismatch += 1
+        is_backfill = (_naive(o.observed_at).date() - o.observation_date).days > BACKFILL_LAG_DAYS
+        backfill_dates[ds] = backfill_dates.get(ds, True) and is_backfill
+
+    with_tmax = sum(1 for v in by_date.values() if "tmax_f" in v)
+    with_tmin = sum(1 for v in by_date.values() if "tmin_f" in v)
+    with_both = sum(1 for v in by_date.values() if {"tmax_f", "tmin_f"} <= v)
+    missing = tuple(sorted(review_date_strs - set(by_date)))
+    duplicates = sum(max(n - expected_iss_per_var, 0) for n in per_dv.values())
+    backfill_only = sum(1 for ds, only in backfill_dates.items() if only and ds in review_date_strs)
+
+    # forecast gaps
+    issues = sorted(_naive(t) for t in forecast_issue_times)
+    gaps_h = [(b - a).total_seconds() / 3600.0 for a, b in itertools.pairwise(issues)]
+    longest_gap = max(gaps_h) if gaps_h else 0.0
+    source_gap_windows = sum(1 for g in gaps_h if g > FORECAST_GAP_THRESHOLD_HOURS)
+
+    # aggregate-only fields: clean window => 0 (supported); else UNAVAILABLE.
+    unavailable: list[str] = []
+    if window_weather_errors != 0:
+        unavailable.extend(["parser_failures", "source_unavailable_attempts"])
+    if window_weather_invalid != 0:
+        unavailable.append("malformed_products")
+
+    exp_out = sum(1 for m in missing if m in outage_weather_dates)
+    return StationCounts(
+        station=station,
+        expected_dates=len(review_dates),
+        dates_with_tmax=with_tmax,
+        dates_with_tmin=with_tmin,
+        dates_with_both=with_both,
+        missing_dates=missing,
+        partial_current_excluded=True,
+        duplicate_observation_rows=duplicates,
+        backfill_only_dates=backfill_only,
+        forecast_issuances=len(set(issues)),
+        expected_forecast_issuances=len(review_dates) * expected_iss_per_var,
+        longest_forecast_gap_hours=round(longest_gap, 2),
+        forecast_source_gap_windows=source_gap_windows,
+        observations_missing_raw_payload=missing_raw,
+        observations_missing_source_product=0,  # source_product_id is NOT NULL
+        provenance_orphans=orphans,
+        environment_inconsistencies=provider_mismatch,  # weather has no env; provider proxy
+        parser_failures=0,
+        malformed_products=0,
+        source_unavailable_attempts=0,
+        timezone_date_mismatches=tz_mismatch,
+        weather_gap_dates_outage_explained=exp_out,
+        weather_gap_dates_unexplained=len(missing) - exp_out,
+        evidence_unavailable=tuple(unavailable),
+    )

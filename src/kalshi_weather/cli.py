@@ -1402,9 +1402,6 @@ def research_leakage_audit(
         raise typer.Exit(code=1)
 
 
-#: Two NWS CLI issuances per variable per station-local day (preliminary +
-#: morning-after final) -- the counts-only completeness expectation.
-EXPECTED_ISS_PER_VAR = 2
 #: Dates a known HOST-DOWN / UPSTREAM-WEATHER outage excuses a weather gap. The
 #: 2026-07-27 Kalshi-API outage is KALSHI-only and deliberately NOT here: it is
 #: never a weather-collection fault (ADR 0023 station-pilot review). All known
@@ -1458,80 +1455,74 @@ def research_station_pilot_review(
         expected = len(review_dates)
         review_date_strs = {d.isoformat() for d in review_dates}
 
+        _ = (expected, review_date_strs)  # window bounds; counts derived below
         engine = create_async_engine(settings.database_url)
         counts: list[spr.StationCounts] = []
         try:
             async with engine.connect() as conn:
+                # Cycle-level weather parser errors are NOT recorded per-station;
+                # gate the aggregate-only fields on a clean review window.
+                agg = (
+                    await conn.execute(
+                        _text(
+                            "select coalesce(sum((stats_json->>'errors')::int),0) errs, "
+                            "coalesce(sum((stats_json->>'invalid_items')::int),0) inv "
+                            "from collector_runs where collector='weather' "
+                            "and started_at >= :lo"
+                        ),
+                        {"lo": first_full},
+                    )
+                ).first()
+                window_errors = int(agg.errs) if agg else 0
+                window_invalid = int(agg.inv) if agg else 0
+
                 for st in spr.PILOT_STATIONS:
-                    obs = (
+                    # Per-observation rows (window-scoped) with orphan detection:
+                    # raw_payload_id set but no matching raw_api_payloads row.
+                    obs_rows = (
                         await conn.execute(
                             _text(
-                                "select observation_date, variable, count(*) n, "
-                                "count(*) filter (where raw_payload_id is null) no_raw, "
-                                "count(*) filter (where source_product_id is null) no_prod, "
-                                "min(observed_at) first_obs "
-                                "from weather_observations where station_id=:s "
-                                "and observation_date >= :lo and observation_date <= :hi "
-                                "group by 1,2"
+                                "select o.observation_date, o.variable, o.raw_payload_id, "
+                                "(o.raw_payload_id is not null and r.id is null) orphan, "
+                                "o.issuance_time, o.observed_at, o.provider "
+                                "from weather_observations o "
+                                "left join raw_api_payloads r on r.id = o.raw_payload_id "
+                                "where o.station_id=:s and o.observation_date >= :lo "
+                                "and o.observation_date <= :hi"
                             ),
                             {"s": st, "lo": first_full, "hi": last_complete},
                         )
                     ).all()
-                    by_date: dict[str, set[str]] = {}
-                    dup = no_raw = no_prod = 0
-                    for r in obs:
-                        by_date.setdefault(r.observation_date.isoformat(), set()).add(r.variable)
-                        if r.n > EXPECTED_ISS_PER_VAR:
-                            dup += max(r.n - EXPECTED_ISS_PER_VAR, 0)
-                        no_raw += int(r.no_raw or 0)
-                        no_prod += int(r.no_prod or 0)
-                    with_tmax = sum(1 for v in by_date.values() if "tmax_f" in v)
-                    with_tmin = sum(1 for v in by_date.values() if "tmin_f" in v)
-                    with_both = sum(
-                        1 for v in by_date.values() if {"tmax_f", "tmin_f"} <= v
-                    )
-                    missing = sorted(review_date_strs - set(by_date))
-                    # forecast issuances in window
-                    fc = (
+                    fc_rows = (
                         await conn.execute(
                             _text(
-                                "select count(distinct issue_time) from weather_forecasts "
+                                "select distinct issue_time from weather_forecasts "
                                 "where station_id=:s and issue_time >= :lo"
                             ),
                             {"s": st, "lo": spr.PILOT_START_DEFAULT.replace(tzinfo=None)},
                         )
-                    ).scalar() or 0
+                    ).all()
+                    observations = tuple(
+                        spr.ObsRowLite(
+                            observation_date=r.observation_date,
+                            variable=r.variable,
+                            raw_payload_id=r.raw_payload_id,
+                            raw_payload_orphan=bool(r.orphan),
+                            issuance_time=r.issuance_time,
+                            observed_at=r.observed_at,
+                            provider=r.provider,
+                        )
+                        for r in obs_rows
+                    )
                     counts.append(
-                        spr.StationCounts(
-                            station=st,
-                            expected_dates=expected,
-                            dates_with_tmax=with_tmax,
-                            dates_with_tmin=with_tmin,
-                            dates_with_both=with_both,
-                            missing_dates=tuple(missing),
-                            partial_current_excluded=True,
-                            duplicate_observation_rows=dup,
-                            backfill_only_dates=0,
-                            forecast_issuances=int(fc),
-                            expected_forecast_issuances=expected * EXPECTED_ISS_PER_VAR,
-                            longest_forecast_gap_hours=0.0,
-                            forecast_source_gap_windows=0,
-                            observations_missing_raw_payload=no_raw,
-                            observations_missing_source_product=no_prod,
-                            provenance_orphans=0,
-                            environment_inconsistencies=0,
-                            parser_failures=0,
-                            malformed_products=0,
-                            source_unavailable_attempts=0,
-                            timezone_date_mismatches=0,
-                            # missing dates within the window that are NOT explained
-                            # by a known host/upstream-weather outage are unexplained.
-                            weather_gap_dates_outage_explained=sum(
-                                1 for m in missing if m in _OUTAGE_WEATHER_DATES
-                            ),
-                            weather_gap_dates_unexplained=sum(
-                                1 for m in missing if m not in _OUTAGE_WEATHER_DATES
-                            ),
+                        spr.build_station_counts(
+                            st,
+                            review_dates=tuple(review_dates),
+                            observations=observations,
+                            forecast_issue_times=tuple(r.issue_time for r in fc_rows),
+                            window_weather_errors=window_errors,
+                            window_weather_invalid=window_invalid,
+                            outage_weather_dates=_OUTAGE_WEATHER_DATES,
                         )
                     )
         finally:

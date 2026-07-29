@@ -4,16 +4,18 @@ per-station criteria, overall verdict aggregation, determinism, and isolation
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from kalshi_weather.research.station_pilot_review import (
     BANNER,
     REVIEW_GATE,
+    ObsRowLite,
     OverallVerdict,
     PilotReviewInputs,
     StationCounts,
     StationDecision,
+    build_station_counts,
     classify_station,
     gate_open,
     review,
@@ -228,3 +230,149 @@ def test_pre_gate_to_dict_marks_not_ready_verdict() -> None:
     d = review(inputs(as_of=BEFORE)).to_dict()
     assert d["not_ready_verdict"] == "STATION PILOT REVIEW NOT READY — CALENDAR GATED"
     assert d["gate_open"] is False
+
+
+# --- evidence builder (from read-only rows) ---------------------------------
+
+REVIEW_DATES = (date(2026, 7, 28), date(2026, 7, 29), date(2026, 7, 30))
+
+
+def obs(
+    d: date = date(2026, 7, 28),
+    variable: str = "tmax_f",
+    raw_payload_id: int | None = 100,
+    orphan: bool = False,
+    issuance_time: datetime = datetime(2026, 7, 29, 6, 0),
+    observed_at: datetime = datetime(2026, 7, 29, 6, 5),
+    provider: str = "nws",
+) -> ObsRowLite:
+    return ObsRowLite(d, variable, raw_payload_id, orphan, issuance_time, observed_at, provider)
+
+
+def _both(d: date) -> tuple[ObsRowLite, ...]:
+    iss = datetime(d.year, d.month, d.day, 6, 0)
+    return (obs(d, "tmax_f", issuance_time=iss, observed_at=iss),
+            obs(d, "tmin_f", issuance_time=iss, observed_at=iss))
+
+
+def build(**kw: object):  # type: ignore[no-untyped-def]
+    base: dict = dict(
+        review_dates=REVIEW_DATES,
+        observations=tuple(o for d in REVIEW_DATES for o in _both(d)),
+        forecast_issue_times=(datetime(2026, 7, 28, 6), datetime(2026, 7, 28, 18)),
+        window_weather_errors=0,
+        window_weather_invalid=0,
+    )
+    base.update(kw)
+    return build_station_counts("SEA", **base)
+
+
+def test_build_completeness_and_missing_dates() -> None:
+    c = build(observations=_both(date(2026, 7, 28)) + _both(date(2026, 7, 29)))
+    assert c.dates_with_both == 2 and c.dates_with_tmax == 2 and c.dates_with_tmin == 2
+    assert c.missing_dates == ("2026-07-30",)
+    assert c.weather_gap_dates_unexplained == 1
+
+
+def test_build_duplicate_rows_beyond_two_issuances() -> None:
+    iss = datetime(2026, 7, 28, 6)
+    dup = _both(date(2026, 7, 28)) + (obs(date(2026, 7, 28), "tmax_f", issuance_time=iss,
+                                          observed_at=iss),) * 2  # 3 tmax total -> 1 dup
+    c = build(observations=dup, review_dates=(date(2026, 7, 28),))
+    assert c.duplicate_observation_rows == 1
+
+
+def test_build_provenance_orphan_and_missing_raw() -> None:
+    rows = (obs(raw_payload_id=None), obs(variable="tmin_f", raw_payload_id=7, orphan=True))
+    c = build(observations=rows, review_dates=(date(2026, 7, 28),))
+    assert c.observations_missing_raw_payload == 1
+    assert c.provenance_orphans == 1
+
+
+def test_build_provider_mismatch_is_environment_inconsistency() -> None:
+    c = build(observations=(obs(provider="iem"),), review_dates=(date(2026, 7, 28),))
+    assert c.environment_inconsistencies == 1
+
+
+def test_build_timezone_date_mismatch_detected() -> None:
+    # observation_date 5 days off its issuance date -> tz/date defect
+    bad = obs(d=date(2026, 7, 20), issuance_time=datetime(2026, 7, 28, 6))
+    c = build(observations=(bad,), review_dates=(date(2026, 7, 20),))
+    assert c.timezone_date_mismatches == 1
+
+
+def test_build_backfill_only_date() -> None:
+    # observed_at 10 days after observation_date -> collected via backfill only
+    bf = obs(d=date(2026, 7, 28), observed_at=datetime(2026, 8, 8, 6))
+    c = build(observations=(bf,), review_dates=(date(2026, 7, 28),))
+    assert c.backfill_only_dates == 1
+
+
+def test_build_forecast_gap_and_source_gap_windows() -> None:
+    issues = (datetime(2026, 7, 28, 0), datetime(2026, 7, 28, 6), datetime(2026, 7, 29, 12))
+    c = build(forecast_issue_times=issues)  # 6h then 30h gap
+    assert c.longest_forecast_gap_hours == 30.0
+    assert c.forecast_source_gap_windows == 1  # 30h > 18h threshold
+
+
+# --- window-gated aggregate fields (parser/malformed/source) -----------------
+
+def test_clean_window_supports_zero_not_unavailable() -> None:
+    c = build(window_weather_errors=0, window_weather_invalid=0)
+    assert c.parser_failures == 0 and c.malformed_products == 0
+    assert c.evidence_unavailable == ()
+    # a fully clean station is KEEP-eligible only after enough complete dates
+    assert classify_station(c).decision in (StationDecision.KEEP, StationDecision.EXTEND_COLLECTION)
+
+
+def test_parser_failure_outside_window_does_not_flag() -> None:
+    # The SQL scopes cycles to started_at >= first_full; an out-of-window parser
+    # error therefore never enters window_weather_errors -> stays 0, no flag.
+    c = build(window_weather_errors=0)
+    assert "parser_failures" not in c.evidence_unavailable
+
+
+def test_window_errors_mark_parser_and_source_unavailable() -> None:
+    c = build(window_weather_errors=4, window_weather_invalid=0)
+    assert "parser_failures" in c.evidence_unavailable
+    assert "source_unavailable_attempts" in c.evidence_unavailable
+    assert "malformed_products" not in c.evidence_unavailable
+
+
+def test_window_invalid_marks_malformed_unavailable() -> None:
+    c = build(window_weather_invalid=3)
+    assert "malformed_products" in c.evidence_unavailable
+
+
+def test_unavailable_evidence_cannot_be_keep() -> None:
+    # A window-error-flagged station (otherwise complete & clean) must NOT KEEP.
+    rdates = tuple(date(2026, 7, 28) + timedelta(days=i) for i in range(7))
+    c = build_station_counts(
+        "SEA",
+        review_dates=rdates,
+        observations=tuple(o for d in rdates for o in _both(d)),
+        forecast_issue_times=(datetime(2026, 7, 28, 6), datetime(2026, 7, 28, 18)),
+        window_weather_errors=2,
+        window_weather_invalid=0,
+    )
+    assert c.dates_with_both == 7  # complete
+    d = classify_station(c)
+    assert d.decision is StationDecision.EXTEND_COLLECTION  # NOT keep
+    assert any("evidence incomplete" in r for r in d.reasons)
+
+
+def test_remove_still_wins_over_unavailable() -> None:
+    rdates = tuple(date(2026, 7, 28) + timedelta(days=i) for i in range(7))
+    c = build_station_counts(
+        "SEA",
+        review_dates=rdates,
+        observations=(
+            *(o for d in rdates for o in _both(d)),
+            obs(d=date(2026, 7, 1), issuance_time=datetime(2026, 7, 28, 6)),  # tz mismatch
+        ),
+        forecast_issue_times=(datetime(2026, 7, 28, 6),),
+        window_weather_errors=2,  # also unavailable
+        window_weather_invalid=0,
+    )
+    assert c.timezone_date_mismatches == 1 and c.evidence_unavailable
+    assert classify_station(c).decision is StationDecision.REMOVE_FOR_DATA_QUALITY

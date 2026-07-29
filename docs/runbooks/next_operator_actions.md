@@ -251,6 +251,7 @@ uv run kalshi-weather research station-pilot-review --json    # machine
   `PILOT_OPERATIONALLY_ACCEPTABLE` / `PILOT_COLLECTION_EXTENSION_REQUIRED` /
   `PILOT_DATA_QUALITY_FAILURE`. The 2026-07-27 Kalshi-API outage is
   KALSHI-only and never counts as a weather-collection fault.
+- **Evidence availability:** the loader derives every data-quality signal (completeness, duplicates, provenance orphans, forecast gaps, timezone/date checks) from read-only production rows. Cycle-level parser/malformed/source-unavailable aggregates cannot be attributed per station: a clean review window (0 weather cycle errors) reports them as a verified 0, but a non-zero window marks them `evidence_unavailable`, which blocks KEEP (→ EXTEND_COLLECTION) so unavailable evidence is never read as clean.
 
 **Post-gate operator command (run ON OR AFTER 2026-08-04, not before):**
 

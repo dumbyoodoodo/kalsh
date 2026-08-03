@@ -104,6 +104,13 @@ experiment_app = typer.Typer(help="Run formal modeling experiments on frozen can
 app.add_typer(experiment_app, name="experiment")
 research_app = typer.Typer(help="Generic research-workbench utilities (leakage audit, ledger).")
 app.add_typer(research_app, name="research")
+data_quality_app = typer.Typer(help="Data-quality assets (permanent collection-gap ledger).")
+gap_ledger_app = typer.Typer(
+    help="Append-only permanent collection-gap ledger. Read-only by default; "
+    "records operational evidence only, never outcome or performance information."
+)
+app.add_typer(data_quality_app, name="data-quality")
+data_quality_app.add_typer(gap_ledger_app, name="gap-ledger")
 paper_app = typer.Typer(
     help="SIMULATION ONLY -- deterministic paper-trading/execution simulator (no exchange orders)."
 )
@@ -5229,6 +5236,225 @@ def backup_status(
     typer.echo(f"local backups on disk: {len(files)}")
     if newest:
         typer.echo(f"newest local backup:   {newest.path.name} ({newest.timestamp.isoformat()})")
+
+
+_GAP_LEDGER_BANNER = (
+    "PERMANENT COLLECTION-GAP LEDGER — OPERATIONAL EVIDENCE ONLY.\n"
+    "It records what was lost and why. It NEVER decides whether excluding "
+    "data improves a research result."
+)
+
+
+def _load_gap_ledger(path: str) -> tuple[Any, Path]:
+    from kalshi_weather.data_quality import gap_ledger as gl
+
+    ledger_path = Path(path) if path else gl.DEFAULT_LEDGER_PATH
+    return gl.GapLedger.load(ledger_path), ledger_path
+
+
+@gap_ledger_app.command("validate")
+def gap_ledger_validate(
+    path: str = typer.Option("", help="Ledger JSONL path (defaults to the canonical one)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit findings as JSON."),
+) -> None:
+    """READ-ONLY: verify schema, evidence, content hashes, and append-only rules.
+
+    Exits nonzero if any record fails, including a content-hash mismatch, which
+    means a previously-written line was edited in place."""
+    import json as _json
+
+    ledger, ledger_path = _load_gap_ledger(path)
+    problems = ledger.validate()
+    if as_json:
+        typer.echo(
+            _json.dumps(
+                {
+                    "path": str(ledger_path),
+                    "records": len(ledger.records),
+                    "problems": problems,
+                    "ok": not problems,
+                },
+                indent=2,
+            )
+        )
+    else:
+        typer.echo(_GAP_LEDGER_BANNER)
+        typer.echo(f"ledger: {ledger_path} ({len(ledger.records)} record(s))")
+        if problems:
+            typer.echo(f"INVALID — {len(problems)} problem(s):")
+            for problem in problems:
+                typer.echo(f"  - {problem}")
+        else:
+            typer.echo("VALID — schema, evidence, hashes, and append-only rules all pass")
+    if problems:
+        raise typer.Exit(code=1)
+
+
+@gap_ledger_app.command("list")
+def gap_ledger_list(
+    path: str = typer.Option("", help="Ledger JSONL path."),
+    subsystem: str = typer.Option("", help="Filter by subsystem."),
+    include_superseded: bool = typer.Option(False, help="Include amended-away records."),
+    as_json: bool = typer.Option(False, "--json", help="Emit as JSON."),
+) -> None:
+    """READ-ONLY: list ledger records (counts and classifications only)."""
+    import json as _json
+
+    from kalshi_weather.data_quality import gap_ledger as gl
+
+    ledger, ledger_path = _load_gap_ledger(path)
+    records = ledger.records if include_superseded else ledger.active_records()
+    if subsystem:
+        try:
+            wanted = gl.Subsystem(subsystem.upper())
+        except ValueError as exc:
+            raise typer.BadParameter(f"unknown subsystem {subsystem!r}") from exc
+        records = tuple(r for r in records if wanted in r.subsystems)
+    if as_json:
+        typer.echo(_json.dumps([r.to_dict() for r in records], indent=2))
+        return
+    typer.echo(_GAP_LEDGER_BANNER)
+    typer.echo(f"ledger: {ledger_path} — {len(records)} record(s)")
+    for record in records:
+        typer.echo(
+            f"  {record.gap_id}  {record.start_at.date()}→{record.end_at.date()}  "
+            f"{record.classification}  [{record.confidence}]  "
+            f"{','.join(str(s) for s in record.subsystems)}"
+        )
+        typer.echo(
+            f"      {record.gap_kind} / {record.recovery_state} / {record.research_treatment}"
+        )
+    summary = ledger.summary()
+    typer.echo(
+        f"  totals: active={summary['active_records']} superseded={summary['superseded_records']}"
+    )
+
+
+@gap_ledger_app.command("show")
+def gap_ledger_show(
+    gap_id: str = typer.Option(..., "--gap-id", help="Record to display."),
+    path: str = typer.Option("", help="Ledger JSONL path."),
+) -> None:
+    """READ-ONLY: display one record in full, including all evidence."""
+    import json as _json
+
+    ledger, _ = _load_gap_ledger(path)
+    record = ledger.by_id(gap_id)
+    if record is None:
+        typer.echo(f"no such gap_id: {gap_id}")
+        raise typer.Exit(code=1)
+    typer.echo(_GAP_LEDGER_BANNER)
+    typer.echo(_json.dumps(record.to_dict(), indent=2))
+
+
+@gap_ledger_app.command("export")
+def gap_ledger_export(
+    path: str = typer.Option("", help="Ledger JSONL path."),
+    as_json: bool = typer.Option(True, "--json", help="Emit the full ledger as JSON."),
+) -> None:
+    """READ-ONLY: export every record plus a counts-only summary."""
+    import json as _json
+
+    ledger, ledger_path = _load_gap_ledger(path)
+    payload = {
+        "path": str(ledger_path),
+        "summary": ledger.summary(),
+        "records": [r.to_dict() for r in ledger.records],
+    }
+    typer.echo(_json.dumps(payload, indent=2) if as_json else str(payload))
+
+
+@gap_ledger_app.command("propose")
+def gap_ledger_propose(
+    output: str = typer.Option(..., help="Where to write the candidate record JSON."),
+    gap_id: str = typer.Option(..., help="Proposed gap id."),
+) -> None:
+    """Write a SKELETON candidate record for human completion and review.
+
+    It never appends: a proposal is an editable draft, and every field below
+    must be filled in and evidenced before `gap-ledger append` will accept it."""
+    import json as _json
+
+    from kalshi_weather.data_quality import gap_ledger as gl
+
+    now = utc_now()
+    skeleton = {
+        "gap_id": gap_id,
+        "ledger_version": gl.LEDGER_VERSION,
+        "created_at": now.isoformat().replace("+00:00", "Z"),
+        "created_by": "<operator name>",
+        "classification": "<one of: " + ", ".join(str(c) for c in gl.Classification) + ">",
+        "gap_kind": "<one of: " + ", ".join(str(k) for k in gl.GapKind) + ">",
+        "subsystems": ["<one or more of: " + ", ".join(str(s) for s in gl.Subsystem) + ">"],
+        "environment": "production",
+        "start_at": "<ISO UTC>",
+        "end_at": "<ISO UTC>",
+        "scope": "<station / ticker / source scope, or empty>",
+        "affected_entity_count": 0,
+        "source_availability": "<one of: " + ", ".join(str(s) for s in gl.SourceAvailability) + ">",
+        "recovery_state": "<one of: " + ", ".join(str(s) for s in gl.RecoveryState) + ">",
+        "recoverability": "<one of: " + ", ".join(str(s) for s in gl.Recoverability) + ">",
+        "research_treatment": ("<one of: " + ", ".join(str(t) for t in gl.ResearchTreatment) + ">"),
+        "confidence": "<one of: " + ", ".join(str(c) for c in gl.Confidence) + ">",
+        "reason_code": "<short stable slug>",
+        "human_note": "<narrative; NEVER sufficient alone for CONFIRMED>",
+        "evidence": [
+            {
+                "kind": "<one of: " + ", ".join(str(k) for k in gl.EvidenceKind) + ">",
+                "reference": "<stable id or reproducible query>",
+                "detail": "",
+            }
+        ],
+        "collector_run_refs": [],
+        "poll_attempt_refs": [],
+        "raw_payload_refs": [],
+        "exclusion_eligible": False,
+        "supersedes_gap_id": None,
+        "related_gap_ids": [],
+    }
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(skeleton, indent=2) + "\n")
+    typer.echo(_GAP_LEDGER_BANNER)
+    typer.echo(f"wrote candidate skeleton -> {out}")
+    typer.echo("NOT appended. Complete it, then run `gap-ledger append --file ...`.")
+
+
+@gap_ledger_app.command("append")
+def gap_ledger_append(
+    file: str = typer.Option(..., "--file", help="Reviewed record JSON to append."),
+    path: str = typer.Option("", help="Ledger JSONL path."),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="Required. Affirms the record was reviewed by a human."
+    ),
+) -> None:
+    """Append ONE reviewed record. Never edits or deletes an existing line.
+
+    Refuses without --confirm, on schema/evidence failure, on a duplicate
+    gap_id, on a content-hash mismatch anywhere in the existing ledger, or if
+    the append would invalidate the ledger. Corrections are new records naming
+    supersedes_gap_id -- there is deliberately no update or delete command."""
+    import json as _json
+
+    from kalshi_weather.data_quality import gap_ledger as gl
+
+    if not confirm:
+        typer.echo(
+            "REFUSED: --confirm is required. A ledger append is a permanent, "
+            "append-only research record and must be human-reviewed first."
+        )
+        raise typer.Exit(code=2)
+    ledger, ledger_path = _load_gap_ledger(path)
+    try:
+        raw = _json.loads(Path(file).read_text())
+        record = gl.GapRecord.from_dict(raw)
+        stored = ledger.append(record, ledger_path)
+    except (gl.GapLedgerError, _json.JSONDecodeError, OSError) as exc:
+        typer.echo(f"REFUSED: {exc}")
+        raise typer.Exit(code=2) from exc
+    typer.echo(_GAP_LEDGER_BANNER)
+    typer.echo(f"appended {stored.gap_id} (content_hash={stored.content_hash[:12]}...)")
+    typer.echo(f"ledger now holds {len(ledger.records) + 1} record(s)")
 
 
 if __name__ == "__main__":

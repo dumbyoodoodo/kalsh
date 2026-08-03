@@ -618,6 +618,23 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 **Decision rule (pre-registered).** `CONFIRMED` only if M3−M1 test Brier 95% grouped-bootstrap CI is entirely below 0 AND no major station-subgroup sign reversal AND station-concentration requirement holds; `SUPPORTED BUT INCONCLUSIVE` if the point estimate improves but the CI spans 0 or coverage/concentration is marginal; `NOT SUPPORTED` if no improvement; `INVALID` on any leakage/hash/timestamp failure. Subgroup analysis is secondary. No tradable/efficiency claim under any outcome (probability scoring only; no execution/fees/liquidity).
 
+**Station-subgroup sign-reversal clarification (prospectively frozen 2026-08-03T03:18:06Z by Wilson Tu).** Recorded **before any H0019 test outcome was inspected** — at the time of recording H0019's readiness state was `TRAIN_READY`, its test window (2026-08-12 → 2026-08-25) had not opened, and zero test event-groups existed. This clarification **may not be modified after outcome access**.
+
+*Registered phrase being clarified:* "no major station-subgroup sign reversal" (from the pre-registered decision rule above).
+
+*Prospectively frozen operational interpretation:*
+
+- A station is **eligible** for the station-subgroup sign-reversal check only when it contains **at least four H0019 test event-groups**, matching the registration's existing per-station minimum (`min_events_per_station_test`). Eligibility must be determined **from counts only, before any H0019 test outcomes are loaded**.
+- For each eligible station, compute the **unweighted mean Brier-score difference** across its H0019 test event-groups, using the same difference orientation as the registered overall H0019 comparison (M3 − M1; negative favours the model). **Each event-group contributes exactly once.**
+- Do **not** weight by market count, row count, station sample volume, liquidity, observation volume, or the number of contracts within the event-group.
+- A **major station-subgroup sign reversal is present when at least one eligible station has a mean Brier-score difference strictly greater than zero.** A mean difference **equal to zero is not** a sign reversal.
+- Stations with fewer than four H0019 test event-groups are classified as **insufficient for the subgroup veto**. They can neither independently trigger nor clear the sign-reversal condition. Their counts and insufficiency **must still be reported**.
+- Missing, non-finite, duplicated, or otherwise invalid results for an eligible station cause the single-shot analysis to **fail closed**. They must not be silently omitted.
+- **One** eligible station with a positive mean difference is sufficient to trigger the registered major station-subgroup sign-reversal condition.
+- No alternative threshold, station weighting, pooled subgroup statistic, or sensitivity-analysis result may replace this rule in the single-shot verdict.
+
+This clarification **introduces no new numeric threshold** — it reuses the registration's already-frozen minimum of four test event-groups per station. It alters no other registered H0019 rule: the feature set, leakage rules, metrics, event grouping, registered windows, readiness gates, and all four verdict categories are unchanged. Executable form: `src/kalshi_weather/experiments/h0019.py`.
+
 **Anti-peeking.** The `experiment readiness h0019` command is read-only: it counts coverage only and never trains a model, generates a test prediction, or computes a test Brier score. The final test is a separate explicit command that verifies all readiness conditions first. Each readiness invocation is logged (state only, no outcome analysis).
 
 **Known limitations.** Small even when ready (~4 event-groups/day); 4 stations only; single horizon; candlestick-close benchmark; short seasonal span; not a tradable-edge test.

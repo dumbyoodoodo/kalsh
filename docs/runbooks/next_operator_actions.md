@@ -315,6 +315,26 @@ uv run kalshi-weather research station-pilot-review --json    # machine
 - **Station mappings (verified 2026-08-03, do not change here):** SEA / WFO SEW
   / America/Los_Angeles · PHX / WFO PSR / **America/Phoenix** (fixed UTC−7, never
   America/Denver) · MIA / WFO MFL / America/New_York.
+- **Uncovered-gap attribution (added 2026-08-03):** `unclassified_gap_overlap`
+  is now derived from *collector-run continuity minus actual ledger coverage*,
+  not from ledger confidence. A ledger of entirely CONFIRMED records says
+  nothing about outages it never recorded. Candidate gaps come from weather
+  collector runs at the registered `outage_threshold_hours` (2.0h, the
+  observatory's own constant); coverage requires **both** subsystem
+  compatibility (a Kalshi record can never cover a weather gap) **and** cause
+  compatibility (only HOST_UNAVAILABLE / COLLECTOR_STOPPED / COLLECTOR_CRASH /
+  UPSTREAM_WEATHER_SOURCE_OUTAGE / REQUEST_FAILED can explain an absence of
+  runs — a PARSER_FAILURE means the collector *was* running). Uncovered or
+  ambiguously-covered time ⇒ `unclassified_gap_overlap=true`. A continuity
+  query failure blocks the review; it never silently reports "no gaps".
+  **Current production reading (2026-08-03, pre-gate): 7 uncovered gaps,
+  51.2h, all in the 07-30 → 08-02 cluster, touching complete local dates
+  07-30 … 08-02 at all three stations.** Those remain UNCOVERED — do not
+  label them HOST_UNAVAILABLE without host-side evidence.
+- **`--as-of` may not be in the future.** Refused before any production query
+  or artifact path is touched: `REFUSED: --as-of cannot be later than the
+  current UTC time.` There is no bypass flag. This is *in addition to* the
+  calendar gate, not a replacement — both must pass.
 
 **Post-gate operator command (run ON OR AFTER 2026-08-04, not before):**
 

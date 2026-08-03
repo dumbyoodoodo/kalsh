@@ -1506,6 +1506,34 @@ def research_leakage_audit(
 _OUTAGE_WEATHER_DATES: frozenset[str] = frozenset({"2026-07-26"})
 
 
+def _render_gap_attribution(summary: dict[str, Any] | None) -> None:
+    """Human-readable collector-gap attribution block (counts and intervals
+    only -- never a performance quantity)."""
+    if summary is None:
+        return
+    if "error" in summary:
+        typer.echo(f"  collector-gap attribution: BLOCKED — {summary['error']}")
+        return
+    typer.echo(
+        f"  collector-gap attribution: candidates={summary['candidate_gaps']} "
+        f"uncovered_or_ambiguous={summary['uncovered_or_ambiguous_gaps']} "
+        f"uncovered_hours={summary['total_uncovered_hours']} "
+        f"unclassified_overlap={summary['unclassified_overlap']}"
+    )
+    for cov in summary["coverages"]:
+        if not cov["unclassified"]:
+            continue
+        gap = cov["gap"]
+        typer.echo(
+            f"    {cov['status']}: {gap['start_at']} → {gap['end_at']} "
+            f"({gap['duration_hours']}h, {gap['kind']}) "
+            f"covered_by={cov['covering_gap_ids'] or '—'}"
+        )
+    for station, dates in summary["affected_local_dates_by_station"].items():
+        if dates:
+            typer.echo(f"    affected complete local dates {station}: {dates}")
+
+
 @research_app.command("station-pilot-review")
 def research_station_pilot_review(
     as_of: str = typer.Option("", help="ISO UTC review as-of (default: now)."),
@@ -1532,11 +1560,19 @@ def research_station_pilot_review(
     from sqlalchemy import text as _text
     from sqlalchemy.ext.asyncio import create_async_engine
 
+    from kalshi_weather.research import gap_attribution as ga
     from kalshi_weather.research import station_pilot_review as spr
 
     now = _dt.fromisoformat(as_of) if as_of else utc_now()
     if now.tzinfo is None:
         now = now.replace(tzinfo=_utc)
+    # A future as-of would let the calendar gate be stepped over by asserting a
+    # time that has not happened. Checked BEFORE any production query or
+    # artifact path is touched. There is deliberately no bypass flag; this is
+    # in addition to, never instead of, the calendar gate.
+    if now > utc_now():
+        typer.echo("REFUSED: --as-of cannot be later than the current UTC time.")
+        raise typer.Exit(code=2)
     settings = get_settings()
     holder: dict[str, Any] = {}
 
@@ -1572,6 +1608,31 @@ def research_station_pilot_review(
                 ).first()
                 window_errors = int(agg.errs) if agg else 0
                 window_invalid = int(agg.inv) if agg else 0
+
+                # Weather-collector continuity over the pilot window. Weather
+                # runs only: a Kalshi-only failure never appears here, so it
+                # can never be mistaken for a weather-collection gap.
+                run_rows = (
+                    await conn.execute(
+                        _text(
+                            "select started_at, success from collector_runs "
+                            "where collector='weather' and started_at >= :lo "
+                            "order by started_at"
+                        ),
+                        {"lo": spr.PILOT_START_DEFAULT.replace(tzinfo=None)},
+                    )
+                ).all()
+                collector_runs = tuple(
+                    ga.CollectorRun(
+                        started_at=(
+                            r.started_at
+                            if r.started_at.tzinfo
+                            else r.started_at.replace(tzinfo=_utc)
+                        ),
+                        success=bool(r.success),
+                    )
+                    for r in run_rows
+                )
 
                 for st in spr.PILOT_STATIONS:
                     # Per-observation rows (window-scoped) with orphan detection:
@@ -1630,6 +1691,15 @@ def research_station_pilot_review(
         # outage attribution is untrustworthy -> the review blocks rather than
         # guessing; an unclassified weather-affecting gap overlapping the window
         # means attribution is unavailable -> prefer EXTEND over REMOVE.
+        from kalshi_weather.weather.stations import STATIONS as _STATIONS
+
+        _station_zones = tuple(
+            (st, _STATIONS[st].timezone) for st in spr.PILOT_STATIONS if st in _STATIONS
+        )
+        _collector_gaps = ga.derive_collector_gap_intervals(
+            collector_runs, window=ga.Interval(spr.PILOT_START_DEFAULT, now)
+        )
+
         from kalshi_weather.data_quality import gap_ledger as _gl
 
         _ledger = _gl.GapLedger.load()
@@ -1647,12 +1717,36 @@ def research_station_pilot_review(
             )
             for r in _ledger.active_records()
         )
-        _in_window = spr.weather_gap_annotations(
-            _annotations, window_start=spr.PILOT_START_DEFAULT, window_end=now
-        )
-        # A weather-affecting collector gap inside the window with no CONFIRMED
-        # ledger record covering it leaves attribution unavailable.
-        _unclassified = any(a.confidence not in ("CONFIRMED", "HIGH") for a in _in_window)
+        # Attribution is derived from collector-run CONTINUITY minus ledger
+        # coverage -- never from ledger confidence alone. A ledger of entirely
+        # CONFIRMED records says nothing about the outages it never recorded.
+        _window = ga.Interval(spr.PILOT_START_DEFAULT, now)
+        _unclassified = False
+        _overlap_summary: dict[str, Any] | None = None
+        try:
+            _cov_records = tuple(
+                ga.LedgerCoverageRecord(
+                    gap_id=r.gap_id,
+                    classification=str(r.classification),
+                    subsystems=tuple(str(s) for s in r.subsystems),
+                    confidence=str(r.confidence),
+                    interval=ga.Interval(r.start_at, r.end_at),
+                )
+                for r in _ledger.active_records()
+            )
+            _summary = ga.summarize_unclassified_overlap(
+                _collector_gaps,
+                _cov_records,
+                station_timezones=_station_zones,
+                complete_dates=tuple(review_dates),
+            )
+            _unclassified = _summary.unclassified_overlap
+            _overlap_summary = _summary.to_dict()
+        except (ga.GapAttributionError, ValueError) as exc:
+            # Continuity evidence unusable -> block; never silently "no gaps".
+            _ledger_valid = False
+            _overlap_summary = {"error": f"collector continuity evaluation failed: {exc}"}
+        holder["overlap"] = _overlap_summary
 
         inputs = spr.PilotReviewInputs(
             as_of=now,
@@ -1670,6 +1764,7 @@ def research_station_pilot_review(
     asyncio.run(run())
     report = holder["report"]
     payload = report.to_dict()
+    payload["collector_gap_attribution"] = holder.get("overlap")
 
     if output and report.gate_open:
         _Path(output).parent.mkdir(parents=True, exist_ok=True)
@@ -1692,10 +1787,12 @@ def research_station_pilot_review(
                     f"tmax={c.dates_with_tmax} tmin={c.dates_with_tmin} "
                     f"missing={list(c.missing_dates)} fc_issuances={c.forecast_issuances}"
                 )
+            _render_gap_attribution(holder.get("overlap"))
         else:
             typer.echo(f"overall: {report.overall_verdict.value}")
             for s in report.stations:
                 typer.echo(f"  {s.station}: {s.decision.value} — {'; '.join(s.reasons)}")
+            _render_gap_attribution(holder.get("overlap"))
             if output:
                 typer.echo(f"  artifact: {output}")
 

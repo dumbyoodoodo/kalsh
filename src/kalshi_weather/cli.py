@@ -664,9 +664,7 @@ def paper_forward_run(
                     from kalshi_weather.paper.evidence import load_market_evidence
 
                     ev = await load_market_evidence(session, ticker_list, now=now)
-                    return [
-                        (t, e.yes_bid_cents, e.yes_ask_cents) for t, e in sorted(ev.items())
-                    ]
+                    return [(t, e.yes_bid_cents, e.yes_ask_cents) for t, e in sorted(ev.items())]
             finally:
                 await eng.dispose()
 
@@ -966,6 +964,7 @@ def paper_closeout(
         await open_paper_db(eng)
         factory = _asm(eng, expire_on_commit=False)
         async with factory() as ps:
+
             def by_ticker(model: Any) -> Any:
                 return _select(model).where(model.ticker == ticker)
 
@@ -984,24 +983,35 @@ def paper_closeout(
         await eng.dispose()
 
         led = [
-            LedgerEntry(seq=i, at=at, kind=EntryKind(kind), cash_delta_cents=cd,
-                        reserved_delta_cents=rd, payload=pl)
+            LedgerEntry(
+                seq=i,
+                at=at,
+                kind=EntryKind(kind),
+                cash_delta_cents=cd,
+                reserved_delta_cents=rd,
+                payload=pl,
+            )
             for i, (_s, at, kind, cd, rd, pl) in enumerate(entries)
         ]
         pf = replay(0, led)
         cost = sum(p.yes_cost_cents + p.no_cost_cents for p in pf.positions.values())
         equity = pf.cash_cents + pf.reserved_cents + cost
         replayed = co.AccountLite(
-            cash_cents=pf.cash_cents, reserved_cents=pf.reserved_cents,
-            position_cost_cents=cost, equity_at_cost_cents=equity,
-            realized_pnl_cents=equity - pf.total_deposits_cents, fees_cents=pf.fees_cents,
+            cash_cents=pf.cash_cents,
+            reserved_cents=pf.reserved_cents,
+            position_cost_cents=cost,
+            equity_at_cost_cents=equity,
+            realized_pnl_cents=equity - pf.total_deposits_cents,
+            fees_cents=pf.fees_cents,
         )
         stored = (
             co.AccountLite(
-                cash_cents=pnl.cash_cents, reserved_cents=pnl.reserved_cents,
+                cash_cents=pnl.cash_cents,
+                reserved_cents=pnl.reserved_cents,
                 position_cost_cents=pnl.position_cost_cents,
                 equity_at_cost_cents=pnl.equity_at_cost_cents,
-                realized_pnl_cents=pnl.realized_pnl_cents, fees_cents=pnl.fees_cents,
+                realized_pnl_cents=pnl.realized_pnl_cents,
+                fees_cents=pnl.fees_cents,
             )
             if pnl is not None
             else None
@@ -1025,9 +1035,7 @@ def paper_closeout(
                 )
             ).all()
         latest = rows[0] if rows else None
-        later_results = tuple(
-            r.result for r in rows if r.result in ("yes", "no")
-        )
+        later_results = tuple(r.result for r in rows if r.result in ("yes", "no"))
         terminal = co.TerminalEvidence(
             status=latest.status if latest else None,
             result=(latest.result if latest and latest.result in ("yes", "no") else ""),
@@ -1047,36 +1055,64 @@ def paper_closeout(
                 for s in signals
             ),
             intents=tuple(
-                co.IntentLite(i.order_id, i.side, i.quantity, i.limit_price_cents,
-                              i.final_state, i.execution_confidence, i.signal_provenance)
+                co.IntentLite(
+                    i.order_id,
+                    i.side,
+                    i.quantity,
+                    i.limit_price_cents,
+                    i.final_state,
+                    i.execution_confidence,
+                    i.signal_provenance,
+                )
                 for i in intents
             ),
             fills=tuple(
-                co.FillLite(f.order_id, f.side, f.quantity, f.price_cents, f.fee_cents,
-                            f.liquidity, f.book_source_ref)
+                co.FillLite(
+                    f.order_id,
+                    f.side,
+                    f.quantity,
+                    f.price_cents,
+                    f.fee_cents,
+                    f.liquidity,
+                    f.book_source_ref,
+                )
                 for f in fills
             ),
             evidence=tuple(
-                co.EvidenceLite(e.snapshot_source_id, e.book_source_id, e.poll_evidence_at,
-                                e.market_status)
+                co.EvidenceLite(
+                    e.snapshot_source_id, e.book_source_id, e.poll_evidence_at, e.market_status
+                )
                 for e in evidence
             ),
             position=co.PositionLite(
-                pos.ticker, pos.yes_qty, pos.no_qty, pos.yes_cost_cents, pos.no_cost_cents,
-                pos.realized_pnl_cents, pos.fees_cents,
-            ) if pos else None,
+                pos.ticker,
+                pos.yes_qty,
+                pos.no_qty,
+                pos.yes_cost_cents,
+                pos.no_cost_cents,
+                pos.realized_pnl_cents,
+                pos.fees_cents,
+            )
+            if pos
+            else None,
             settlements=tuple(
-                co.SettlementLite(s.status, s.result, s.settlement_ts, s.gross_payout_cents,
-                                  s.position_cost_cents, s.realized_pnl_delta_cents, s.fee_cents,
-                                  s.supersedes_id)
+                co.SettlementLite(
+                    s.status,
+                    s.result,
+                    s.settlement_ts,
+                    s.gross_payout_cents,
+                    s.position_cost_cents,
+                    s.realized_pnl_delta_cents,
+                    s.fee_cents,
+                    s.supersedes_id,
+                )
                 for s in settlements
             ),
             replayed_account=replayed,
             stored_account=stored,
             terminal=terminal,
             ledger=tuple(
-                co.LedgerEntryLite(seq, kind, cd, rd)
-                for (seq, _at, kind, cd, rd, _pl) in entries
+                co.LedgerEntryLite(seq, kind, cd, rd) for (seq, _at, kind, cd, rd, _pl) in entries
             ),
             reconcile_ok=reconcile_ok,
             as_of=now,
@@ -1203,6 +1239,62 @@ def experiment_h0018(
     asyncio.run(run())
 
 
+@experiment_app.command("h0019")
+def experiment_h0019(
+    out_dir: str = typer.Option(
+        ..., help="Immutable output directory for the single-shot experiment artifact."
+    ),
+    confirm_single_shot: bool = typer.Option(
+        False,
+        "--confirm-single-shot",
+        help="Required. Affirms this is the ONE registered H0019 final run, human-approved.",
+    ),
+) -> None:
+    """Run the REGISTERED H0019 final test -- exactly once, never ad hoc.
+
+    Refuses unless: no results.json already exists, the frozen registration
+    hashes match, and `experiment readiness h0019` reports READY_FOR_FINAL_TEST.
+    Applies the frozen decision rule and archives results + sha256 manifest.
+    A negative result is final. Probability scoring only -- no tradable claim."""
+    from kalshi_weather.experiments.h0019 import H0019GateError, run_h0019
+
+    if not confirm_single_shot:
+        typer.echo(
+            "REFUSED: --confirm-single-shot is required.\n"
+            "H0019 may be run exactly once, after the full gate sequence in\n"
+            "docs/runbooks/next_operator_actions.md section B and explicit human approval."
+        )
+        raise typer.Exit(code=2)
+
+    async def run() -> None:
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        now = utc_now().date()
+        async with _open_session(settings) as session:
+            result = await run_h0019(session, out_dir=Path(out_dir), now=now)
+        boot = result["primary_bootstrap_M3_minus_M1"]
+        typer.echo(f"H0019 VERDICT: {result['verdict']}")
+        for reason in result["verdict_reasons"]:
+            typer.echo(f"  - {reason}")
+        typer.echo(
+            f"  M3-M1 test Brier {boot['mean_brier_diff']:+.6f} "
+            f"CI95 [{boot['ci95_lo']:+.6f}, {boot['ci95_hi']:+.6f}] "
+            f"groups={boot['n_groups']}"
+        )
+        typer.echo(f"  grain_sha256={result['grain_sha256'][:12]} -> {out_dir}/results.json")
+        typer.echo(
+            "  Probability scoring only -- no tradable or market-efficiency claim.\n"
+            "  Next: archive artifacts, update HYPOTHESES.md + ledger (append-only). "
+            "Do NOT re-run."
+        )
+
+    try:
+        asyncio.run(run())
+    except H0019GateError as exc:
+        typer.echo(f"REFUSED: {exc}")
+        raise typer.Exit(code=2) from exc
+
+
 @experiment_app.command("readiness")
 def experiment_readiness(
     hypothesis: str = typer.Argument("h0019", help="Which registered/documented experiment."),
@@ -1212,8 +1304,9 @@ def experiment_readiness(
     as_of: str = typer.Option("", help="h0012r only: ISO date to inject as the clock."),
     as_json: bool = typer.Option(False, "--json", help="h0012r only: emit the summary as JSON."),
     environment: str = typer.Option(
-        "", help="h0012r only: restrict close-time frame to one environment "
-        "(default empty = env-agnostic; labels are env-agnostic by design)."
+        "",
+        help="h0012r only: restrict close-time frame to one environment "
+        "(default empty = env-agnostic; labels are env-agnostic by design).",
     ),
 ) -> None:
     """READ-ONLY readiness monitor for a registered/documented experiment
@@ -1313,9 +1406,7 @@ def research_leakage_audit(
                 continue
             inspected["modules"].append(rel)
             report.extend(
-                ll.scan_latest_state(
-                    path.read_text(), path=rel, allowlist=_LEAKAGE_SCAN_ALLOWLIST
-                )
+                ll.scan_latest_state(path.read_text(), path=rel, allowlist=_LEAKAGE_SCAN_ALLOWLIST)
             )
 
     if scope in ("production", "all"):
@@ -1335,8 +1426,7 @@ def research_leakage_audit(
                 ),
                 (
                     "poll_completed_before_requested",
-                    "select count(*) from market_poll_attempts "
-                    "where completed_at < requested_at",
+                    "select count(*) from market_poll_attempts where completed_at < requested_at",
                     "poll attempts completing before they were requested",
                 ),
                 (
@@ -1629,17 +1719,13 @@ def research_book_continuity(
         try:
             async with engine.connect() as conn:
                 ledger_start = (
-                    await conn.execute(
-                        _text("select min(requested_at) from market_poll_attempts")
-                    )
+                    await conn.execute(_text("select min(requested_at) from market_poll_attempts"))
                 ).scalar()
                 rows = await conn.execute(
                     _text(
                         "select market_ticker, id, captured_at, content_hash, "
                         "environment from orderbook_snapshots "
-                        "where captured_at >= :lo and captured_at <= :hi"
-                        + ticker_sql
-                        + family_sql
+                        "where captured_at >= :lo and captured_at <= :hi" + ticker_sql + family_sql
                     ),
                     params,
                 )
@@ -2180,8 +2266,7 @@ def experiment_preflight(
                 )
             if scope_report.status in (ctg.PASS, ctg.PASS_WITH_NULLS):
                 typer.echo(
-                    "  derived decision_time is stable for every ticker in H0019's "
-                    "frozen scope"
+                    "  derived decision_time is stable for every ticker in H0019's frozen scope"
                 )
         # the FROZEN-SCOPE status gates H0019's final run
         if scope_report.status == ctg.REVIEW_REQUIRED and fail_on_review:
@@ -2249,9 +2334,7 @@ def _experiment_readiness_h0020(log_path: str | None) -> None:
     asyncio.run(run())
 
 
-def _experiment_readiness_h0012r(
-    *, as_of: str, as_json: bool, environment: str = ""
-) -> None:
+def _experiment_readiness_h0012r(*, as_of: str, as_json: bool, environment: str = "") -> None:
     """H0012r counts-only readiness (see experiments/h0012r_readiness.py).
 
     Structural coverage + integrity ONLY over the NYC settlement-label
@@ -3592,7 +3675,9 @@ def ops_status(
                 paper_kill = (await kill_switch_active(ps))[0]
                 last_run = (
                     await ps.scalars(
-                        select(PaperPositionRow.run_id).order_by(PaperPositionRow.id.desc()).limit(1)
+                        select(PaperPositionRow.run_id)
+                        .order_by(PaperPositionRow.id.desc())
+                        .limit(1)
                     )
                 ).first()
                 positions = (
@@ -3610,8 +3695,12 @@ def ops_status(
             if entries and snap is not None:
                 led = [
                     LedgerEntry(
-                        seq=i, at=at, kind=EntryKind(kind),
-                        cash_delta_cents=cash_d, reserved_delta_cents=res_d, payload=payload,
+                        seq=i,
+                        at=at,
+                        kind=EntryKind(kind),
+                        cash_delta_cents=cash_d,
+                        reserved_delta_cents=res_d,
+                        payload=payload,
                     )
                     for i, (_s, at, kind, cash_d, res_d, payload) in enumerate(entries)
                 ]
@@ -3657,8 +3746,11 @@ def ops_status(
     except Exception as exc:
         checkpoints.append(
             ost.classify_operational(
-                "paper", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
-                evidence="paper store", command="uv run kalshi-weather paper reconcile",
+                "paper",
+                healthy=None,
+                detail_msg=f"unavailable: {type(exc).__name__}",
+                evidence="paper store",
+                command="uv run kalshi-weather paper reconcile",
                 unavailable=True,
             )
         )
@@ -3703,16 +3795,21 @@ def ops_status(
         asyncio.run(_e0002())
         checkpoints.append(
             ost.classify_e0002(
-                complete_production_days=prod_days, required_days=14, now=now,
+                complete_production_days=prod_days,
+                required_days=14,
+                now=now,
                 earliest=ost.E0002_REMEASURE_BOUNDARY,
             )
         )
     except Exception as exc:
         checkpoints.append(
             ost.classify_operational(
-                "e0002", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
+                "e0002",
+                healthy=None,
+                detail_msg=f"unavailable: {type(exc).__name__}",
                 evidence="orderbook_snapshots",
-                command="uv run kalshi-weather research exploratory e0002", unavailable=True,
+                command="uv run kalshi-weather research exploratory e0002",
+                unavailable=True,
             )
         )
 
@@ -3760,8 +3857,11 @@ def ops_status(
         coll_healthy, coll_msg = None, f"unavailable: {type(exc).__name__}"
     checkpoints.append(
         ost.classify_operational(
-            "collector", healthy=coll_healthy, detail_msg=coll_msg,
-            evidence="collector_runs", command="uv run kalshi-weather ops health",
+            "collector",
+            healthy=coll_healthy,
+            detail_msg=coll_msg,
+            evidence="collector_runs",
+            command="uv run kalshi-weather ops health",
         )
     )
 
@@ -3778,7 +3878,10 @@ def ops_status(
         b_healthy, b_msg = None, f"unavailable: {type(exc).__name__}"
     checkpoints.append(
         ost.classify_operational(
-            "backups", healthy=b_healthy, detail_msg=b_msg, evidence="last_backup_status.json",
+            "backups",
+            healthy=b_healthy,
+            detail_msg=b_msg,
+            evidence="last_backup_status.json",
             command="uv run kalshi-weather backup status",
         )
     )
@@ -3794,7 +3897,9 @@ def ops_status(
         d_healthy, d_msg = None, f"unavailable: {type(exc).__name__}"
     checkpoints.append(
         ost.classify_operational(
-            "restore_drill", healthy=d_healthy, detail_msg=d_msg,
+            "restore_drill",
+            healthy=d_healthy,
+            detail_msg=d_msg,
             evidence="restore_drill_state.json",
             command="uv run kalshi-weather ops restore-drill",
             unavailable=no_network and d_healthy is None,
@@ -3820,7 +3925,9 @@ def ops_status(
         rc_healthy, rc_msg = None, f"unavailable: {type(exc).__name__}"
     checkpoints.append(
         ost.classify_operational(
-            "recovery_watch", healthy=rc_healthy, detail_msg=rc_msg,
+            "recovery_watch",
+            healthy=rc_healthy,
+            detail_msg=rc_msg,
             evidence="recovery_watch_state.json",
             command="uv run kalshi-weather ops recovery-watch --no-notify",
         )
@@ -3830,8 +3937,11 @@ def ops_status(
     storage_ok = coll_healthy is not None
     checkpoints.append(
         ost.classify_operational(
-            "storage", healthy=storage_ok, detail_msg="database reachable",
-            evidence="database + backup dir", command="uv run kalshi-weather ops health",
+            "storage",
+            healthy=storage_ok,
+            detail_msg="database reachable",
+            evidence="database + backup dir",
+            command="uv run kalshi-weather ops health",
         )
     )
 
@@ -3839,8 +3949,11 @@ def ops_status(
     if compact:
         checkpoints.append(
             ost.classify_operational(
-                "observatory", healthy=None, detail_msg="skipped (--compact)",
-                evidence="observatory report", command="uv run kalshi-weather ops observatory",
+                "observatory",
+                healthy=None,
+                detail_msg="skipped (--compact)",
+                evidence="observatory report",
+                command="uv run kalshi-weather ops observatory",
                 unavailable=True,
             )
         )
@@ -3868,7 +3981,9 @@ def ops_status(
             obs_healthy = obs_sev != "CRITICAL"
             checkpoints.append(
                 ost.classify_operational(
-                    "observatory", healthy=obs_healthy, detail_msg=f"severity {obs_sev}",
+                    "observatory",
+                    healthy=obs_healthy,
+                    detail_msg=f"severity {obs_sev}",
                     evidence="observatory report",
                     command="uv run kalshi-weather ops observatory",
                 )
@@ -3876,19 +3991,28 @@ def ops_status(
         except Exception as exc:
             checkpoints.append(
                 ost.classify_operational(
-                    "observatory", healthy=None, detail_msg=f"unavailable: {type(exc).__name__}",
+                    "observatory",
+                    healthy=None,
+                    detail_msg=f"unavailable: {type(exc).__name__}",
                     evidence="observatory report",
-                    command="uv run kalshi-weather ops observatory", unavailable=True,
+                    command="uv run kalshi-weather ops observatory",
+                    unavailable=True,
                 )
             )
 
     import subprocess as _sp
 
     try:
-        commit = _sp.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=10, check=False,
-        ).stdout.strip() or "unknown"
+        commit = (
+            _sp.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            ).stdout.strip()
+            or "unknown"
+        )
     except Exception:
         commit = "unknown"
     dash = ost.Dashboard(generated_at=now, git_commit=commit, checkpoints=checkpoints)
@@ -4120,9 +4244,7 @@ def ops_recovery_watch(
         if probe:
             try:
                 async with httpx.AsyncClient(timeout=8.0) as client:
-                    resp = await client.get(
-                        f"{settings.kalshi_data_base_url}/exchange/status"
-                    )
+                    resp = await client.get(f"{settings.kalshi_data_base_url}/exchange/status")
                     api_reachable = resp.status_code < 500
             except httpx.HTTPError:
                 api_reachable = False
@@ -4218,9 +4340,7 @@ def ops_recovery_watch(
                     for i, (_s, at, kind, c, r, p) in enumerate(entries)
                 ],
             )
-            cost = sum(
-                x.yes_cost_cents + x.no_cost_cents for x in portfolio.positions.values()
-            )
+            cost = sum(x.yes_cost_cents + x.no_cost_cents for x in portfolio.positions.values())
             reconcile_ok = snap_row is not None and (
                 portfolio.cash_cents == snap_row.cash_cents
                 and portfolio.reserved_cents == snap_row.reserved_cents
@@ -4521,8 +4641,7 @@ def ops_station_pilot_review(
         stable = sum(
             1
             for st in spr.PILOT_STATIONS
-            if window.elapsed_full_days > 0
-            and len(continuity[st].issuance_shortfall_days) == 0
+            if window.elapsed_full_days > 0 and len(continuity[st].issuance_shortfall_days) == 0
         )
         gates = spr.GateInputs(
             review_state=window.state,
@@ -4534,13 +4653,10 @@ def ops_station_pilot_review(
             pilot_observation_completeness=(
                 complete_obs_days / expected_obs_days if expected_obs_days else 1.0
             ),
-            duplicate_rows=sum(
-                continuity[st].duplicate_logical_rows for st in spr.PILOT_STATIONS
-            ),
+            duplicate_rows=sum(continuity[st].duplicate_logical_rows for st in spr.PILOT_STATIONS),
             collector_capacity_ok=impact.cycles_exceeding_half_cadence == 0,
             baseline_stations_healthy=all(
-                continuity[st].longest_forecast_gap_hours < 24.0
-                for st in spr.BASELINE_STATIONS
+                continuity[st].longest_forecast_gap_hours < 24.0 for st in spr.BASELINE_STATIONS
             ),
             settlement_no_regression=baseline_resolved >= spr.BASELINE_RESOLVED_FLOOR,
             settlement_unresolved_new=unresolved_now,
@@ -4599,9 +4715,7 @@ def ops_station_pilot_review(
             "gates": gates.__dict__,
             "recommendation": recommendation,
             "reasons": reasons,
-            "second_batch_ranking": [
-                {"city": c, "notes": n} for c, n in spr.SECOND_BATCH_RANKING
-            ],
+            "second_batch_ranking": [{"city": c, "notes": n} for c, n in spr.SECOND_BATCH_RANKING],
             "second_batch_recommended": (
                 list(spr.SECOND_BATCH_RECOMMENDED)
                 if recommendation == spr.SECOND_BATCH_ELIGIBLE
@@ -4625,8 +4739,10 @@ def ops_station_pilot_review(
                 f"latest_fc_age={c.latest_forecast_age_hours}h "
                 f"shortfall_days={len(c.issuance_shortfall_days)}"
             )
-        typer.echo(f"  tz: {'OK' if all(v['ok'] for v in tz.values()) else 'ANOMALY'} "
-                   f"| spillover: {'OK' if all(spill.values()) else 'ANOMALY'}")
+        typer.echo(
+            f"  tz: {'OK' if all(v['ok'] for v in tz.values()) else 'ANOMALY'} "
+            f"| spillover: {'OK' if all(spill.values()) else 'ANOMALY'}"
+        )
         typer.echo(
             f"  weather cycles: pre p50={impact.pre_median_s}s -> steady p50="
             f"{impact.post_median_s}s p95={impact.post_p95_s}s "
@@ -4634,7 +4750,7 @@ def ops_station_pilot_review(
             f"{impact.cycles_exceeding_half_cadence}"
         )
         typer.echo(
-            f"  settlement: pilot={ {k: sum(v.values()) for k,v in pilot_resolved.items()} } "
+            f"  settlement: pilot={ {k: sum(v.values()) for k, v in pilot_resolved.items()} } "
             f"baseline={baseline_resolved} (floor {spr.BASELINE_RESOLVED_FLOOR}) "
             f"unresolved={unresolved_now}"
         )
@@ -4714,8 +4830,10 @@ def ops_restore_drill(
         if result.container:
             typer.echo(f"  disposable target: {result.container}")
         for s in result.steps:
-            typer.echo(f"  [{'OK' if s['ok'] else 'FAIL'}] {s['step']}"
-                       + (f": {s['detail']}" if s["detail"] else ""))
+            typer.echo(
+                f"  [{'OK' if s['ok'] else 'FAIL'}] {s['step']}"
+                + (f": {s['detail']}" if s["detail"] else "")
+            )
         if result.failure_reason:
             typer.echo(f"  failure: {result.failure_reason}")
     if result.status != "success":

@@ -159,8 +159,57 @@ uv run kalshi-weather experiment readiness h0012r --json  # machine
   - [ ] Backup fresh (`uv run kalshi-weather ops backup status`) and dataset
         provenance recorded (snapshot/manifest per RESEARCH.md) BEFORE running
   - [ ] Run the final test **exactly once** via the registered single-shot
-        runner (implement it first if absent, mirroring `experiment h0018`,
-        per the registration — never ad hoc)
+        runner (built 2026-08-02, `src/kalshi_weather/experiments/h0019.py`):
+
+        ```
+        uv run kalshi-weather experiment h0019 \
+          --out-dir docs/research/experiments/EXP-FUTURE-H0019/run \
+          --confirm-single-shot
+        ```
+
+        It re-verifies, in this order and **before fitting anything**: no
+        existing `results.json` (single-shot), frozen registration hashes,
+        `READY_FOR_FINAL_TEST`, and leakage checks — then applies the frozen
+        decision rule and writes `results.json`, `decision_grain.parquet`,
+        `test_predictions.csv`, and `artifact_hashes.json`. Any refusal exits
+        2 having inspected no outcome. Never pass `--confirm-single-shot`
+        without completing steps 1–5 above.
+
+        **Station-subgroup rule — FROZEN 2026-08-03T03:18:06Z (Wilson Tu).**
+        The registration's "no major station-subgroup sign reversal" was
+        clarified prospectively, before any H0019 outcome existed; the
+        authoritative text is the clarification block in the HYPOTHESES.md
+        H0019 entry, and it **may not be modified after outcome access**. In
+        force: eligibility requires ≥ 4 test event-groups (the registration's
+        own `min_events_per_station_test`, not a new threshold), decided from
+        counts only; each event-group contributes exactly once (unweighted —
+        never by market/row/contract count); a reversal is an eligible station
+        strictly > 0; exactly zero is not a reversal; one eligible station
+        suffices; thin stations neither trigger nor clear the veto but are
+        still reported; missing/non-finite/duplicated results for an eligible
+        station **fail closed** with no verdict and no artifact.
+
+        **Exact eventual command** (do NOT run before the gate sequence and
+        explicit human approval):
+
+        ```
+        uv run kalshi-weather experiment h0019 \
+          --out-dir docs/research/experiments/EXP-FUTURE-H0019/run \
+          --confirm-single-shot
+        ```
+
+        Run it only on or after **2026-08-26** (the day after the registered
+        test window ends 2026-08-25), and only once `experiment readiness
+        h0019` reports `READY_FOR_FINAL_TEST` — the runner reads the real
+        clock and the real accrued data; there is no `--as-of` override and
+        none may be added. The output directory is fixed and **never
+        overwritten**: an existing `results.json` aborts the run, so archive
+        or move any prior directory rather than deleting it. On success the
+        run writes `results.json`, `decision_grain.parquet`,
+        `test_predictions.csv`, and the `artifact_hashes.json` manifest
+        (sha256 of each).
+
+        **Wait — never weaken a gate to force a run.**
   - [ ] Archive outputs + sha256 hashes into EXP-FUTURE-H0019/; update
         HYPOTHESES.md + ledger (append-only)
   - [ ] Classify strictly by the frozen decision rule. **Never rerun after

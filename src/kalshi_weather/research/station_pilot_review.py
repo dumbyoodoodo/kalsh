@@ -46,6 +46,12 @@ class StationDecision(StrEnum):
     KEEP = "KEEP"
     EXTEND_COLLECTION = "EXTEND_COLLECTION"
     REMOVE_FOR_DATA_QUALITY = "REMOVE_FOR_DATA_QUALITY"
+    #: The review cannot be executed safely for this station (integrity
+    #: failure, contradictory mapping, invalid gap-ledger state, or evidence
+    #: too untrustworthy to act on). Distinct from EXTEND: extension means
+    #: "not enough evidence yet", blocked means "the evidence we have cannot
+    #: be trusted".
+    REVIEW_BLOCKED = "REVIEW_BLOCKED"
     PENDING_GATE = "PENDING_GATE"  # before the review gate; no decision issued
 
 
@@ -54,7 +60,63 @@ class OverallVerdict(StrEnum):
     PILOT_COLLECTION_EXTENSION_REQUIRED = "PILOT_COLLECTION_EXTENSION_REQUIRED"
     PILOT_DATA_QUALITY_FAILURE = "PILOT_DATA_QUALITY_FAILURE"
     PILOT_REVIEW_NOT_READY = "PILOT_REVIEW_NOT_READY"
+    PILOT_REVIEW_BLOCKED = "PILOT_REVIEW_BLOCKED"
+    #: Retained: the specific "registered criteria could not be recovered"
+    #: case, a specialization of PILOT_REVIEW_BLOCKED. Kept as its own member
+    #: so already-emitted JSON still parses and the cause stays legible.
     PILOT_SPECIFICATION_INCOMPLETE = "PILOT_SPECIFICATION_INCOMPLETE"
+
+
+@dataclass(frozen=True, slots=True)
+class GapAnnotation:
+    """A read-only annotation projected from the permanent collection-gap
+    ledger onto the pilot window.
+
+    The review may *display* these and may let a confirmed host/upstream-weather
+    outage excuse a weather gap. It may never append to, amend, or reclassify
+    the ledger, and it may never treat a recovered-not-contemporaneous row as
+    contemporaneously collected.
+    """
+
+    gap_id: str
+    classification: str
+    subsystems: tuple[str, ...]
+    confidence: str
+    research_treatment: str
+    start_at: datetime
+    end_at: datetime
+    evidence_refs: tuple[str, ...] = ()
+
+    @property
+    def weather_relevant(self) -> bool:
+        """Whether this gap can bear on *weather*-collection health.
+
+        A Kalshi-only outage is never a weather fault, so it is filtered out
+        here rather than relied on to be absent upstream.
+        """
+        return any(s.startswith("WEATHER_") for s in self.subsystems)
+
+    @property
+    def recovered_not_contemporaneous(self) -> bool:
+        return self.research_treatment == "RECOVERED_NOT_CONTEMPORANEOUS"
+
+
+def weather_gap_annotations(
+    annotations: tuple[GapAnnotation, ...],
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[GapAnnotation, ...]:
+    """Weather-relevant annotations overlapping the pilot window.
+
+    Pure and total. Kalshi-only records are dropped by ``weather_relevant``, so
+    a Kalshi outage can never be read as a weather-collection failure.
+    """
+    return tuple(
+        a
+        for a in annotations
+        if a.weather_relevant and a.start_at < window_end and window_start < a.end_at
+    )
 
 
 class OutageKind(StrEnum):
@@ -123,6 +185,14 @@ class PilotReviewInputs:
     backup_healthy: bool
     review_gate: datetime = REVIEW_GATE
     pilot_start: datetime = PILOT_START_DEFAULT
+    #: Read-only annotations projected from the permanent collection-gap ledger.
+    gap_annotations: tuple[GapAnnotation, ...] = ()
+    #: True when the pilot window overlaps a collection gap the ledger has NOT
+    #: classified -- attribution is then unavailable and REMOVE is demoted.
+    unclassified_gap_overlap: bool = False
+    #: False when the gap ledger itself fails validation: the review cannot be
+    #: executed safely, so every station is REVIEW_BLOCKED.
+    gap_ledger_valid: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +213,9 @@ class PilotReviewReport:
     stations: list[StationReview] = field(default_factory=list)
     station_counts: list[StationCounts] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    gap_annotations: list[GapAnnotation] = field(default_factory=list)
+    unclassified_gap_overlap: bool = False
+    gap_ledger_valid: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,6 +232,28 @@ class PilotReviewReport:
             ],
             "station_counts": [_counts_to_dict(c) for c in self.station_counts],
             "reasons": self.reasons,
+            "gap_ledger": {
+                "valid": self.gap_ledger_valid,
+                "unclassified_gap_overlap": self.unclassified_gap_overlap,
+                "annotations": [
+                    {
+                        "gap_id": a.gap_id,
+                        "classification": a.classification,
+                        "subsystems": list(a.subsystems),
+                        "confidence": a.confidence,
+                        "research_treatment": a.research_treatment,
+                        "start_at": a.start_at.isoformat(),
+                        "end_at": a.end_at.isoformat(),
+                        "evidence_refs": list(a.evidence_refs),
+                    }
+                    for a in self.gap_annotations
+                ],
+                "usage": (
+                    "read-only annotation source; this review never appends, amends, or "
+                    "reclassifies a gap record, and never treats a recovered-not-"
+                    "contemporaneous row as contemporaneously collected"
+                ),
+            },
             "forbidden_analysis": (
                 "no forecast error / calibration / expected or realized value / spread / "
                 "liquidity / price / trade outcome / profitability / station ranking / "
@@ -217,16 +312,35 @@ def gate_open(as_of: datetime, *, review_gate: datetime = REVIEW_GATE) -> bool:
     return a >= review_gate
 
 
-def classify_station(counts: StationCounts) -> StationReview:
-    """Map one station's counts to KEEP / EXTEND / REMOVE using ONLY the
-    registered operational criteria (ADR 0023). Precedence: a hard data-quality
-    violation (REMOVE) outranks insufficiency (EXTEND) outranks KEEP. A
-    Kalshi-only outage never enters here -- weather gaps are attributed to
-    host/upstream-weather outages only."""
+def classify_station(
+    counts: StationCounts,
+    *,
+    unclassified_gap_overlap: bool = False,
+    blocked_reasons: tuple[str, ...] = (),
+) -> StationReview:
+    """Map one station's counts to KEEP / EXTEND / REMOVE / REVIEW_BLOCKED using
+    ONLY the registered operational criteria (ADR 0023).
+
+    Precedence: REVIEW_BLOCKED (evidence untrustworthy) outranks a hard
+    data-quality violation (REMOVE), which outranks insufficiency (EXTEND),
+    which outranks KEEP. A Kalshi-only outage never enters here -- weather gaps
+    are attributed to host/upstream-weather outages only.
+
+    ``unclassified_gap_overlap`` marks that the pilot window overlaps a
+    collection gap the permanent gap ledger has not classified. Attribution is
+    then impossible, so *attribution-dependent* REMOVE reasons (missing dates,
+    parser failures -- any of which an unclassified outage could explain) are
+    demoted to EXTEND. Integrity defects (timezone, provenance, environment,
+    duplicates) are NOT demoted: no outage can produce a wrong local date or an
+    orphaned payload reference, so they stay REMOVE.
+    """
+    if blocked_reasons:
+        return StationReview(counts.station, StationDecision.REVIEW_BLOCKED, tuple(blocked_reasons))
+
     remove: list[str] = []
     extend: list[str] = []
 
-    # --- REMOVE_FOR_DATA_QUALITY: hard, deterministic defects.
+    # --- REMOVE_FOR_DATA_QUALITY (integrity): never explainable by an outage.
     if counts.timezone_date_mismatches > 0:
         remove.append(f"timezone/date mismatch on {counts.timezone_date_mismatches} row(s)")
     if counts.provenance_orphans > 0:
@@ -237,13 +351,29 @@ def classify_station(counts: StationCounts) -> StationReview:
         remove.append(
             f"{counts.duplicate_observation_rows} duplicate/conflicting observation row(s)"
         )
-    # A persistent, NOT outage-explained station-specific gap or parser defect.
+
+    # --- REMOVE (attribution-dependent): an unclassified collection gap could
+    # explain either of these, so they demote to EXTEND when one overlaps.
+    attribution_dependent: list[str] = []
     if counts.weather_gap_dates_unexplained >= 2:
-        remove.append(
+        attribution_dependent.append(
             f"{counts.weather_gap_dates_unexplained} unexplained station-specific missing date(s)"
         )
     if counts.parser_failures >= 2:
-        remove.append(f"{counts.parser_failures} parser failure(s) (persistent)")
+        attribution_dependent.append(f"{counts.parser_failures} parser failure(s) (persistent)")
+
+    if unclassified_gap_overlap:
+        extend.extend(
+            f"{reason} — but the window overlaps an UNCLASSIFIED collection gap, so this "
+            "cannot be attributed to the station; extending rather than removing"
+            for reason in attribution_dependent
+        )
+        extend.append(
+            "pilot window overlaps a collection gap not classified in the permanent "
+            "gap ledger; attribution is unavailable"
+        )
+    else:
+        remove.extend(attribution_dependent)
 
     # --- EXTEND_COLLECTION: insufficient/inconclusive but not defective.
     effective_expected = max(counts.expected_dates - counts.weather_gap_dates_outage_explained, 0)
@@ -301,6 +431,15 @@ def review(inputs: PilotReviewInputs) -> PilotReviewReport:
         seconds_until_gate=seconds_until,
         overall_verdict=OverallVerdict.PILOT_REVIEW_NOT_READY,
         station_counts=list(inputs.stations),
+        gap_annotations=list(
+            weather_gap_annotations(
+                inputs.gap_annotations,
+                window_start=inputs.pilot_start,
+                window_end=inputs.as_of,
+            )
+        ),
+        unclassified_gap_overlap=inputs.unclassified_gap_overlap,
+        gap_ledger_valid=inputs.gap_ledger_valid,
     )
 
     if not open_:
@@ -320,9 +459,27 @@ def review(inputs: PilotReviewInputs) -> PilotReviewReport:
         report.reasons = ["registered pilot criteria could not be recovered"]
         return report
 
-    report.stations = [classify_station(c) for c in inputs.stations]
+    # An invalid gap ledger means outage attribution cannot be trusted, so the
+    # review cannot be executed safely at all -- blocked, never guessed.
+    blocked_reasons: tuple[str, ...] = ()
+    if not inputs.gap_ledger_valid:
+        blocked_reasons = (
+            "permanent collection-gap ledger failed validation; outage attribution "
+            "is untrustworthy and no station decision can be made safely",
+        )
+
+    report.stations = [
+        classify_station(
+            c,
+            unclassified_gap_overlap=inputs.unclassified_gap_overlap,
+            blocked_reasons=blocked_reasons,
+        )
+        for c in inputs.stations
+    ]
     decisions = {s.decision for s in report.stations}
-    if StationDecision.REMOVE_FOR_DATA_QUALITY in decisions:
+    if StationDecision.REVIEW_BLOCKED in decisions:
+        report.overall_verdict = OverallVerdict.PILOT_REVIEW_BLOCKED
+    elif StationDecision.REMOVE_FOR_DATA_QUALITY in decisions:
         report.overall_verdict = OverallVerdict.PILOT_DATA_QUALITY_FAILURE
     elif StationDecision.EXTEND_COLLECTION in decisions:
         report.overall_verdict = OverallVerdict.PILOT_COLLECTION_EXTENSION_REQUIRED

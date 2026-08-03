@@ -301,6 +301,20 @@ uv run kalshi-weather research station-pilot-review --json    # machine
   `PILOT_DATA_QUALITY_FAILURE`. The 2026-07-27 Kalshi-API outage is
   KALSHI-only and never counts as a weather-collection fault.
 - **Evidence availability:** the loader derives every data-quality signal (completeness, duplicates, provenance orphans, forecast gaps, timezone/date checks) from read-only production rows. Cycle-level parser/malformed/source-unavailable aggregates cannot be attributed per station: a clean review window (0 weather cycle errors) reports them as a verified 0, but a non-zero window marks them `evidence_unavailable`, which blocks KEEP (→ EXTEND_COLLECTION) so unavailable evidence is never read as clean.
+- **Gap-ledger annotation (added 2026-08-03):** the review reads
+  `data/quality/permanent_gap_ledger.jsonl` **read-only** — it never appends,
+  amends, or reclassifies a record. Only weather-relevant records annotate the
+  review, so a Kalshi-only outage can never count as a weather fault. If the
+  ledger itself fails validation, every station is `REVIEW_BLOCKED` and the
+  overall verdict is `PILOT_REVIEW_BLOCKED` — the review refuses rather than
+  guessing at attribution. If the window overlaps a collection gap the ledger
+  has **not** classified, attribution is unavailable, so missing-date and
+  parser REMOVE reasons are demoted to `EXTEND_COLLECTION`; integrity defects
+  (timezone, provenance, environment, duplicates) are **not** demoted, since no
+  outage can produce a wrong local date or an orphaned payload reference.
+- **Station mappings (verified 2026-08-03, do not change here):** SEA / WFO SEW
+  / America/Los_Angeles · PHX / WFO PSR / **America/Phoenix** (fixed UTC−7, never
+  America/Denver) · MIA / WFO MFL / America/New_York.
 
 **Post-gate operator command (run ON OR AFTER 2026-08-04, not before):**
 

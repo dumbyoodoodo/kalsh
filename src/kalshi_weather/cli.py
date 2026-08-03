@@ -1625,6 +1625,35 @@ def research_station_pilot_review(
         finally:
             await engine.dispose()
 
+        # Permanent collection-gap ledger: READ-ONLY annotation source. Never
+        # appended to, amended, or reclassified here. An invalid ledger means
+        # outage attribution is untrustworthy -> the review blocks rather than
+        # guessing; an unclassified weather-affecting gap overlapping the window
+        # means attribution is unavailable -> prefer EXTEND over REMOVE.
+        from kalshi_weather.data_quality import gap_ledger as _gl
+
+        _ledger = _gl.GapLedger.load()
+        _ledger_valid = not _ledger.validate()
+        _annotations = tuple(
+            spr.GapAnnotation(
+                gap_id=r.gap_id,
+                classification=str(r.classification),
+                subsystems=tuple(str(s) for s in r.subsystems),
+                confidence=str(r.confidence),
+                research_treatment=str(r.research_treatment),
+                start_at=r.start_at,
+                end_at=r.end_at,
+                evidence_refs=tuple(e.reference for e in r.evidence),
+            )
+            for r in _ledger.active_records()
+        )
+        _in_window = spr.weather_gap_annotations(
+            _annotations, window_start=spr.PILOT_START_DEFAULT, window_end=now
+        )
+        # A weather-affecting collector gap inside the window with no CONFIRMED
+        # ledger record covering it leaves attribution unavailable.
+        _unclassified = any(a.confidence not in ("CONFIRMED", "HIGH") for a in _in_window)
+
         inputs = spr.PilotReviewInputs(
             as_of=now,
             stations=tuple(counts),
@@ -1632,6 +1661,9 @@ def research_station_pilot_review(
             specification_registered=True,  # ADR 0023
             observatory_critical_count=0,
             backup_healthy=True,
+            gap_annotations=_annotations,
+            unclassified_gap_overlap=_unclassified,
+            gap_ledger_valid=_ledger_valid,
         )
         holder["report"] = spr.review(inputs)
 

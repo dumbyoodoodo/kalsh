@@ -336,6 +336,28 @@ uv run kalshi-weather research station-pilot-review --json    # machine
   current UTC time.` There is no bypass flag. This is *in addition to* the
   calendar gate, not a replacement — both must pass.
 
+**Original pilot: COMPLETE.** Reviewed at its gate on 2026-08-04; verdict
+`PILOT_COLLECTION_EXTENSION_REQUIRED`, artifact
+`docs/research/station_pilot_review_2026-08-04.md` (immutable). All three
+stations were individually clean — the extension was forced by a platform
+evidence limit (cycle-level counters carry no station dimension), not by any
+station defect.
+
+**Extension: REGISTERED 2026-08-04T03:34:30Z (ADR 0024, `STATION-PILOT-EXT-0001`).**
+Seven complete station-local dates per station, frozen *before* any
+station-level attempt outcome existed. It has **no start date yet by design**:
+the first included date is the first station-local date whose local midnight
+falls strictly after `deployment_validated_at`, and the review gate is the
+latest UTC end among the three stations' seventh dates. Readiness is
+`WAITING_FOR_ATTEMPT_ATTRIBUTION_DEPLOYMENT` until the attempt-evidence layer
+is deployed and its first full cycle reconciles. Do not pick a start date by
+hand, and do not review before the computed gate.
+
+**Next task:** resume and complete the station-level attempt-attribution
+implementation (migration 0012, repository, collector integration, CLI,
+observatory checks, tests), deploy it, record `deployment_validated_at` from
+deployment evidence, then let the extension collect.
+
 **Post-gate operator command (run ON OR AFTER 2026-08-04, not before):**
 
 ```

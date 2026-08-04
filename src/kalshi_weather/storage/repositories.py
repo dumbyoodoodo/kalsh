@@ -10,7 +10,8 @@ and save_orderbook_snapshot, and docs/adr/0002-ingestion-collector.md.
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,7 @@ from kalshi_weather.storage.models import (
     SeriesRecord,
     SettlementSpecRecord,
     TradeRecord,
+    WeatherCollectionAttempt,
     WeatherForecast,
     WeatherObservation,
     WeatherStation,
@@ -36,6 +38,9 @@ from kalshi_weather.storage.models import (
 
 if TYPE_CHECKING:
     from kalshi_weather.ingestion.poll_ledger import PollAttempt
+    from kalshi_weather.ingestion.weather_attempts import (
+        AttemptRecord as WeatherAttemptRecord,
+    )
 
 
 async def record_poll_attempts(
@@ -865,3 +870,180 @@ async def get_candlestick_covered_tickers(
         .distinct()
     )
     return set(rows.all())
+
+
+# --- station-level weather collection attempts (migration 0012) --------------
+
+
+class AttemptAppendResult(NamedTuple):
+    """Outcome of an append. ``already_recorded`` means an identical attempt
+    was present; the ledger is append-only, so nothing was rewritten."""
+
+    attempt_id: str
+    already_recorded: bool
+
+
+class AttemptConflictError(RuntimeError):
+    """A conflicting write was refused. The ledger never silently mutates."""
+
+
+#: Fields compared when deciding whether a repeated append is byte-equivalent.
+_ATTEMPT_IDENTITY_FIELDS = (
+    "collector_run_id",
+    "environment",
+    "station_code",
+    "product_type",
+    "logical_request_key",
+    "stage",
+    "outcome",
+    "source_availability",
+    "parsed_entity_count",
+    "persisted_entity_count",
+    "duplicate_entity_count",
+    "raw_payload_id",
+)
+
+
+async def append_terminal_attempt(
+    session: AsyncSession, attempt: "WeatherAttemptRecord"
+) -> AttemptAppendResult:
+    """Append ONE validated terminal attempt. Never updates or deletes.
+
+    Idempotent by ``attempt_id``: repeating an identical append returns
+    ``already_recorded=True``. Repeating the same ``attempt_id`` with different
+    content raises ``AttemptConflictError`` rather than overwriting — a
+    contradiction in the evidence must surface, not be resolved silently.
+    """
+    attempt.require_valid()
+    existing = (
+        await session.execute(
+            select(WeatherCollectionAttempt).where(
+                WeatherCollectionAttempt.attempt_id == attempt.attempt_id
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        for field_name in _ATTEMPT_IDENTITY_FIELDS:
+            stored = getattr(existing, field_name)
+            incoming = getattr(attempt, field_name)
+            if isinstance(incoming, StrEnum):
+                incoming = str(incoming)
+            if stored != incoming:
+                raise AttemptConflictError(
+                    f"attempt_id {attempt.attempt_id!r} already recorded with a different "
+                    f"{field_name}: stored {stored!r} vs incoming {incoming!r}"
+                )
+        return AttemptAppendResult(attempt.attempt_id, already_recorded=True)
+
+    session.add(
+        WeatherCollectionAttempt(
+            attempt_id=attempt.attempt_id,
+            collector_run_id=attempt.collector_run_id,
+            environment=attempt.environment,
+            station_code=attempt.station_code,
+            wfo=attempt.wfo,
+            product_type=str(attempt.product_type),
+            logical_request_key=attempt.logical_request_key,
+            source_request_id=attempt.source_request_id,
+            source_product_id=attempt.source_product_id,
+            requested_at=attempt.requested_at,
+            completed_at=attempt.completed_at,
+            observed_at=attempt.observed_at,
+            created_at=attempt.created_at,
+            target_station_local_date=attempt.target_station_local_date,
+            source_endpoint=attempt.source_endpoint,
+            http_status=attempt.http_status,
+            retry_count=attempt.retry_count,
+            stage=str(attempt.stage),
+            outcome=str(attempt.outcome),
+            source_availability=str(attempt.source_availability),
+            parser_name=attempt.parser_name,
+            parser_version=attempt.parser_version,
+            parser_error_type=attempt.parser_error_type,
+            parser_error_message=attempt.parser_error_message,
+            raw_payload_id=attempt.raw_payload_id,
+            parsed_entity_count=attempt.parsed_entity_count,
+            persisted_entity_count=attempt.persisted_entity_count,
+            duplicate_entity_count=attempt.duplicate_entity_count,
+            persistence_error_type=attempt.persistence_error_type,
+            persistence_error_message=attempt.persistence_error_message,
+            schema_version=attempt.schema_version,
+        )
+    )
+    await session.flush()
+    return AttemptAppendResult(attempt.attempt_id, already_recorded=False)
+
+
+async def list_attempts_for_collector_run(
+    session: AsyncSession, collector_run_id: int
+) -> list[WeatherCollectionAttempt]:
+    rows = await session.execute(
+        select(WeatherCollectionAttempt)
+        .where(WeatherCollectionAttempt.collector_run_id == collector_run_id)
+        .order_by(WeatherCollectionAttempt.requested_at)
+    )
+    return list(rows.scalars().all())
+
+
+async def list_attempts_for_station_window(
+    session: AsyncSession,
+    station_code: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[WeatherCollectionAttempt]:
+    rows = await session.execute(
+        select(WeatherCollectionAttempt)
+        .where(
+            WeatherCollectionAttempt.station_code == station_code,
+            WeatherCollectionAttempt.requested_at >= start,
+            WeatherCollectionAttempt.requested_at <= end,
+        )
+        .order_by(WeatherCollectionAttempt.requested_at)
+    )
+    return list(rows.scalars().all())
+
+
+async def list_attempts_for_product_window(
+    session: AsyncSession,
+    product_type: str,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[WeatherCollectionAttempt]:
+    rows = await session.execute(
+        select(WeatherCollectionAttempt)
+        .where(
+            WeatherCollectionAttempt.product_type == product_type,
+            WeatherCollectionAttempt.requested_at >= start,
+            WeatherCollectionAttempt.requested_at <= end,
+        )
+        .order_by(WeatherCollectionAttempt.requested_at)
+    )
+    return list(rows.scalars().all())
+
+
+async def find_attempt_by_id(
+    session: AsyncSession, attempt_id: str
+) -> WeatherCollectionAttempt | None:
+    return (
+        await session.execute(
+            select(WeatherCollectionAttempt).where(
+                WeatherCollectionAttempt.attempt_id == attempt_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def detect_duplicate_logical_attempts(
+    session: AsyncSession, collector_run_id: int
+) -> list[str]:
+    """Logical keys appearing more than once in a run (should be structurally
+    impossible via the unique constraint; checked as defence in depth)."""
+    rows = await session.execute(
+        select(WeatherCollectionAttempt.logical_request_key, func.count())
+        .where(WeatherCollectionAttempt.collector_run_id == collector_run_id)
+        .group_by(WeatherCollectionAttempt.logical_request_key)
+        .having(func.count() > 1)
+    )
+    return [str(k) for k, _ in rows.all()]

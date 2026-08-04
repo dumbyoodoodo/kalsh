@@ -9,7 +9,17 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -573,9 +583,7 @@ class MarketPollAttempt(Base):
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     #: The cycle this attempt belongs to. Written with the run record post-cycle.
-    collector_run_id: Mapped[int] = mapped_column(
-        ForeignKey("collector_runs.id"), nullable=False
-    )
+    collector_run_id: Mapped[int] = mapped_column(ForeignKey("collector_runs.id"), nullable=False)
     ticker: Mapped[str] = mapped_column(String(64), nullable=False)
     #: market_snapshot | orderbook | trades | settlement | metadata_revision
     endpoint_type: Mapped[str] = mapped_column(String(24), nullable=False)
@@ -603,3 +611,84 @@ class MarketPollAttempt(Base):
     bounded_error_detail: Mapped[str | None] = mapped_column(String(500))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")
     created_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class WeatherCollectionAttempt(Base):
+    """One logical station/product weather collection attempt (migration 0012).
+
+    Exists because ``collector_runs.stats_json`` proves only that a weather
+    CYCLE ran: its ``invalid_items`` and ``errors`` scalars carry no station
+    dimension, so a parser rejection or an unavailable source could not be
+    attributed to the station that caused it. Successes were already
+    attributable (``weather_observations`` rows carry ``station_id``); it is
+    FAILURES AND NON-EVENTS that left no trace, which is why the 2026-08-04
+    pilot review had to report ``evidence_unavailable`` and could not KEEP any
+    station.
+
+    Append-only: one row per logical station/product attempt, never updated or
+    deleted. Retries the provider performs internally are summarized in
+    ``retry_count`` -- one logical row per collector decision, not one per HTTP
+    attempt. PROSPECTIVE ONLY: no historical row is ever backfilled, and any
+    window predating this table stays LEGACY_UNKNOWN rather than becoming zero.
+    """
+
+    __tablename__ = "weather_collection_attempts"
+    __table_args__ = (
+        Index("ix_weather_attempts_station_time", "station_code", "requested_at"),
+        Index("ix_weather_attempts_run", "collector_run_id"),
+        Index("ix_weather_attempts_product_outcome", "product_type", "outcome"),
+        Index("ix_weather_attempts_target_date", "target_station_local_date"),
+        Index("ix_weather_attempts_env_time", "environment", "requested_at"),
+        UniqueConstraint(
+            "collector_run_id",
+            "environment",
+            "station_code",
+            "product_type",
+            "logical_request_key",
+            name="uq_weather_attempt_logical",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    #: Stable id generated BEFORE network I/O, derived from the logical key.
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    collector_run_id: Mapped[int] = mapped_column(ForeignKey("collector_runs.id"), nullable=False)
+    environment: Mapped[str] = mapped_column(String(16), nullable=False)
+    station_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    wfo: Mapped[str | None] = mapped_column(String(8))
+    product_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Deterministic identity of the INTENDED request; excludes retry number so
+    #: retries collapse into one terminal record.
+    logical_request_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_request_id: Mapped[str | None] = mapped_column(String(255))
+    source_product_id: Mapped[str | None] = mapped_column(String(128))
+
+    requested_at: Mapped[datetime] = mapped_column(nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    #: Station-LOCAL target date (never a UTC day). Null only where the product
+    #: genuinely has no target date (e.g. station metadata).
+    target_station_local_date: Mapped[date | None] = mapped_column()
+
+    source_endpoint: Mapped[str] = mapped_column(String(255), nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_availability: Mapped[str] = mapped_column(String(24), nullable=False)
+
+    parser_name: Mapped[str | None] = mapped_column(String(64))
+    parser_version: Mapped[str | None] = mapped_column(String(16))
+    parser_error_type: Mapped[str | None] = mapped_column(String(64))
+    #: Sanitized and bounded -- never raw provider text, which can carry secrets.
+    parser_error_message: Mapped[str | None] = mapped_column(String(500))
+    raw_payload_id: Mapped[int | None] = mapped_column(ForeignKey("raw_api_payloads.id"))
+
+    parsed_entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    persisted_entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    persistence_error_type: Mapped[str | None] = mapped_column(String(64))
+    persistence_error_message: Mapped[str | None] = mapped_column(String(500))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1")

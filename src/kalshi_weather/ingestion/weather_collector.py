@@ -9,12 +9,14 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kalshi_weather.domain.time import utc_now
+from kalshi_weather.ingestion import weather_attempts as wa
 from kalshi_weather.ingestion.validation import (
     WEATHER_TIMESTAMP_FLOOR,
     MalformedPayloadError,
@@ -34,6 +36,9 @@ from kalshi_weather.weather.provider import WeatherProvider
 from kalshi_weather.weather.stations import Station, list_stations
 
 logger = get_logger(__name__)
+
+_OBS = wa.WeatherProductType.CLI_OBSERVATIONS
+_FC = wa.WeatherProductType.GRIDPOINT_FORECAST
 
 
 @dataclass(slots=True)
@@ -56,24 +61,172 @@ async def run_weather_collection_cycle(
     *,
     stations: list[Station] | None = None,
     backfill_days: int,
+    attempts: list[wa.AttemptRecord] | None = None,
+    collector_run_id: int | None = None,
+    environment: str = "production",
 ) -> WeatherCycleStats:
     """Run one full weather collection pass across `stations` (default: the
     whole registry). Each station is isolated: a failure for one station is
-    logged and counted, and collection continues with the next station."""
+    logged and counted, and collection continues with the next station.
+
+    When ``attempts`` and ``collector_run_id`` are supplied, one terminal
+    station-level attempt record per station/product is accumulated into
+    ``attempts`` for the caller to append after the cycle. Passing neither
+    leaves behaviour byte-identical to the pre-instrumentation collector, so
+    existing callers and tests are unaffected."""
     stats = WeatherCycleStats()
     target_stations = stations if stations is not None else list_stations()
 
     for station in target_stations:
         try:
             await _collect_station(
-                provider, session, station, backfill_days=backfill_days, stats=stats
+                provider,
+                session,
+                station,
+                backfill_days=backfill_days,
+                stats=stats,
+                attempts=attempts,
+                collector_run_id=collector_run_id,
+                environment=environment,
             )
             stats.stations_processed += 1
         except Exception:
+            # One station's failure never erases another station's evidence:
+            # any attempt already recorded for this station stays in `attempts`,
+            # and the loop continues to the next station.
             logger.exception("weather_collector.station_failed", station=station.station_id)
             stats.errors += 1
 
     return stats
+
+
+@dataclass(slots=True)
+class _AttemptContext:
+    """Mutable in-memory state for ONE logical attempt.
+
+    Retries mutate this object; exactly one terminal record is appended from it
+    at the end, so a retried request never produces two rows.
+    """
+
+    station: Station
+    product_type: wa.WeatherProductType
+    endpoint: str
+    requested_at: datetime
+    target_local_date: date | None = None
+    stage: wa.AttemptStage = wa.AttemptStage.REQUEST_STARTED
+    outcome: wa.AttemptOutcome = wa.AttemptOutcome.UNKNOWN_FAILURE
+    availability: wa.SourceAvailability = wa.SourceAvailability.UNKNOWN
+    retry_count: int = 0
+    http_status: int | None = None
+    raw_payload_id: int | None = None
+    parsed: int = 0
+    persisted: int = 0
+    duplicate: int = 0
+    parser_error_type: str | None = None
+    parser_error_message: str | None = None
+    persistence_error_type: str | None = None
+    persistence_error_message: str | None = None
+    source_product_id: str | None = None
+
+
+def _station_local_date(station: Station, moment: datetime) -> date:
+    """Station-LOCAL calendar date, never a UTC day. PHX is fixed UTC-7."""
+    return moment.astimezone(ZoneInfo(station.timezone)).date()
+
+
+def _build_attempt(
+    ctx: _AttemptContext,
+    *,
+    collector_run_id: int,
+    environment: str,
+) -> wa.AttemptRecord:
+    """Materialize the single terminal record for one logical attempt."""
+    key = wa.logical_request_key(
+        collector_run_id=collector_run_id,
+        environment=environment,
+        station_code=ctx.station.station_id,
+        product_type=ctx.product_type,
+        target_window=(ctx.target_local_date.isoformat() if ctx.target_local_date else "n/a"),
+    )
+    now = utc_now()
+    return wa.AttemptRecord(
+        attempt_id=wa.attempt_id_for(key),
+        collector_run_id=collector_run_id,
+        environment=environment,
+        station_code=ctx.station.station_id,
+        wfo=ctx.station.wfo_site,
+        product_type=ctx.product_type,
+        logical_request_key=key,
+        source_endpoint=ctx.endpoint,
+        stage=ctx.stage,
+        outcome=ctx.outcome,
+        source_availability=ctx.availability,
+        requested_at=ctx.requested_at,
+        completed_at=now,
+        observed_at=now,
+        created_at=now,
+        target_station_local_date=ctx.target_local_date,
+        http_status=ctx.http_status,
+        retry_count=ctx.retry_count,
+        parser_name="nws_cli_parser" if ctx.product_type is _OBS else None,
+        parser_version=wa.ATTEMPT_SCHEMA_VERSION,
+        parser_error_type=ctx.parser_error_type,
+        parser_error_message=wa.sanitize_error(ctx.parser_error_message),
+        raw_payload_id=ctx.raw_payload_id,
+        parsed_entity_count=ctx.parsed,
+        persisted_entity_count=ctx.persisted,
+        duplicate_entity_count=ctx.duplicate,
+        persistence_error_type=ctx.persistence_error_type,
+        persistence_error_message=wa.sanitize_error(ctx.persistence_error_message),
+        source_product_id=ctx.source_product_id,
+    )
+
+
+def _terminalize(ctx: _AttemptContext) -> None:
+    """Derive the terminal outcome from committed counts.
+
+    Precedence when a request yields BOTH new and duplicate entities:
+    ``SUCCEEDED_NEW_DATA`` wins, because new data is the stronger operational
+    fact. Both counts are preserved on the record regardless -- neither is
+    discarded (see the runbook's mixed-success note).
+    """
+    if ctx.outcome is not wa.AttemptOutcome.UNKNOWN_FAILURE:
+        return  # an explicit failure outcome was already set
+    ctx.availability = wa.SourceAvailability.AVAILABLE
+    if ctx.persisted > 0:
+        ctx.outcome = wa.AttemptOutcome.SUCCEEDED_NEW_DATA
+    elif ctx.duplicate > 0:
+        ctx.outcome = wa.AttemptOutcome.SUCCEEDED_DUPLICATE
+    else:
+        ctx.outcome = wa.AttemptOutcome.SUCCEEDED_NO_DATA
+    ctx.stage = wa.AttemptStage.NORMALIZED_PERSISTED
+
+
+def _record_attempt(
+    attempts: list[wa.AttemptRecord] | None,
+    ctx: _AttemptContext,
+    collector_run_id: int | None,
+    environment: str,
+) -> None:
+    """Collect exactly one terminal record for a logical attempt.
+
+    Evidence collection must never break collection: a malformed attempt is
+    logged and dropped rather than raising into the station loop, because
+    losing one station's weather data to an evidence bug would be a strictly
+    worse outcome than losing the evidence.
+    """
+    if attempts is None or collector_run_id is None:
+        return
+    try:
+        attempts.append(
+            _build_attempt(ctx, collector_run_id=collector_run_id, environment=environment)
+        )
+    except Exception:
+        logger.exception(
+            "weather_collector.attempt_record_failed",
+            station=ctx.station.station_id,
+            product=str(ctx.product_type),
+        )
 
 
 async def _collect_station(
@@ -83,6 +236,9 @@ async def _collect_station(
     *,
     backfill_days: int,
     stats: WeatherCycleStats,
+    attempts: list[wa.AttemptRecord] | None = None,
+    collector_run_id: int | None = None,
+    environment: str = "production",
 ) -> None:
     metadata = await provider.get_station_metadata(station)
     await save_weather_station(
@@ -105,8 +261,29 @@ async def _collect_station(
     # published for it -- both are stored (append-only), not merged.
     start = today - timedelta(days=backfill_days) if latest_date is None else latest_date
 
-    observations = await provider.get_observations(station, start=start, end=today)
+    # --- CLI observations: one logical attempt, terminalized once -----------
+    obs_ctx = _AttemptContext(
+        station=station,
+        product_type=_OBS,
+        endpoint="nws:cli-observations",
+        requested_at=utc_now(),
+        target_local_date=_station_local_date(station, utc_now()),
+    )
+    try:
+        observations = await provider.get_observations(station, start=start, end=today)
+        obs_ctx.stage = wa.AttemptStage.RESPONSE_RECEIVED
+        obs_ctx.raw_payload_id = getattr(provider, "last_raw_payload_id", None)
+        if obs_ctx.raw_payload_id is not None:
+            obs_ctx.stage = wa.AttemptStage.RAW_PAYLOAD_PERSISTED
+    except Exception as exc:  # provider error: no body, source not proven down
+        obs_ctx.outcome = wa.AttemptOutcome.REQUEST_FAILED
+        obs_ctx.availability = wa.SourceAvailability.UNKNOWN
+        obs_ctx.parser_error_message = wa.sanitize_error(f"{type(exc).__name__}: {exc}")
+        _record_attempt(attempts, obs_ctx, collector_run_id, environment)
+        raise
+
     for obs in observations:
+        obs_ctx.parsed += 1
         try:
             validate_timestamp(
                 obs.issuance_time, field_name="issuance_time", floor=WEATHER_TIMESTAMP_FLOOR
@@ -119,6 +296,14 @@ async def _collect_station(
                 error=str(exc),
             )
             stats.invalid_items += 1
+            # Parser rejected a body we DID retrieve: preserve the rejection and
+            # the payload that was refused. This is the evidence the pilot
+            # review could not previously attribute to a station.
+            obs_ctx.outcome = wa.AttemptOutcome.PARSER_REJECTED
+            obs_ctx.availability = wa.SourceAvailability.AVAILABLE
+            obs_ctx.parser_error_type = type(exc).__name__
+            obs_ctx.parser_error_message = str(exc)
+            obs_ctx.stage = wa.AttemptStage.PARSED
             continue
 
         obs_result = await save_weather_observation(
@@ -135,11 +320,38 @@ async def _collect_station(
         )
         if obs_result.was_duplicate:
             stats.observations_duplicate += 1
+            obs_ctx.duplicate += 1
         else:
             stats.observations_saved += 1
+            obs_ctx.persisted += 1
+        obs_ctx.source_product_id = obs.source_product_id
 
-    forecasts = await provider.get_forecast(station)
+    _terminalize(obs_ctx)
+    _record_attempt(attempts, obs_ctx, collector_run_id, environment)
+
+    # --- gridpoint forecast: an independent logical attempt ------------------
+    fc_ctx = _AttemptContext(
+        station=station,
+        product_type=_FC,
+        endpoint="nws:gridpoint-forecast",
+        requested_at=utc_now(),
+        target_local_date=_station_local_date(station, utc_now()),
+    )
+    try:
+        forecasts = await provider.get_forecast(station)
+        fc_ctx.stage = wa.AttemptStage.RESPONSE_RECEIVED
+        fc_ctx.raw_payload_id = getattr(provider, "last_raw_payload_id", None)
+        if fc_ctx.raw_payload_id is not None:
+            fc_ctx.stage = wa.AttemptStage.RAW_PAYLOAD_PERSISTED
+    except Exception as exc:
+        fc_ctx.outcome = wa.AttemptOutcome.REQUEST_FAILED
+        fc_ctx.availability = wa.SourceAvailability.UNKNOWN
+        fc_ctx.parser_error_message = wa.sanitize_error(f"{type(exc).__name__}: {exc}")
+        _record_attempt(attempts, fc_ctx, collector_run_id, environment)
+        raise
+
     for fc in forecasts:
+        fc_ctx.parsed += 1
         try:
             validate_timestamp(
                 fc.issue_time, field_name="issue_time", floor=WEATHER_TIMESTAMP_FLOOR
@@ -150,6 +362,11 @@ async def _collect_station(
                 "weather_collector.forecast_invalid", station=station.station_id, error=str(exc)
             )
             stats.invalid_items += 1
+            fc_ctx.outcome = wa.AttemptOutcome.PARSER_REJECTED
+            fc_ctx.availability = wa.SourceAvailability.AVAILABLE
+            fc_ctx.parser_error_type = type(exc).__name__
+            fc_ctx.parser_error_message = str(exc)
+            fc_ctx.stage = wa.AttemptStage.PARSED
             continue
 
         forecast_result = await save_weather_forecast(
@@ -166,8 +383,13 @@ async def _collect_station(
         )
         if forecast_result.was_duplicate:
             stats.forecasts_duplicate += 1
+            fc_ctx.duplicate += 1
         else:
             stats.forecasts_saved += 1
+            fc_ctx.persisted += 1
+
+    _terminalize(fc_ctx)
+    _record_attempt(attempts, fc_ctx, collector_run_id, environment)
 
 
 async def run_weather_collector_loop(

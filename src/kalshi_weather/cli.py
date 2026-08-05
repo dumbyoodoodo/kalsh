@@ -104,6 +104,8 @@ experiment_app = typer.Typer(help="Run formal modeling experiments on frozen can
 app.add_typer(experiment_app, name="experiment")
 research_app = typer.Typer(help="Generic research-workbench utilities (leakage audit, ledger).")
 app.add_typer(research_app, name="research")
+dev_app = typer.Typer(help="Developer utilities (disposable migration validation).")
+app.add_typer(dev_app, name="dev")
 data_quality_app = typer.Typer(help="Data-quality assets (permanent collection-gap ledger).")
 gap_ledger_app = typer.Typer(
     help="Append-only permanent collection-gap ledger. Read-only by default; "
@@ -5584,6 +5586,52 @@ def gap_ledger_append(
     typer.echo(_GAP_LEDGER_BANNER)
     typer.echo(f"appended {stored.gap_id} (content_hash={stored.content_hash[:12]}...)")
     typer.echo(f"ledger now holds {len(ledger.records) + 1} record(s)")
+
+
+@dev_app.command("validate-migration")
+def dev_validate_migration(
+    revision: str = typer.Option("head", help="Alembic revision to validate."),
+    table: str = typer.Option("", help="Restrict the schema report to one table (default: all)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the schema report as JSON."),
+) -> None:
+    """Validate a migration against a TEMPORARY database. Never touches production.
+
+    Creates a throwaway SQLite database, upgrades it through the real migration
+    scripts via an INJECTED connection (so env.py never resolves Settings),
+    inspects the resulting schema, and deletes the database afterwards. The
+    target identity is printed before execution, and any production-looking
+    target is refused before a connection is opened."""
+    import json as _json
+
+    from kalshi_weather.storage.migration_validation import (
+        MigrationTargetError,
+        describe_configured_target,
+        validate_migration_schema,
+    )
+
+    typer.echo("DISPOSABLE MIGRATION VALIDATION — production is never touched.")
+    typer.echo(f"  configured production target (NOT used): {describe_configured_target()}")
+    try:
+        report, identity = validate_migration_schema(
+            revision, tables_of_interest=(table,) if table else ()
+        )
+    except MigrationTargetError as exc:
+        typer.echo(f"{exc}")
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"  validated against: {identity.describe()}")
+    if as_json:
+        typer.echo(_json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        return
+    typer.echo(f"  revision: {report.revision}   tables: {len(report.tables)}")
+    for name in sorted(report.columns):
+        typer.echo(
+            f"    {name}: {len(report.columns[name])} cols, "
+            f"{len([i for i in report.indexes.get(name, ()) if i])} index(es), "
+            f"fks -> {list(report.foreign_keys.get(name, ()))}, "
+            f"unique -> {[u for u in report.unique_constraints.get(name, ()) if u]}"
+        )
+    typer.echo("  temporary database deleted.")
 
 
 if __name__ == "__main__":

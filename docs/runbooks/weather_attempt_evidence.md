@@ -212,3 +212,72 @@ here would train operators to ignore both.
 5-minute grace covering the run-record write. An active or just-finished run
 reports `incomplete_terminal_attempt_set` at INFO — reconciliation is
 *deferred*, never reported as passing.
+
+---
+
+## Deployment anchor (added 2026-08-05)
+
+> **No production deployment anchor exists.** The extension state is still
+> `WAITING_FOR_ATTEMPT_ATTRIBUTION_DEPLOYMENT`, and no real
+> `deployment_validated_at` has been chosen.
+
+`deployment_validated_at` is the hinge the whole extension hangs on: it fixes
+the first included local date and therefore the review gate. If it can be
+guessed, backdated, or half-satisfied, the extension window is not evidence —
+it is a preference.
+
+**It must never be chosen manually or backdated.** It is the moment the LAST
+required condition became true, and validation enforces
+`deployment_validated_at == final_condition_confirmed_at`. There is no
+override, force, or manual-anchor path anywhere in the API.
+
+Three plausible shortcuts are each explicitly insufficient:
+
+- a **migration timestamp** alone is not an anchor,
+- a **collector start timestamp** alone is not an anchor,
+- a **partially completed cycle** is not an anchor.
+
+### Required conditions
+
+Registration id and hash must match `STATION-PILOT-EXT-0001` exactly; migration
+revision `0012`; `deployed_commit == collector_loaded_commit`;
+`collector_git_dirty` false; a PID present and exactly one collector confirmed;
+the validated cycle complete; `expected_attempts == actual_attempts`;
+reconciliation `PASS`; raw-payload provenance `PASS`; zero critical observatory
+findings; ordering consistent (`final_condition ≥ cycle completion`, anchor not
+before migration or collector start, `recorded_at ≥ anchor`); at least one
+evidence reference; deterministic content hash.
+
+### Append-only policy
+
+`data/operations/station_pilot_extension_deployments.jsonl` — a separate ledger
+from the research ledger and the permanent gap ledger, because this records an
+*operational* deployment fact, not a research result or a data-loss
+classification. Duplicate deployment ids are refused; a **second anchor for the
+same registration is refused outright** (ADR 0024 registers one extension, and
+a second anchor would silently re-date the window); a malformed ledger blocks
+any append; there is no update, delete, or overwrite.
+
+### Commands
+
+```
+research station-pilot-extension deployment status
+research station-pilot-extension deployment preview --deployment-validated-at <ISO>
+research station-pilot-extension deployment validate-file --file <record.json>
+```
+
+All three are read-only. `preview` is **arithmetic only** — it prints
+`PREVIEW — NOT A RECORDED DEPLOYMENT`, queries no production data, appends
+nothing, and changes no state. `validate-file` reports every failed invariant
+and never appends. **No append command exists yet**; recording the anchor
+belongs to the deployment task.
+
+### Extension calendar
+
+Derived entirely by the frozen ADR 0024 logic — no timezone or gate arithmetic
+is duplicated, so the module and a recorded anchor cannot diverge. Per station:
+the first local date whose midnight is **strictly after** the anchor, seven
+consecutive dates, and that date's UTC end. The review gate is the **latest**
+seventh-date end across SEA/PHX/MIA. Resulting state: `COLLECTING_EXTENSION`.
+
+Production deployment remains pending.

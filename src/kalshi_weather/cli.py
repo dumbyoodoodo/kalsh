@@ -108,6 +108,10 @@ experiment_app = typer.Typer(help="Run formal modeling experiments on frozen can
 app.add_typer(experiment_app, name="experiment")
 research_app = typer.Typer(help="Generic research-workbench utilities (leakage audit, ledger).")
 app.add_typer(research_app, name="research")
+spx_app = typer.Typer(help="SEA/PHX/MIA pilot extension registration and deployment anchor.")
+spx_deploy_app = typer.Typer(help="Deployment-anchor status, preview, and validation (read-only).")
+research_app.add_typer(spx_app, name="station-pilot-extension")
+spx_app.add_typer(spx_deploy_app, name="deployment")
 dev_app = typer.Typer(help="Developer utilities (disposable migration validation).")
 app.add_typer(dev_app, name="dev")
 data_quality_app = typer.Typer(help="Data-quality assets (permanent collection-gap ledger).")
@@ -5984,6 +5988,127 @@ def weather_attempts_reconcile(
             typer.echo(f"  - {problem}")
         typer.echo(f"  legacy mapping: {list(wa.LEGACY_COUNTER_MAPPING)}")
     if not result.ok or (strict and result.problems):
+        raise typer.Exit(code=1)
+
+
+@spx_deploy_app.command("status")
+def spx_deployment_status(
+    as_json: bool = typer.Option(False, "--json", help="Emit as JSON."),
+) -> None:
+    """READ-ONLY: registration, current extension state, and anchor presence."""
+    import json as _json
+
+    from kalshi_weather.research import extension_deployment as ed
+    from kalshi_weather.research import station_pilot_extension as ext
+
+    ledger = ed.DeploymentLedger.load()
+    anchors = ledger.find_for_extension_registration(ext.EXTENSION_REGISTRATION_ID)
+    validated_at = anchors[0].deployment_validated_at if anchors else None
+    state = ext.extension_state(now=utc_now(), deployment_validated_at=validated_at)
+    payload = {
+        "registration": ext.REGISTRATION.to_dict(),
+        "extension_state": str(state),
+        "deployment_anchor_recorded": bool(anchors),
+        "deployment_validated_at": (
+            validated_at.isoformat().replace("+00:00", "Z") if validated_at else None
+        ),
+        "ledger_records": len(ledger.records),
+        "ledger_problems": ledger.verify_ledger(),
+    }
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+    typer.echo(f"registration: {ext.EXTENSION_REGISTRATION_ID}")
+    typer.echo(f"  hash: {ext.REGISTRATION.registration_hash()}")
+    typer.echo(f"  extension_state: {state}")
+    typer.echo(f"  deployment anchor recorded: {bool(anchors)}")
+    typer.echo(f"  deployment_validated_at: {payload['deployment_validated_at']}")
+    typer.echo(f"  ledger records: {len(ledger.records)}")
+
+
+@spx_deploy_app.command("preview")
+def spx_deployment_preview(
+    deployment_validated_at: str = typer.Option(
+        ..., help="SYNTHETIC timestamp for calendar preview (ISO, timezone-aware UTC)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit as JSON."),
+) -> None:
+    """Deterministic calendar PREVIEW. Records nothing, mutates nothing.
+
+    This is arithmetic over a supplied timestamp -- it queries no production
+    data, appends no record, and does not change the extension state."""
+    import json as _json
+    from datetime import datetime as _dt
+
+    from kalshi_weather.research import extension_deployment as ed
+
+    try:
+        moment = _dt.fromisoformat(deployment_validated_at)
+    except ValueError as exc:
+        typer.echo(f"REFUSED: invalid ISO timestamp: {exc}")
+        raise typer.Exit(code=2) from exc
+    if moment.tzinfo is None:
+        typer.echo("REFUSED: --deployment-validated-at must be timezone-aware UTC")
+        raise typer.Exit(code=2)
+
+    calendars = ed.derive_calendars(moment)
+    gate = ed.derive_review_gate(moment)
+    payload = {
+        "preview": True,
+        "deployment_validated_at": moment.isoformat(),
+        "stations": [c.to_dict() for c in calendars],
+        "extension_review_gate": gate.isoformat(),
+        "resulting_extension_state": str(ed.ExtensionState.COLLECTING_EXTENSION),
+    }
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+    typer.echo("PREVIEW — NOT A RECORDED DEPLOYMENT")
+    typer.echo(f"  synthetic deployment_validated_at: {moment.isoformat()}")
+    for c in calendars:
+        typer.echo(
+            f"    {c.station_code} ({c.timezone_name}): "
+            f"{c.first_included_date} .. {c.included_dates[-1]} "
+            f"(7 dates, 7th ends {c.seventh_date_end_utc.isoformat()})"
+        )
+    typer.echo(f"  extension_review_gate (latest 7th-date end): {gate.isoformat()}")
+    typer.echo("  nothing was appended; extension state is unchanged")
+
+
+@spx_deploy_app.command("validate-file")
+def spx_deployment_validate_file(
+    file: str = typer.Option(..., "--file", help="Proposed deployment record JSON."),
+    as_json: bool = typer.Option(False, "--json", help="Emit findings as JSON."),
+) -> None:
+    """READ-ONLY: validate a proposed deployment record. Never appends."""
+    import json as _json
+
+    from kalshi_weather.research import extension_deployment as ed
+
+    try:
+        raw = _json.loads(Path(file).read_text())
+        record = ed.DeploymentRecord.from_dict(raw)
+    except (ed.DeploymentLedgerError, _json.JSONDecodeError, OSError) as exc:
+        typer.echo(f"REFUSED: {exc}")
+        raise typer.Exit(code=2) from exc
+
+    problems = ed.validate_record(record)
+    payload = {
+        "deployment_id": record.deployment_id,
+        "valid": not problems,
+        "problems": problems,
+        "content_hash": record.compute_hash(),
+        "would_set_extension_state": str(ed.ExtensionState.COLLECTING_EXTENSION),
+    }
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"deployment_id: {record.deployment_id}")
+        typer.echo(f"  valid: {not problems}")
+        for problem in problems:
+            typer.echo(f"  - {problem}")
+        typer.echo("  NOT appended — validation only")
+    if problems:
         raise typer.Exit(code=1)
 
 

@@ -94,6 +94,10 @@ app.add_typer(markets_app, name="markets")
 app.add_typer(orderbook_app, name="orderbook")
 app.add_typer(collector_app, name="collector")
 app.add_typer(weather_app, name="weather")
+weather_attempts_app = typer.Typer(
+    help="Station-level weather collection-attempt evidence (read-only)."
+)
+weather_app.add_typer(weather_attempts_app, name="attempts")
 weather_app.add_typer(weather_stations_app, name="stations")
 app.add_typer(dataset_app, name="dataset")
 app.add_typer(settlement_app, name="settlement")
@@ -5632,6 +5636,355 @@ def dev_validate_migration(
             f"unique -> {[u for u in report.unique_constraints.get(name, ()) if u]}"
         )
     typer.echo("  temporary database deleted.")
+
+
+#: Stable CLI statuses for attempt tooling (documented in the runbook).
+_ATTEMPT_NOT_DEPLOYED = "ATTEMPT_ATTRIBUTION_NOT_DEPLOYED"
+_ATTEMPT_VALID = "ATTEMPT_EVIDENCE_VALID"
+_ATTEMPT_WARNING = "ATTEMPT_EVIDENCE_WARNING"
+_ATTEMPT_INVALID = "ATTEMPT_EVIDENCE_INVALID"
+_RECON_PASS = "RECONCILIATION_PASS"
+_RECON_FAIL = "RECONCILIATION_FAIL"
+_NOT_DEPLOYED_BANNER = "ATTEMPT ATTRIBUTION NOT DEPLOYED — SCHEMA 0012 REQUIRED"
+
+
+async def _attempt_schema_present(conn: Any) -> bool:
+    from sqlalchemy import text as _t
+
+    row = (
+        await conn.execute(
+            _t(
+                "select count(*) from information_schema.tables "
+                "where table_name='weather_collection_attempts'"
+            )
+        )
+    ).first()
+    return bool(row and row[0])
+
+
+@weather_attempts_app.command("validate")
+def weather_attempts_validate(
+    limit: int = typer.Option(500, help="Maximum recent attempt rows to inspect."),
+    as_json: bool = typer.Option(False, "--json", help="Emit findings as JSON."),
+    fail_on_warning: bool = typer.Option(
+        False, help="Exit 1 when any WARNING-level finding is present."
+    ),
+) -> None:
+    """READ-ONLY integrity check over station-level attempt evidence.
+
+    Before migration 0012 is deployed this reports NOT DEPLOYED, which is the
+    expected pre-deployment state — never treated as corrupted data."""
+    import json as _json
+
+    from sqlalchemy import text as _t
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.observatory import attempts as oa
+    from kalshi_weather.observatory.severity import Severity
+    from kalshi_weather.ops.quality import EXPECTED_DB_REVISION
+    from kalshi_weather.weather.stations import STATIONS
+
+    settings = get_settings()
+    holder: dict[str, Any] = {}
+
+    async def run() -> None:
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                deployed = await _attempt_schema_present(conn)
+                rev_row = (
+                    await conn.execute(_t("select version_num from alembic_version"))
+                ).first()
+                revision = str(rev_row[0]) if rev_row else "unknown"
+                rows: list[oa.AttemptRow] = []
+                runs: list[oa.RunContext] = []
+                if deployed:
+                    raw = (
+                        await conn.execute(
+                            _t(
+                                "select attempt_id, collector_run_id, environment, "
+                                "station_code, "
+                                "product_type, logical_request_key, stage, outcome, "
+                                "source_availability, requested_at, completed_at, "
+                                "target_station_local_date, raw_payload_id, parsed_entity_count, "
+                                "persisted_entity_count, duplicate_entity_count, "
+                                "parser_error_type, persistence_error_type "
+                                "from weather_collection_attempts "
+                                "order by requested_at desc limit :n"
+                            ),
+                            {"n": limit},
+                        )
+                    ).all()
+                    rows = [oa.AttemptRow(*r) for r in raw]
+                holder["deployed"] = deployed
+                holder["revision"] = revision
+                holder["rows"] = rows
+                holder["runs"] = runs
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+    findings = oa.summarize(
+        holder["rows"],
+        holder["runs"],
+        now=utc_now(),
+        known_stations=frozenset(STATIONS),
+        station_timezones={code: st.timezone for code, st in STATIONS.items()},
+        schema_deployed=bool(holder["deployed"]),
+        db_revision=str(holder["revision"]),
+        expected_revision=EXPECTED_DB_REVISION,
+    )
+    criticals = [f for f in findings if f.severity is Severity.CRITICAL]
+    warnings = [f for f in findings if f.severity is Severity.WARNING]
+    if not holder["deployed"]:
+        status = _ATTEMPT_NOT_DEPLOYED
+    elif criticals:
+        status = _ATTEMPT_INVALID
+    elif warnings:
+        status = _ATTEMPT_WARNING
+    else:
+        status = _ATTEMPT_VALID
+
+    payload = {
+        "status": status,
+        "schema_deployed": bool(holder["deployed"]),
+        "database_revision": str(holder["revision"]),
+        "expected_revision": EXPECTED_DB_REVISION,
+        "inspected_rows": len(holder["rows"]),
+        "findings": oa.to_dicts(findings),
+    }
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if not holder["deployed"]:
+            typer.echo(_NOT_DEPLOYED_BANNER)
+        typer.echo(f"status: {status}")
+        typer.echo(
+            f"  schema_deployed={payload['schema_deployed']} "
+            f"revision={payload['database_revision']} expected={EXPECTED_DB_REVISION} "
+            f"rows_inspected={payload['inspected_rows']}"
+        )
+        for f in findings:
+            if f.severity is not Severity.INFO or not holder["deployed"]:
+                typer.echo(f"  [{f.severity.value.upper()}] {f.check}: {f.message}")
+    if criticals:
+        raise typer.Exit(code=1)
+    if warnings and fail_on_warning:
+        raise typer.Exit(code=1)
+
+
+@weather_attempts_app.command("summary")
+def weather_attempts_summary(
+    station: str = typer.Option(..., help="Station code (e.g. SEA)."),
+    start: str = typer.Option(..., help="ISO UTC window start (timezone-aware)."),
+    end: str = typer.Option(..., help="ISO UTC window end (timezone-aware)."),
+    product_type: str = typer.Option("", help="Restrict to one product type."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the summary as JSON."),
+    fail_on_unknown: bool = typer.Option(
+        False, help="Exit 1 when evidence is LEGACY_UNKNOWN or EVIDENCE_MISSING."
+    ),
+) -> None:
+    """READ-ONLY per-station attempt summary over a UTC window.
+
+    Absent rows are NEVER reported as a known zero: a window predating the
+    ledger is LEGACY_UNKNOWN and a station with no rows is EVIDENCE_MISSING.
+    A future `end` is permitted purely as a query boundary — no evidence is
+    fabricated for a period that has not happened."""
+    import json as _json
+    from datetime import datetime as _dt
+
+    from sqlalchemy import text as _t
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.ingestion import weather_attempts as wa
+    from kalshi_weather.observatory import attempts as oa
+    from kalshi_weather.weather.stations import STATIONS
+
+    if station not in STATIONS:
+        typer.echo(f"REFUSED: unknown station {station!r} (registry: {sorted(STATIONS)})")
+        raise typer.Exit(code=2)
+    try:
+        window_start = _dt.fromisoformat(start)
+        window_end = _dt.fromisoformat(end)
+    except ValueError as exc:
+        typer.echo(f"REFUSED: invalid ISO timestamp: {exc}")
+        raise typer.Exit(code=2) from exc
+    if window_start.tzinfo is None or window_end.tzinfo is None:
+        typer.echo("REFUSED: --start and --end must be timezone-aware UTC")
+        raise typer.Exit(code=2)
+    if window_end <= window_start:
+        typer.echo("REFUSED: --end must be strictly after --start")
+        raise typer.Exit(code=2)
+    product = None
+    if product_type:
+        try:
+            product = wa.WeatherProductType(product_type)
+        except ValueError as exc:
+            typer.echo(
+                f"REFUSED: unknown product {product_type!r} "
+                f"(known: {[str(p) for p in wa.WeatherProductType]})"
+            )
+            raise typer.Exit(code=2) from exc
+
+    settings = get_settings()
+    holder: dict[str, Any] = {}
+
+    async def run() -> None:
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                deployed = await _attempt_schema_present(conn)
+                records: list[wa.AttemptRecord] = []
+                if deployed:
+                    raw = (
+                        await conn.execute(
+                            _t(
+                                "select attempt_id, collector_run_id, environment, station_code, "
+                                "product_type, logical_request_key, source_endpoint, stage, "
+                                "outcome, source_availability, requested_at, completed_at, "
+                                "observed_at, created_at, target_station_local_date, "
+                                "raw_payload_id, parsed_entity_count, persisted_entity_count, "
+                                "duplicate_entity_count "
+                                "from weather_collection_attempts "
+                                "where station_code=:s and requested_at>=:a and requested_at<=:b"
+                            ),
+                            {"s": station, "a": window_start, "b": window_end},
+                        )
+                    ).all()
+                    for r in raw:
+                        records.append(
+                            wa.AttemptRecord(
+                                attempt_id=r[0],
+                                collector_run_id=r[1],
+                                environment=r[2],
+                                station_code=r[3],
+                                product_type=wa.WeatherProductType(r[4]),
+                                logical_request_key=r[5],
+                                source_endpoint=r[6],
+                                stage=wa.AttemptStage(r[7]),
+                                outcome=wa.AttemptOutcome(r[8]),
+                                source_availability=wa.SourceAvailability(r[9]),
+                                requested_at=r[10],
+                                completed_at=r[11],
+                                observed_at=r[12],
+                                created_at=r[13],
+                                target_station_local_date=r[14],
+                                raw_payload_id=r[15],
+                                parsed_entity_count=r[16],
+                                persisted_entity_count=r[17],
+                                duplicate_entity_count=r[18],
+                            )
+                        )
+                holder["deployed"] = deployed
+                holder["records"] = records
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+    summary = wa.summarize_station_window(
+        station,
+        holder["records"],
+        window_start=window_start,
+        window_end=window_end,
+        ledger_available=bool(holder["deployed"]),
+        product_filter=product,
+    )
+    payload = summary.to_dict()
+    unknown_states = {
+        str(wa.AttemptEvidenceState.LEGACY_UNKNOWN),
+        str(wa.AttemptEvidenceState.EVIDENCE_MISSING),
+    }
+    is_unknown = any(ev["state"] in unknown_states for ev in payload["evidence"].values())
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True, default=str))
+    else:
+        if not holder["deployed"]:
+            typer.echo(_NOT_DEPLOYED_BANNER)
+        typer.echo(f"station {station}  window {start} → {end}")
+        typer.echo(
+            f"  ledger_available={payload['ledger_available']} "
+            f"recorded_attempts={payload['recorded_attempts']} "
+            f"reason={payload['evidence_reason']}"
+        )
+        for key, ev in sorted(payload["evidence"].items()):
+            typer.echo(f"    {key}: {ev['state']} count={ev['count']}")
+        if payload["unattributable_cycle_aggregate"] is not None:
+            typer.echo(
+                "    unattributable cycle aggregate (platform, NOT this station): "
+                f"{payload['unattributable_cycle_aggregate']}"
+            )
+    _ = oa  # observatory import kept for a single evidence vocabulary
+    if is_unknown and fail_on_unknown:
+        raise typer.Exit(code=1)
+
+
+@weather_attempts_app.command("reconcile")
+def weather_attempts_reconcile(
+    collector_run_id: int = typer.Option(..., help="Weather collector run to reconcile."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the result as JSON."),
+    strict: bool = typer.Option(False, help="Exit 1 on any problem, including warnings."),
+) -> None:
+    """READ-ONLY exact reconciliation of one weather collector run."""
+    import json as _json
+
+    from sqlalchemy import text as _t
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from kalshi_weather.ingestion import weather_attempts as wa
+    from kalshi_weather.weather.stations import STATIONS
+
+    settings = get_settings()
+    holder: dict[str, Any] = {}
+
+    async def run() -> None:
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.connect() as conn:
+                holder["deployed"] = await _attempt_schema_present(conn)
+                run_row = (
+                    await conn.execute(
+                        _t(
+                            "select collector, started_at, finished_at, stats_json "
+                            "from collector_runs where id=:i"
+                        ),
+                        {"i": collector_run_id},
+                    )
+                ).first()
+                holder["run"] = run_row
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+    if holder["run"] is None:
+        typer.echo(f"REFUSED: no collector run with id {collector_run_id}")
+        raise typer.Exit(code=2)
+    if not holder["deployed"]:
+        typer.echo(_NOT_DEPLOYED_BANNER)
+        typer.echo(f"status: {_ATTEMPT_NOT_DEPLOYED}")
+        return
+
+    expected = [(code, wa.WeatherProductType.CLI_OBSERVATIONS) for code in sorted(STATIONS)]
+    expected += [(code, wa.WeatherProductType.GRIDPOINT_FORECAST) for code in sorted(STATIONS)]
+    result = wa.reconcile_collector_run(
+        collector_run_id=collector_run_id,
+        environment="production",
+        attempts=[],
+        expected_pairs=expected,
+    )
+    payload = result.to_dict()
+    payload["status"] = _RECON_PASS if result.ok else _RECON_FAIL
+    if as_json:
+        typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"status: {payload['status']}")
+        typer.echo(
+            f"  expected_pairs={result.expected_pairs} actual_attempts={result.actual_attempts}"
+        )
+        for problem in result.problems:
+            typer.echo(f"  - {problem}")
+        typer.echo(f"  legacy mapping: {list(wa.LEGACY_COUNTER_MAPPING)}")
+    if not result.ok or (strict and result.problems):
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

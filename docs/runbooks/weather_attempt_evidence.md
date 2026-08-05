@@ -127,3 +127,88 @@ station-local dates, an evidence reason, and any unattributable cycle aggregate
 Verified backup → apply 0012 → restart collector → observe two full weather
 cycles → reconcile exactly → record `deployment_validated_at`. CLI, observatory
 findings, and the deployment anchor are separate later tasks.
+
+---
+
+## Operator tooling (added 2026-08-05)
+
+> Migration 0012 is still **not** applied to production. Every command below
+> reports the pre-deployment state; none of them deploys anything.
+
+### `weather attempts validate`
+
+READ-ONLY. Checks schema availability, per-row integrity, lineage, provenance,
+and reconciliation over recent rows.
+
+Before deployment it prints:
+
+```
+ATTEMPT ATTRIBUTION NOT DEPLOYED — SCHEMA 0012 REQUIRED
+status: ATTEMPT_ATTRIBUTION_NOT_DEPLOYED
+```
+
+That is the **expected** state, not corrupted data. Options: `--json`,
+`--limit`, `--fail-on-warning`.
+
+### `weather attempts summary --station SEA --start <UTC> --end <UTC>`
+
+READ-ONLY per-station rollup. Options: `--product-type`, `--json`,
+`--fail-on-unknown`. Rejects an unknown station, a naive timestamp, or
+`end <= start` **before** any query (exit 2).
+
+Absent rows are never a known zero — a pre-ledger window is `LEGACY_UNKNOWN`,
+a station with no rows is `EVIDENCE_MISSING`. Unattributable cycle aggregates
+are shown separately as *platform* uncertainty, never charged to a station.
+A future `--end` is accepted purely as a query boundary; no evidence is
+fabricated for a period that has not happened.
+
+### `weather attempts reconcile --collector-run-id <id>`
+
+READ-ONLY exact reconciliation of one run: missing pairs, unexpected pairs,
+duplicate logical keys, outcome totals, legacy-counter mapping. Exits 1 on
+failure. Options: `--json`, `--strict`.
+
+**There is no update, delete, repair, or backfill command.**
+
+### Statuses and exit codes
+
+`ATTEMPT_ATTRIBUTION_NOT_DEPLOYED` · `ATTEMPT_EVIDENCE_VALID` ·
+`ATTEMPT_EVIDENCE_WARNING` · `ATTEMPT_EVIDENCE_INVALID` ·
+`RECONCILIATION_PASS` · `RECONCILIATION_FAIL` · `LEGACY_UNKNOWN` ·
+`EVIDENCE_MISSING`.
+
+`0` success · `1` CRITICAL findings, reconciliation failure, or a warning/unknown
+under `--fail-on-warning`/`--fail-on-unknown` · `2` invalid arguments or a
+refused operation.
+
+JSON output uses sorted keys, stable enums, and UTC timestamps, and contains no
+database URL, credentials, raw payload bodies, or performance fields.
+
+## Observatory findings
+
+`observatory/attempts.py` reports through the existing `Finding`/`Severity`
+contract and defines no new vocabulary.
+
+**Severity mapping.** The spec names four levels; this repo's observatory is
+three-valued and its roll-up depends on that, so **ERROR maps onto CRITICAL**.
+Both mean "an integrity violation an operator must resolve". WARNING and INFO
+are unchanged.
+
+- **CRITICAL** — conflicting duplicate logical identity, environment mismatch,
+  foreign collector-run lineage, provenance corruption, missing expected
+  attempt, counter mismatch, invalid target local date, impossible count
+  combination, unrecognized stage/outcome.
+- **WARNING** — bounded `SOURCE_UNAVAILABLE`, `REQUEST_FAILED` with intact
+  provenance, station-specific parser rejection, an *identical* duplicate
+  (idempotency artifact, not corruption).
+- **INFO** — pre-deployment absence, schema-revision drift, successful
+  no-data.
+
+**Pre-deployment absence never pages.** The canonical
+`unexpected_schema_change` finding already reports the drift; a second CRITICAL
+here would train operators to ignore both.
+
+**Completed runs only.** A run is judged once it has a completion marker plus a
+5-minute grace covering the run-record write. An active or just-finished run
+reports `incomplete_terminal_attempt_set` at INFO — reconciliation is
+*deferred*, never reported as passing.

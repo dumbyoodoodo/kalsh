@@ -5649,6 +5649,7 @@ _ATTEMPT_WARNING = "ATTEMPT_EVIDENCE_WARNING"
 _ATTEMPT_INVALID = "ATTEMPT_EVIDENCE_INVALID"
 _RECON_PASS = "RECONCILIATION_PASS"
 _RECON_FAIL = "RECONCILIATION_FAIL"
+_RECON_DEFERRED = "RECONCILIATION_DEFERRED"
 _NOT_DEPLOYED_BANNER = "ATTEMPT ATTRIBUTION NOT DEPLOYED — SCHEMA 0012 REQUIRED"
 
 
@@ -5948,13 +5949,31 @@ def weather_attempts_reconcile(
                 run_row = (
                     await conn.execute(
                         _t(
-                            "select collector, started_at, finished_at, stats_json "
+                            "select collector, started_at, finished_at, stats_json, environment "
                             "from collector_runs where id=:i"
                         ),
                         {"i": collector_run_id},
                     )
                 ).first()
                 holder["run"] = run_row
+                if run_row is not None and holder["deployed"]:
+                    rows = (
+                        await conn.execute(
+                            _t(
+                                "select attempt_id, collector_run_id, environment, "
+                                "station_code, product_type, logical_request_key, "
+                                "source_endpoint, stage, outcome, source_availability, "
+                                "requested_at, completed_at, observed_at, created_at, "
+                                "target_station_local_date, raw_payload_id, "
+                                "parsed_entity_count, persisted_entity_count, "
+                                "duplicate_entity_count, parser_error_type, "
+                                "persistence_error_type "
+                                "from weather_collection_attempts where collector_run_id=:i"
+                            ),
+                            {"i": collector_run_id},
+                        )
+                    ).all()
+                    holder["rows"] = rows
         finally:
             await engine.dispose()
 
@@ -5967,13 +5986,58 @@ def weather_attempts_reconcile(
         typer.echo(f"status: {_ATTEMPT_NOT_DEPLOYED}")
         return
 
+    run_row = holder["run"]
+    environment = (run_row[4] or "production") if len(run_row) > 4 else "production"
+    finished_at = run_row[2]
+    stats = run_row[3] or {}
+
+    # An active or just-finished run has not had the chance to write its
+    # attempts. Reconciliation is DEFERRED, never reported as passing or failing.
+    if finished_at is None:
+        typer.echo(f"status: {_RECON_DEFERRED}")
+        typer.echo(f"  collector run {collector_run_id} has not completed; reconciliation deferred")
+        return
+
+    # Expected scope is derived from the ACTIVE station registry and the
+    # instrumented products -- never assumed from a remembered count.
     expected = [(code, wa.WeatherProductType.CLI_OBSERVATIONS) for code in sorted(STATIONS)]
     expected += [(code, wa.WeatherProductType.GRIDPOINT_FORECAST) for code in sorted(STATIONS)]
+
+    attempts: list[wa.AttemptRecord] = []
+    for r in holder.get("rows", []):
+        attempts.append(
+            wa.AttemptRecord(
+                attempt_id=r[0],
+                collector_run_id=r[1],
+                environment=r[2],
+                station_code=r[3],
+                product_type=wa.WeatherProductType(r[4]),
+                logical_request_key=r[5],
+                source_endpoint=r[6],
+                stage=wa.AttemptStage(r[7]),
+                outcome=wa.AttemptOutcome(r[8]),
+                source_availability=wa.SourceAvailability(r[9]),
+                requested_at=r[10],
+                completed_at=r[11],
+                observed_at=r[12],
+                created_at=r[13],
+                target_station_local_date=r[14],
+                raw_payload_id=r[15],
+                parsed_entity_count=r[16],
+                persisted_entity_count=r[17],
+                duplicate_entity_count=r[18],
+                parser_error_type=r[19],
+                persistence_error_type=r[20],
+            )
+        )
+
+    # The rules live in the evidence layer; the CLI only loads and renders.
     result = wa.reconcile_collector_run(
         collector_run_id=collector_run_id,
-        environment="production",
-        attempts=[],
+        environment=str(environment),
+        attempts=attempts,
         expected_pairs=expected,
+        cycle_stats=stats if isinstance(stats, dict) else None,
     )
     payload = result.to_dict()
     payload["status"] = _RECON_PASS if result.ok else _RECON_FAIL

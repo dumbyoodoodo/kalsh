@@ -32,7 +32,7 @@ program that depends on it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from kalshi_weather.domain.time import utc_now
@@ -296,4 +296,104 @@ async def build_observatory_report(
     if config.backup_health is not None:
         findings.extend(backup_health.build_backup_findings(config.backup_health, now=now))
 
+    # --- New: station-level weather attempt attribution (migration 0012).
+    # Before the migration this contributes only INFO -- the canonical
+    # unexpected_schema_change finding already reports the drift, and a second
+    # paging-level alert for the same fact would train operators to ignore both.
+    findings.extend(await _build_attempt_findings(session, now=now))
+
     return ObservatoryReport(generated_at=utc_now().isoformat(), findings=tuple(findings))
+
+
+async def _build_attempt_findings(session: AsyncSession, *, now: datetime) -> list[Finding]:
+    """Attempt-attribution findings, loaded from production and evaluated by the
+    pure checks in ``observatory.attempts``.
+
+    Only COMPLETED collector runs are judged; an active run has not had the
+    chance to write its attempts.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text as _text
+
+    from kalshi_weather.observatory import attempts as oa
+    from kalshi_weather.ops.quality import EXPECTED_DB_REVISION
+    from kalshi_weather.weather.stations import STATIONS
+
+    # Dialect-agnostic: the observatory's own tests run against SQLite, which
+    # has no information_schema, so probe through SQLAlchemy's inspector.
+    def _has_table(sync_conn: Any) -> bool:
+        return bool(sa_inspect(sync_conn).has_table("weather_collection_attempts"))
+
+    try:
+        deployed = bool(await session.run_sync(_has_table))
+    except Exception:  # pragma: no cover - unusable connection is "not deployed"
+        deployed = False
+    try:
+        rev_row = (await session.execute(_text("select version_num from alembic_version"))).first()
+        revision = str(rev_row[0]) if rev_row else "unknown"
+    except Exception:
+        revision = "unknown"
+
+    rows: list[oa.AttemptRow] = []
+    runs: list[oa.RunContext] = []
+    if deployed:
+        try:
+            raw = (
+                await session.execute(
+                    _text(
+                        "select attempt_id, collector_run_id, environment, station_code, "
+                        "product_type, logical_request_key, stage, outcome, source_availability, "
+                        "requested_at, completed_at, target_station_local_date, raw_payload_id, "
+                        "parsed_entity_count, persisted_entity_count, duplicate_entity_count, "
+                        "parser_error_type, persistence_error_type "
+                        "from weather_collection_attempts "
+                        "where requested_at > now() - interval '24 hours'"
+                    )
+                )
+            ).all()
+            rows = [oa.AttemptRow(*r) for r in raw]
+            expected = tuple(
+                [(code, "CLI_OBSERVATIONS") for code in sorted(STATIONS)]
+                + [(code, "GRIDPOINT_FORECAST") for code in sorted(STATIONS)]
+            )
+            run_rows = (
+                await session.execute(
+                    _text(
+                        "select id, environment, started_at, finished_at, stats_json "
+                        "from collector_runs where collector='weather' "
+                        "and started_at > now() - interval '24 hours' order by started_at"
+                    )
+                )
+            ).all()
+            for r in run_rows:
+                stats = r[4] or {}
+                runs.append(
+                    oa.RunContext(
+                        collector_run_id=r[0],
+                        environment=str(r[1] or "production"),
+                        started_at=_aware(r[2]),
+                        finished_at=_aware(r[3]) if r[3] is not None else None,
+                        expected_pairs=expected,
+                        legacy_invalid_items=(
+                            stats.get("invalid_items") if isinstance(stats, dict) else None
+                        ),
+                    )
+                )
+        except Exception:  # pragma: no cover - dialect without interval syntax
+            rows, runs = [], []
+
+    return oa.summarize(
+        rows,
+        runs,
+        now=now,
+        known_stations=frozenset(STATIONS),
+        station_timezones={code: st.timezone for code, st in STATIONS.items()},
+        schema_deployed=deployed,
+        db_revision=revision,
+        expected_revision=EXPECTED_DB_REVISION,
+    )
+
+
+def _aware(value: datetime) -> datetime:
+    """collector_runs stores naive UTC; attempt checks require aware."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

@@ -281,3 +281,25 @@ consecutive dates, and that date's UTC end. The review gate is the **latest**
 seventh-date end across SEA/PHX/MIA. Resulting state: `COLLECTING_EXTENSION`.
 
 Production deployment remains pending.
+
+---
+
+## Production integration (2026-08-05)
+
+`weather attempts reconcile` now loads real rows: the collector run, its
+environment and completion state, every terminal attempt for that run, and the
+legacy cycle counters. Expected station/product pairs are derived from the
+**active station registry** and the instrumented products — never assumed from
+a remembered count. The reconciliation rules stay in the evidence layer; the
+CLI only loads and renders. An incomplete run reports
+`RECONCILIATION_DEFERRED` rather than a false pass or fail.
+
+Attempt findings are contributed to the **main** `ops observatory` report, so
+they surface in the canonical operator view rather than only via
+`weather attempts validate`. The schema probe uses SQLAlchemy's inspector
+rather than `information_schema`, because the observatory's own tests run
+against SQLite.
+
+Pre-deployment the main report shows exactly two attempt findings, both INFO,
+alongside the one canonical `unexpected_schema_change` CRITICAL — **zero**
+duplicate paging-level alerts for the same fact.

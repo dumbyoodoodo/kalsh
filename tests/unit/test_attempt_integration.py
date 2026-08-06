@@ -220,3 +220,61 @@ def test_output_is_deterministic() -> None:
 
 def test_no_fourth_severity_introduced() -> None:
     assert {s.value for s in Severity} == {"info", "warning", "critical"}
+
+
+# --- reconcile SQL is checked against the REAL schema -------------------------
+
+
+def _selected_columns(body: str, table: str) -> set[str]:
+    """Column names in the ``select ... from <table>`` inside ``body``.
+
+    The statement is assembled from adjacent string literals, so the literals
+    are concatenated before parsing -- exactly as Python sees them.
+    """
+    import re
+
+    literals = re.findall(r'"([^"]*)"', body)
+    sql = "".join(literals)
+    # Anchor on the LAST ``select`` before this table's ``from``: the literals
+    # of several statements are concatenated, so a plain non-greedy match would
+    # start at an earlier statement's ``select``.
+    match = re.search(
+        r"select\s+((?:(?!select).)*?)\s+from\s+" + re.escape(table),
+        sql,
+    )
+    assert match is not None, f"no select against {table} found in the reconcile body"
+    return {c.strip() for c in match.group(1).split(",") if c.strip()}
+
+
+def test_reconcile_selects_only_columns_that_exist() -> None:
+    """Regression guard for the 2026-08-06 deployment defect.
+
+    ``reconcile`` selected ``collector_runs.environment``, which has never
+    existed. Every source-level assertion above still passed, because none of
+    them compared the SQL against the schema -- so the command was unusable
+    against production and nothing caught it until deployment day. This
+    compares the selected columns to the mapped models directly.
+    """
+    from kalshi_weather.storage.models import CollectorRun, WeatherCollectionAttempt
+
+    source = Path("src/kalshi_weather/cli.py").read_text()
+    body = source.split("def weather_attempts_reconcile", 1)[1].split("\ndef ", 1)[0]
+
+    for table, model in (
+        ("collector_runs", CollectorRun),
+        ("weather_collection_attempts", WeatherCollectionAttempt),
+    ):
+        real = {c.name for c in model.__table__.columns}
+        selected = _selected_columns(body, table)
+        assert selected, f"expected a non-empty column list for {table}"
+        missing = selected - real
+        assert not missing, f"{table}: reconcile selects non-existent column(s) {sorted(missing)}"
+
+
+def test_reconcile_environment_is_not_read_from_collector_runs() -> None:
+    """``collector_runs`` stores no environment; the expected value comes from
+    the collector's own default instead of a column that cannot be read."""
+    source = Path("src/kalshi_weather/cli.py").read_text()
+    body = source.split("def weather_attempts_reconcile", 1)[1].split("\ndef ", 1)[0]
+    assert "environment" not in _selected_columns(body, "collector_runs")
+    assert 'environment = "production"' in body

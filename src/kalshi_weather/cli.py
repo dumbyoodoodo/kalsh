@@ -5985,7 +5985,7 @@ def weather_attempts_reconcile(
                 run_row = (
                     await conn.execute(
                         _t(
-                            "select collector, started_at, finished_at, stats_json, environment "
+                            "select collector, started_at, finished_at, stats_json "
                             "from collector_runs where id=:i"
                         ),
                         {"i": collector_run_id},
@@ -6023,7 +6023,11 @@ def weather_attempts_reconcile(
         return
 
     run_row = holder["run"]
-    environment = (run_row[4] or "production") if len(run_row) > 4 else "production"
+    # ``collector_runs`` has no environment column -- the run's environment is
+    # not stored, so the expected value is the collector's own default (see
+    # ingestion/weather_collector.run_weather_collection_cycle). Selecting a
+    # non-existent column here made this command unusable against production.
+    environment = "production"
     finished_at = run_row[2]
     stats = run_row[3] or {}
 

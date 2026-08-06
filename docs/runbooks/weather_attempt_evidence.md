@@ -380,6 +380,93 @@ is legacy/unattributed rather than a recurring integrity failure, and it can
 
 ### Status
 
-**Deployment remains pending.** Production is Alembic 0012 with an empty attempt
-table, and the collector still runs the pre-fix `bf8d0ca`. Attribution is
-**not** active in production.
+Superseded by the forward-fix deployment below. Attribution **is** active in
+production as of 2026-08-06.
+
+---
+
+## Forward-fix deployment (2026-08-06)
+
+### What is running
+
+| | |
+|---|---|
+| Collector commit | `28cf598bc2900739ca39f817aa7c6c6f26f4b1e1` |
+| Collector PID | 22288 (started 2026-08-06T04:21:17.946426Z) |
+| Migration revision | 0012 (unchanged; no DDL applied during this deployment) |
+| `deployment_validated_at` | **2026-08-06T05:02:25Z** |
+| Anchor cycle | **3296** (first qualifying post-fix cycle) |
+| Second verification cycle | **3303** |
+| Deployment ID | `SPX-EXT-DEPLOY-0001` |
+| Extension state | `COLLECTING_EXTENSION` |
+
+The collector was stopped with `launchctl bootout` (graceful, 21s, zero
+processes, no respawn) and restarted with `launchctl bootstrap`. Only the
+collector agent was touched; logrotate, monitor, backup and heartbeat stayed
+loaded, and PostgreSQL was never restarted.
+
+Both cycles recorded **14 of 14** expected station/product attempts — 7 active
+stations × 2 instrumented products, derived from the live registry rather than
+assumed — with `RECONCILIATION_PASS`, 14/14 raw-payload links, and zero CRITICAL
+observatory findings.
+
+### Extension calendar
+
+`deployment_validated_at` is the moment the **last** required validation
+completed, not cycle completion and not a rounded midnight. The first included
+date per station is the first station-local date whose local midnight falls
+strictly after it, so a partially instrumented deployment date is excluded —
+which is why MIA starts a day later than SEA and PHX.
+
+| Station | Timezone | Deployment local | First date | Seven included dates | Seventh-date UTC end |
+|---|---|---|---|---|---|
+| SEA | America/Los_Angeles | 2026-08-05T22:02:25−07:00 | 2026-08-06 | 08-06 … 08-12 | 2026-08-13T07:00:00Z |
+| PHX | America/Phoenix | 2026-08-05T22:02:25−07:00 | 2026-08-06 | 08-06 … 08-12 | 2026-08-13T07:00:00Z |
+| MIA | America/New_York | 2026-08-06T01:02:25−04:00 | 2026-08-07 | 08-07 … 08-13 | 2026-08-14T04:00:00Z |
+
+**Extension review gate: 2026-08-14T04:00:00Z** (the latest of the three
+seventh-date ends). Do not run the review before it. The future command is:
+
+```bash
+uv run kalshi-weather research station-pilot-review
+```
+
+### Run 3290 remains historical unattributed evidence
+
+The deployment did not touch it. It is still `success=true`, marker-free, with
+zero attempt rows and `stats_json` md5 `4ea8a5f26d191d2666cfba6951bf248f`. It
+reconciles as `RECONCILIATION_FAIL` (0 of 14) when asked directly, raises no
+CRITICAL because it carries no instrumentation marker, and was never eligible as
+an anchor cycle.
+
+### Live failure paths unobserved
+
+Every one of the 28 recorded attempts is `SUCCEEDED_DUPLICATE` /
+`NORMALIZED_PERSISTED` / `AVAILABLE`. No live request failure, parser rejection,
+source unavailability, or persistence failure occurred during the validation
+window, so those paths remain **synthetically verified only**. Treat the first
+real failure as the moment they are proven, not as a regression.
+
+### `migration_applied_at` is a bound, not an instant
+
+`track_commit_timestamp` is off, so the exact moment 0012 was applied is not
+recoverable. The recorded value `2026-08-06T03:54:12Z` is the *confirmed-applied-by*
+bound: the migration ran inside the prior maintenance window, bracketed by
+2026-08-06T03:51:49Z (last pre-migration collector run finishing) and
+2026-08-06T03:54:12Z (prior collector process starting against an already-0012
+database).
+
+### Reconcile was broken on arrival
+
+`weather attempts reconcile` selected `collector_runs.environment`, a column that
+has never existed, so it raised `UndefinedColumn` the first time it ran against
+production. Every guard around it was a source-level string assertion over the
+CLI body; none compared the SQL to the schema, so the full suite passed with the
+command unusable. Fixed in `34e8780`, which also adds a guard that parses the
+selected columns and checks them against the mapped models.
+
+That commit touches only `cli.py` and its test — no collector-runtime module —
+and PID 22288 had already loaded `28cf598` into memory, so the running
+collector's behaviour is exactly the deployed commit. The on-disk tree is
+therefore one commit ahead of the running process in operator tooling only; the
+next routine restart picks it up with no change to collection.

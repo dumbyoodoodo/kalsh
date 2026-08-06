@@ -291,9 +291,19 @@ def test_calendar_logic_is_not_duplicated() -> None:
 # --- no real anchor ----------------------------------------------------------
 
 
-def test_canonical_ledger_has_no_production_record() -> None:
+def test_canonical_ledger_holds_at_most_one_valid_anchor() -> None:
+    """Before deployment this asserted the ledger was empty. The anchor was
+    recorded on 2026-08-06, so the guard now pins what must remain true: ADR
+    0024 registers ONE extension, so at most one anchor may ever exist, it must
+    be for that registration, and it must still verify byte-for-byte."""
     ledger = ed.DeploymentLedger.load(ed.DEFAULT_DEPLOYMENT_LEDGER)
-    assert ledger.records == (), "no production deployment anchor may exist yet"
+    assert len(ledger.records) <= 1, "only one deployment anchor may ever be recorded"
+    assert ledger.verify_ledger() == [], "the recorded anchor must verify"
+    for record in ledger.records:
+        assert record.extension_registration_id == ext.EXTENSION_REGISTRATION_ID
+        assert record.registration_hash == ext.REGISTRATION.registration_hash()
+        assert record.content_hash == record.compute_hash(), "anchor was edited in place"
+        assert ed.validate_record(record) == []
 
 
 def test_extension_state_remains_waiting() -> None:

@@ -35,6 +35,12 @@ from typing import Any
 
 ATTEMPT_SCHEMA_VERSION = "1"
 
+#: Prospective marker the fixed collector writes into collector_runs.stats_json.
+#: Its presence is what makes a run attributable; no historical run has it, so
+#: pre-fix runs are never judged as missing evidence they could not have had.
+ATTEMPT_INSTRUMENTATION_KEY = "attempt_instrumentation_version"
+ATTEMPT_INSTRUMENTATION_VERSION = "1"
+
 #: Sanitizer bound for any error text persisted (matches the column width).
 MAX_ERROR_DETAIL = 500
 
@@ -783,3 +789,105 @@ def summarize_station_window(
         unattributable_cycle_aggregate=unattributable_cycle_aggregate,
         problems=problems,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PendingWeatherCollectionAttempt:
+    """A terminal attempt captured DURING the cycle, before its run id exists.
+
+    ``collector_run_id`` is genuinely unavailable at collection time: the
+    collector-run record is written after the cycle, in a separate session
+    scope. Rather than carry a placeholder (0, "", a sentinel UUID) that could
+    leak into the database and silently mis-attribute evidence, the field is
+    simply ABSENT here. It becomes an ``AttemptRecord`` only via
+    ``materialize`` with a real, persisted id.
+
+    Immutable, and fully validated before it leaves the cycle -- a pending
+    attempt that could never be persisted is caught while the collector still
+    has the context to report it.
+    """
+
+    attempt_id: str
+    environment: str
+    station_code: str
+    product_type: WeatherProductType
+    logical_request_key: str
+    source_endpoint: str
+    stage: AttemptStage
+    outcome: AttemptOutcome
+    source_availability: SourceAvailability
+    requested_at: datetime
+    completed_at: datetime
+    observed_at: datetime
+    wfo: str | None = None
+    source_request_id: str | None = None
+    source_product_id: str | None = None
+    target_station_local_date: date | None = None
+    http_status: int | None = None
+    retry_count: int = 0
+    parser_name: str | None = None
+    parser_version: str | None = None
+    parser_error_type: str | None = None
+    parser_error_message: str | None = None
+    raw_payload_id: int | None = None
+    parsed_entity_count: int = 0
+    persisted_entity_count: int = 0
+    duplicate_entity_count: int = 0
+    persistence_error_type: str | None = None
+    persistence_error_message: str | None = None
+
+    @property
+    def logical_pair(self) -> tuple[str, str]:
+        return (self.station_code, str(self.product_type))
+
+    def materialize(self, collector_run_id: int, *, created_at: datetime) -> AttemptRecord:
+        """Bind this pending attempt to a REAL persisted collector-run id.
+
+        Purely additive: no outcome, count, stage, availability, identity, or
+        timestamp is altered, so materialization cannot change what the cycle
+        observed. ``attempt_id`` and ``logical_request_key`` are carried through
+        unchanged, preserving idempotency across a retried persistence pass.
+        """
+        if collector_run_id is None or collector_run_id <= 0:
+            raise AttemptIntegrityError(
+                f"cannot materialize attempt {self.attempt_id!r} without a real "
+                f"collector_run_id (got {collector_run_id!r})"
+            )
+        return AttemptRecord(
+            attempt_id=self.attempt_id,
+            collector_run_id=collector_run_id,
+            environment=self.environment,
+            station_code=self.station_code,
+            product_type=self.product_type,
+            logical_request_key=self.logical_request_key,
+            source_endpoint=self.source_endpoint,
+            stage=self.stage,
+            outcome=self.outcome,
+            source_availability=self.source_availability,
+            requested_at=self.requested_at,
+            completed_at=self.completed_at,
+            observed_at=self.observed_at,
+            created_at=created_at,
+            wfo=self.wfo,
+            source_request_id=self.source_request_id,
+            source_product_id=self.source_product_id,
+            target_station_local_date=self.target_station_local_date,
+            http_status=self.http_status,
+            retry_count=self.retry_count,
+            parser_name=self.parser_name,
+            parser_version=self.parser_version,
+            parser_error_type=self.parser_error_type,
+            parser_error_message=self.parser_error_message,
+            raw_payload_id=self.raw_payload_id,
+            parsed_entity_count=self.parsed_entity_count,
+            persisted_entity_count=self.persisted_entity_count,
+            duplicate_entity_count=self.duplicate_entity_count,
+            persistence_error_type=self.persistence_error_type,
+            persistence_error_message=self.persistence_error_message,
+        )
+
+    def validate_pending(self) -> list[str]:
+        """Validate everything checkable without a run id, by materializing
+        against a probe id and dropping any problem that mentions lineage."""
+        probe = self.materialize(1, created_at=self.completed_at)
+        return [p for p in probe.validate() if "collector_run" not in p]

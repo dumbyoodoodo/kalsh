@@ -186,9 +186,9 @@ async def test_run_weather_collection_cycle_saves_observations_and_forecasts(
     session: AsyncSession,
 ) -> None:
     provider = _basic_provider()
-    stats = await run_weather_collection_cycle(
-        provider, session, stations=[STATION], backfill_days=30
-    )
+    stats = (
+        await run_weather_collection_cycle(provider, session, stations=[STATION], backfill_days=30)
+    ).stats
 
     assert stats.stations_processed == 1
     assert stats.observations_saved == 2
@@ -204,9 +204,9 @@ async def test_run_weather_collection_cycle_second_run_dedupes(session: AsyncSes
     await run_weather_collection_cycle(provider, session, stations=[STATION], backfill_days=30)
 
     provider2 = _basic_provider()
-    stats = await run_weather_collection_cycle(
-        provider2, session, stations=[STATION], backfill_days=30
-    )
+    stats = (
+        await run_weather_collection_cycle(provider2, session, stations=[STATION], backfill_days=30)
+    ).stats
 
     assert stats.observations_saved == 0
     assert stats.observations_duplicate == 2
@@ -235,9 +235,9 @@ async def test_run_weather_collection_cycle_rejects_implausible_temperature(
         forecasts_by_station={},
     )
 
-    stats = await run_weather_collection_cycle(
-        provider, session, stations=[STATION], backfill_days=30
-    )
+    stats = (
+        await run_weather_collection_cycle(provider, session, stations=[STATION], backfill_days=30)
+    ).stats
 
     assert stats.observations_saved == 0
     assert stats.invalid_items == 1
@@ -254,9 +254,11 @@ async def test_run_weather_collection_cycle_isolates_per_station_errors(
         raise_for_stations={OTHER_STATION.station_id},
     )
 
-    stats = await run_weather_collection_cycle(
-        provider, session, stations=[STATION, OTHER_STATION], backfill_days=30
-    )
+    stats = (
+        await run_weather_collection_cycle(
+            provider, session, stations=[STATION, OTHER_STATION], backfill_days=30
+        )
+    ).stats
 
     assert stats.stations_processed == 1
     assert stats.errors == 1

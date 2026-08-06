@@ -26,6 +26,7 @@ from kalshi_weather.ingestion.validation import (
 from kalshi_weather.logging import get_logger
 from kalshi_weather.storage.database import session_scope
 from kalshi_weather.storage.repositories import (
+    append_terminal_attempt,
     get_latest_observation_date,
     record_collector_run,
     save_weather_forecast,
@@ -36,6 +37,15 @@ from kalshi_weather.weather.provider import WeatherProvider
 from kalshi_weather.weather.stations import Station, list_stations
 
 logger = get_logger(__name__)
+
+
+class AttemptEvidenceIncomplete(RuntimeError):
+    """Fewer terminal attempts were persisted than the cycle expected.
+
+    Raised inside the persistence scope so the whole scope rolls back: a run
+    that cannot carry complete evidence must not commit looking attributed.
+    """
+
 
 _OBS = wa.WeatherProductType.CLI_OBSERVATIONS
 _FC = wa.WeatherProductType.GRIDPOINT_FORECAST
@@ -55,16 +65,36 @@ class WeatherCycleStats:
         return asdict(self)
 
 
+@dataclass(slots=True)
+class WeatherCycleResult:
+    """Everything one cycle produced: business stats AND its attempt evidence.
+
+    Evidence is returned, never injected through a caller-owned optional list.
+    The previous design let ``attempts=None`` mean "record nothing", and the
+    production loop simply never passed it -- so a fully successful deployment
+    recorded zero evidence (production run 3290, 0 of 14 expected attempts).
+    Making the sink part of the return type removes that failure mode: a caller
+    cannot forget to opt in.
+    """
+
+    stats: WeatherCycleStats
+    pending_attempts: tuple[wa.PendingWeatherCollectionAttempt, ...]
+    expected_pairs: tuple[tuple[str, wa.WeatherProductType], ...]
+    started_at: datetime
+    completed_at: datetime
+
+    def as_dict(self) -> dict[str, int]:
+        return self.stats.as_dict()
+
+
 async def run_weather_collection_cycle(
     provider: WeatherProvider,
     session: AsyncSession,
     *,
     stations: list[Station] | None = None,
     backfill_days: int,
-    attempts: list[wa.AttemptRecord] | None = None,
-    collector_run_id: int | None = None,
     environment: str = "production",
-) -> WeatherCycleStats:
+) -> WeatherCycleResult:
     """Run one full weather collection pass across `stations` (default: the
     whole registry). Each station is isolated: a failure for one station is
     logged and counted, and collection continues with the next station.
@@ -74,8 +104,14 @@ async def run_weather_collection_cycle(
     ``attempts`` for the caller to append after the cycle. Passing neither
     leaves behaviour byte-identical to the pre-instrumentation collector, so
     existing callers and tests are unaffected."""
+    cycle_started = utc_now()
     stats = WeatherCycleStats()
     target_stations = stations if stations is not None else list_stations()
+    pending: list[wa.PendingWeatherCollectionAttempt] = []
+    expected: list[tuple[str, wa.WeatherProductType]] = []
+    for station in target_stations:
+        expected.append((station.station_id, _OBS))
+        expected.append((station.station_id, _FC))
 
     for station in target_stations:
         try:
@@ -85,8 +121,7 @@ async def run_weather_collection_cycle(
                 station,
                 backfill_days=backfill_days,
                 stats=stats,
-                attempts=attempts,
-                collector_run_id=collector_run_id,
+                pending=pending,
                 environment=environment,
             )
             stats.stations_processed += 1
@@ -97,7 +132,13 @@ async def run_weather_collection_cycle(
             logger.exception("weather_collector.station_failed", station=station.station_id)
             stats.errors += 1
 
-    return stats
+    return WeatherCycleResult(
+        stats=stats,
+        pending_attempts=tuple(pending),
+        expected_pairs=tuple(expected),
+        started_at=cycle_started,
+        completed_at=utc_now(),
+    )
 
 
 @dataclass(slots=True)
@@ -134,24 +175,25 @@ def _station_local_date(station: Station, moment: datetime) -> date:
     return moment.astimezone(ZoneInfo(station.timezone)).date()
 
 
-def _build_attempt(
-    ctx: _AttemptContext,
-    *,
-    collector_run_id: int,
-    environment: str,
-) -> wa.AttemptRecord:
-    """Materialize the single terminal record for one logical attempt."""
+def _build_pending(ctx: _AttemptContext, *, environment: str) -> wa.PendingWeatherCollectionAttempt:
+    """Materialize the single PENDING record for one logical attempt.
+
+    No collector_run_id: it does not exist yet and a placeholder would be a
+    lie that could reach the database.
+    """
     key = wa.logical_request_key(
-        collector_run_id=collector_run_id,
+        collector_run_id=0,  # excluded from identity below; see target_window
         environment=environment,
         station_code=ctx.station.station_id,
         product_type=ctx.product_type,
         target_window=(ctx.target_local_date.isoformat() if ctx.target_local_date else "n/a"),
     )
+    # The run id is not known yet, so identity is keyed on the request itself.
+    # The run scopes it at persistence time via the uniqueness constraint.
+    key = key.split("|", 1)[1]
     now = utc_now()
-    return wa.AttemptRecord(
-        attempt_id=wa.attempt_id_for(key),
-        collector_run_id=collector_run_id,
+    return wa.PendingWeatherCollectionAttempt(
+        attempt_id=wa.attempt_id_for(f"{key}|{ctx.requested_at.isoformat()}"),
         environment=environment,
         station_code=ctx.station.station_id,
         wfo=ctx.station.wfo_site,
@@ -164,7 +206,6 @@ def _build_attempt(
         requested_at=ctx.requested_at,
         completed_at=now,
         observed_at=now,
-        created_at=now,
         target_station_local_date=ctx.target_local_date,
         http_status=ctx.http_status,
         retry_count=ctx.retry_count,
@@ -203,24 +244,20 @@ def _terminalize(ctx: _AttemptContext) -> None:
 
 
 def _record_attempt(
-    attempts: list[wa.AttemptRecord] | None,
+    pending: list[wa.PendingWeatherCollectionAttempt],
     ctx: _AttemptContext,
-    collector_run_id: int | None,
     environment: str,
 ) -> None:
-    """Collect exactly one terminal record for a logical attempt.
+    """Append exactly one pending terminal record for a logical attempt.
 
-    Evidence collection must never break collection: a malformed attempt is
-    logged and dropped rather than raising into the station loop, because
-    losing one station's weather data to an evidence bug would be a strictly
-    worse outcome than losing the evidence.
+    A malformed attempt is logged and dropped rather than raised into the
+    station loop: losing one station's weather data to an evidence bug would be
+    strictly worse than losing that evidence. The loss is NOT silent -- the
+    post-cycle reconciliation compares pending count against expected pairs and
+    fails loudly if any are missing.
     """
-    if attempts is None or collector_run_id is None:
-        return
     try:
-        attempts.append(
-            _build_attempt(ctx, collector_run_id=collector_run_id, environment=environment)
-        )
+        pending.append(_build_pending(ctx, environment=environment))
     except Exception:
         logger.exception(
             "weather_collector.attempt_record_failed",
@@ -236,8 +273,7 @@ async def _collect_station(
     *,
     backfill_days: int,
     stats: WeatherCycleStats,
-    attempts: list[wa.AttemptRecord] | None = None,
-    collector_run_id: int | None = None,
+    pending: list[wa.PendingWeatherCollectionAttempt],
     environment: str = "production",
 ) -> None:
     metadata = await provider.get_station_metadata(station)
@@ -279,7 +315,7 @@ async def _collect_station(
         obs_ctx.outcome = wa.AttemptOutcome.REQUEST_FAILED
         obs_ctx.availability = wa.SourceAvailability.UNKNOWN
         obs_ctx.parser_error_message = wa.sanitize_error(f"{type(exc).__name__}: {exc}")
-        _record_attempt(attempts, obs_ctx, collector_run_id, environment)
+        _record_attempt(pending, obs_ctx, environment)
         raise
 
     for obs in observations:
@@ -327,7 +363,7 @@ async def _collect_station(
         obs_ctx.source_product_id = obs.source_product_id
 
     _terminalize(obs_ctx)
-    _record_attempt(attempts, obs_ctx, collector_run_id, environment)
+    _record_attempt(pending, obs_ctx, environment)
 
     # --- gridpoint forecast: an independent logical attempt ------------------
     fc_ctx = _AttemptContext(
@@ -347,7 +383,7 @@ async def _collect_station(
         fc_ctx.outcome = wa.AttemptOutcome.REQUEST_FAILED
         fc_ctx.availability = wa.SourceAvailability.UNKNOWN
         fc_ctx.parser_error_message = wa.sanitize_error(f"{type(exc).__name__}: {exc}")
-        _record_attempt(attempts, fc_ctx, collector_run_id, environment)
+        _record_attempt(pending, fc_ctx, environment)
         raise
 
     for fc in forecasts:
@@ -389,7 +425,7 @@ async def _collect_station(
             fc_ctx.persisted += 1
 
     _terminalize(fc_ctx)
-    _record_attempt(attempts, fc_ctx, collector_run_id, environment)
+    _record_attempt(pending, fc_ctx, environment)
 
 
 async def run_weather_collector_loop(
@@ -414,25 +450,45 @@ async def run_weather_collector_loop(
         run_stats: dict[str, Any] = {}
         run_requests = run_retries = 0
         run_error: str | None = None
+        cycle_result: WeatherCycleResult | None = None
         try:
             async with session_scope(session_factory) as session:
                 provider = provider_factory(session)
                 async with provider:
-                    stats = await run_weather_collection_cycle(
+                    cycle_result = await run_weather_collection_cycle(
                         provider, session, stations=stations, backfill_days=backfill_days
                     )
-                    run_stats = stats.as_dict()
+                    run_stats = cycle_result.as_dict()
+                    # Prospective instrumentation marker. No historical run
+                    # carries it, so "this run should have attempts" is a
+                    # recorded fact rather than a timestamp guess.
+                    run_stats[wa.ATTEMPT_INSTRUMENTATION_KEY] = int(
+                        wa.ATTEMPT_INSTRUMENTATION_VERSION
+                    )
                     run_requests = getattr(provider, "requests_attempted", 0)
                     run_retries = getattr(provider, "retries", 0)
-            logger.info("weather_collector.cycle_complete", cycle=cycle_number, **stats.as_dict())
+            logger.info(
+                "weather_collector.cycle_complete", cycle=cycle_number, **cycle_result.as_dict()
+            )
         except Exception as exc:
             run_error = f"{type(exc).__name__}: {exc}"
             logger.exception("weather_collector.cycle_failed", cycle=cycle_number)
 
-        # Best-effort ops metrics record; must never break collection.
+        # Phase 2: persist the collector run, then materialize and append this
+        # cycle's attempt evidence with the REAL run id.
+        #
+        # Transaction choice: one session_scope owns both writes. The run record
+        # is flushed first so the FK target exists, then every attempt is
+        # appended, then the scope commits. A failure anywhere rolls the whole
+        # scope back -- so a failed run insert can never leave orphan attempts,
+        # and a failed attempt append never commits a run that falsely looks
+        # fully attributed. Business weather data committed in phase 1 is NOT
+        # rolled back: collection succeeding while its evidence fails is a real,
+        # separately-visible state, not something to conceal.
+        attempt_error: str | None = None
         try:
             async with session_scope(session_factory) as session:
-                await record_collector_run(
+                run_record = await record_collector_run(
                     session,
                     collector="weather",
                     started_at=started_at,
@@ -443,8 +499,35 @@ async def run_weather_collector_loop(
                     stats=run_stats,
                     error=run_error,
                 )
-        except Exception:
-            logger.exception("weather_collector.run_record_failed", cycle=cycle_number)
+                run_id = int(run_record.id)
+                pending = cycle_result.pending_attempts if cycle_result is not None else ()
+                created_at = utc_now()
+                appended = 0
+                for item in pending:
+                    await append_terminal_attempt(
+                        session, item.materialize(run_id, created_at=created_at)
+                    )
+                    appended += 1
+                expected_n = len(cycle_result.expected_pairs) if cycle_result is not None else 0
+                if expected_n and appended != expected_n:
+                    # Loud: partial evidence must never read as complete.
+                    raise AttemptEvidenceIncomplete(
+                        f"run {run_id}: appended {appended} of {expected_n} expected attempts"
+                    )
+                logger.info(
+                    "weather_collector.attempts_recorded",
+                    cycle=cycle_number,
+                    collector_run_id=run_id,
+                    attempts=appended,
+                    expected=expected_n,
+                )
+        except Exception as exc:
+            attempt_error = f"{type(exc).__name__}: {exc}"
+            logger.exception(
+                "weather_collector.attempt_evidence_failed",
+                cycle=cycle_number,
+                error=attempt_error,
+            )
 
         if max_cycles is not None and cycle_number >= max_cycles:
             return

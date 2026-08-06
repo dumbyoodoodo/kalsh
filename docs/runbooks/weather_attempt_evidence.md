@@ -303,3 +303,83 @@ against SQLite.
 Pre-deployment the main report shows exactly two attempt findings, both INFO,
 alongside the one canonical `unexpected_schema_change` CRITICAL — **zero**
 duplicate paging-level alerts for the same fact.
+
+---
+
+## Inert-deployment defect and forward fix (2026-08-06)
+
+### The defect
+
+Migration 0012 deployed cleanly and the collector started on `bf8d0ca`. Weather
+run **3290** then completed successfully (`success=true`) and recorded **0 of 14
+expected attempts**. Attribution was deployed and inert.
+
+Root cause: `run_weather_collector_loop` called
+
+```python
+stats = await run_weather_collection_cycle(
+    provider, session, stations=stations, backfill_days=backfill_days)
+```
+
+without `attempts=` or `collector_run_id=`, so `_record_attempt` short-circuited
+and nothing was ever appended. The tests passed because they called the cycle
+directly *with* those parameters — nothing asserted the production call site
+supplied them.
+
+### Architecture
+
+`collector_run_id` genuinely does not exist during collection: the run record is
+written after the cycle, in a separate session scope. So the cycle now produces
+**`PendingWeatherCollectionAttempt`** objects, which have **no
+`collector_run_id` field at all** — no `0`, no `""`, no sentinel that could
+reach the database. `materialize(run_id, created_at)` binds a real, persisted id
+and is purely additive: outcome, counts, stage, availability, identity and
+timestamps are carried through unchanged.
+
+`run_weather_collection_cycle` now **returns** a `WeatherCycleResult` (stats +
+pending attempts + expected pairs) instead of accepting an optional sink.
+`attempts=None` can no longer silently mean "record nothing" — a caller cannot
+forget to opt in.
+
+### Transaction semantics
+
+One `session_scope` owns phase 2: the run record is flushed first so the FK
+target exists, every attempt is appended, then the scope commits. A failure
+anywhere rolls the whole scope back, so a failed run insert leaves no orphan
+attempts and a failed append never commits a run that looks fully attributed.
+
+Business weather data committed in phase 1 is **not** rolled back. Collection
+succeeding while its evidence fails is a real, separately-visible state — not
+something to conceal.
+
+### Attempt-persistence failure
+
+If fewer attempts persist than expected, `AttemptEvidenceIncomplete` is raised
+*inside* the persistence scope, rolling it back and logging
+`weather_collector.attempt_evidence_failed`. The cycle's business data stands;
+the evidence does not. Reconciliation fails and no anchor can use that cycle.
+
+### Zero-row completed runs are now CRITICAL
+
+Previously a completed post-deployment run with zero attempts could still report
+`ATTEMPT_EVIDENCE_VALID`. Now
+`completed_weather_run_missing_all_attempt_evidence` (and its partial variant)
+is **CRITICAL**, and CLI validate returns `ATTEMPT_EVIDENCE_INVALID`.
+
+The boundary is a **recorded marker**, not a timestamp guess: the fixed
+collector writes `attempt_instrumentation_version` into
+`collector_runs.stats_json`. Only runs carrying it are judged. Pre-fix runs have
+no marker and stay `LEGACY_UNKNOWN`.
+
+### Run 3290 — no backfill
+
+Run 3290 is preserved as genuine operational evidence of the defect. It is never
+backfilled, deleted, or rewritten. It carries no instrumentation marker, so it
+is legacy/unattributed rather than a recurring integrity failure, and it can
+**never qualify as an anchor cycle**.
+
+### Status
+
+**Deployment remains pending.** Production is Alembic 0012 with an empty attempt
+table, and the collector still runs the pre-fix `bf8d0ca`. Attribution is
+**not** active in production.

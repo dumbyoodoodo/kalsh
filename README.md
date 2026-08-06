@@ -77,6 +77,36 @@ uv run kalshi-weather markets list --category weather
 
 Exact commands may evolve as the repository is implemented.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the same gates as local development:
+
+```bash
+uv sync --frozen --no-editable --all-groups
+uv run --no-editable ruff check .
+uv run --no-editable mypy src
+uv run --no-editable pytest -v -rs
+```
+
+`--frozen` is deliberate: CI must fail on a stale `uv.lock` rather than
+re-resolve it. `tests/unit/test_ci_workflow_contract.py` parses the workflow and
+fails if CI and these documented gates drift apart.
+
+CI runs a disposable `postgres:16` service so the integration tests that assert
+real dialect behaviour — Alembic upgrade/downgrade replay, FK and unique
+constraints, `ON CONFLICT` dedup, cross-database isolation — actually execute.
+Its database is named with the `test_` prefix that
+`storage/migration_safety.py` requires of an approved disposable migration
+target, so a CI database can never be mistaken for production. Without a
+reachable server those tests skip on reachability rather than failing, which is
+how they behave on a developer machine with no local PostgreSQL.
+
+Only two integration modules are expected to skip in CI — the demo-exchange
+client and the live NWS provider — because shared CI must not hold exchange
+credentials or depend on live third-party endpoints. That allowlist is enforced,
+not merely documented: a new skipping module fails the contract test until it is
+classified.
+
 ## Environment policy
 
 - `development`: public data collection and local work

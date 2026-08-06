@@ -20,7 +20,7 @@ from kalshi_weather.storage.models import CollectorRun, MarketPollAttempt
 
 pytestmark = pytest.mark.integration
 
-_TEST_DB = "kalshi_poll_ledger_it"
+_TEST_DB = "test_kalshi_poll_ledger_it"
 TK = "KXTEST-26JUL26-T50"
 
 

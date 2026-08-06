@@ -24,7 +24,7 @@ _TABLES = (
     "settlement_attempts",
     "raw_api_payloads",
 )
-_TEST_DB = "kalshi_provenance_it"
+_TEST_DB = "test_kalshi_provenance_it"
 
 
 def _with_database(url: str, database: str) -> str:

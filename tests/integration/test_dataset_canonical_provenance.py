@@ -30,7 +30,7 @@ from kalshi_weather.storage.models import (
 
 pytestmark = pytest.mark.integration
 
-_TEST_DB = "kalshi_canonical_it"
+_TEST_DB = "test_kalshi_canonical_it"
 CLOSE = datetime(2026, 7, 26, 14, 0, tzinfo=UTC)
 OBS = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 

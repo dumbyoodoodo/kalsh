@@ -8,6 +8,29 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # Disposable, CI-only PostgreSQL. It exists so the integration tests that
+    # assert real dialect behaviour -- Alembic upgrade/downgrade replay, FK and
+    # unique-constraint enforcement, ON CONFLICT dedup, cross-database
+    # isolation -- actually run in CI instead of skipping. It is created and
+    # destroyed by the runner, shares nothing with any real database, and its
+    # name carries the `test_` prefix that storage/migration_safety.py requires
+    # of an approved disposable migration target.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kalshi_test
+          POSTGRES_PASSWORD: kalshi_test
+          POSTGRES_DB: test_kalshi_weather
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kalshi_test -d test_kalshi_weather"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +42,10 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # --frozen matches the documented local gate: CI fails on a stale
+      # uv.lock rather than silently re-resolving it.
       - name: Sync dependencies
-        run: uv sync --no-editable --all-groups
+        run: uv sync --frozen --no-editable --all-groups
 
       - name: Lint
         run: uv run --no-editable ruff check .
@@ -28,5 +53,9 @@ jobs:
       - name: Type check
         run: uv run --no-editable mypy src
 
+      # -rs prints the reason for every skip, so a safety test that starts
+      # skipping is visible in the log rather than hidden in a count.
       - name: Test
-        run: uv run --no-editable pytest -v
+        env:
+          DATABASE_URL: postgresql+psycopg://kalshi_test:kalshi_test@localhost:5432/test_kalshi_weather
+        run: uv run --no-editable pytest -v -rs

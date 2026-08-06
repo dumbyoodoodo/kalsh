@@ -44,7 +44,7 @@ from kalshi_weather.storage.models import (
 
 pytestmark = pytest.mark.integration
 
-_TEST_DB = "kalshi_history_it"
+_TEST_DB = "test_kalshi_history_it"
 TK = "KXTEST-26JUL26-T50"
 
 

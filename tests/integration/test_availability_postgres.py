@@ -21,7 +21,7 @@ from kalshi_weather.storage.models import Base, CollectorRun, OrderbookSnapshot
 
 pytestmark = pytest.mark.integration
 
-_TEST_DB = "kalshi_availability_it"
+_TEST_DB = "test_kalshi_availability_it"
 TK = "KXTEST-26JUL26-T50"
 
 

@@ -58,6 +58,7 @@ def run_ctx(**kw: object) -> oa.RunContext:
         "started_at": T0,
         "finished_at": T0 + timedelta(seconds=20),
         "expected_pairs": PAIRS,
+        "attempt_instrumented": True,
     }
     base.update(kw)
     return oa.RunContext(**base)  # type: ignore[arg-type]

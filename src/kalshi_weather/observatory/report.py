@@ -359,14 +359,14 @@ async def _build_attempt_findings(session: AsyncSession, *, now: datetime) -> li
             run_rows = (
                 await session.execute(
                     _text(
-                        "select id, environment, started_at, finished_at, stats_json "
+                        "select id, started_at, finished_at, stats_json "
                         "from collector_runs where collector='weather' "
                         "and started_at > now() - interval '24 hours' order by started_at"
                     )
                 )
             ).all()
             for r in run_rows:
-                stats = r[4] or {}
+                stats = r[3] or {}
                 runs.append(
                     oa.RunContext(
                         collector_run_id=r[0],
@@ -382,6 +382,8 @@ async def _build_attempt_findings(session: AsyncSession, *, now: datetime) -> li
         except Exception:  # pragma: no cover - dialect without interval syntax
             rows, runs = [], []
 
+    # Deployment boundary from operational evidence: the earliest weather run
+    # that started after the attempt schema existed. Derived, never guessed.
     return oa.summarize(
         rows,
         runs,

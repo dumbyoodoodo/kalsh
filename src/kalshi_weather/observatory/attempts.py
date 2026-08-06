@@ -87,6 +87,9 @@ class RunContext:
     expected_pairs: tuple[tuple[str, str], ...]
     legacy_invalid_items: int | None = None
     legacy_errors: int | None = None
+    #: True only when the run was produced by an attribution-instrumented
+    #: collector. Pre-fix runs are LEGACY_UNKNOWN, never integrity failures.
+    attempt_instrumented: bool = False
 
     def is_complete(self, now: datetime, grace: timedelta = DEFAULT_COMPLETION_GRACE) -> bool:
         """Completed runs only. Uses the run's own completion marker; the grace
@@ -377,7 +380,13 @@ def check_provenance(rows: Sequence[AttemptRow]) -> list[Finding]:
 def check_run_reconciliation(
     run: RunContext, rows: Sequence[AttemptRow], *, now: datetime
 ) -> list[Finding]:
-    """Reconcile ONE completed run. An active run is reported, never judged."""
+    """Reconcile ONE completed, instrumented run.
+
+    An active run is reported, never judged. An UNinstrumented run is skipped
+    entirely: it predates attribution and legitimately has no attempts.
+    """
+    if not run.attempt_instrumented:
+        return []
     if not run.is_complete(now):
         return [
             _f(
@@ -510,7 +519,68 @@ def summarize(
     findings.extend(check_provenance(rows))
     for run in runs:
         findings.extend(check_run_reconciliation(run, rows, now=now))
+    findings.extend(completed_runs_missing_all_evidence(runs, rows, now=now))
     findings.extend(check_operational_outcomes(rows))
+    return findings
+
+
+#: Deployment boundary: a run is judged only if it carries the prospective
+#: instrumentation marker. Never inferred from timestamps. That
+#: instant is supplied by the caller from operational evidence (the first run
+#: created after the schema existed) -- never guessed from the wall clock, and
+#: never assumed for historical pre-0012 runs.
+def completed_runs_missing_all_evidence(
+    runs: Sequence[RunContext],
+    rows: Sequence[AttemptRow],
+    *,
+    now: datetime,
+) -> list[Finding]:
+    """The rule that would have caught production run 3290.
+
+    A COMPLETED weather run that started after attribution went live, with
+    expected pairs > 0 and ZERO terminal attempts, is an integrity failure --
+    not a clean zero and not informational absence. Reporting that state as
+    valid is exactly how an inert deployment looked healthy.
+
+    Pre-boundary runs are excluded: they legitimately predate the evidence and
+    are LEGACY_UNKNOWN, not failures.
+    """
+    offenders: list[str] = []
+    partial: list[str] = []
+    for run in runs:
+        if not run.attempt_instrumented or not run.is_complete(now):
+            continue
+        if not run.expected_pairs:
+            continue
+        mine = [r for r in rows if r.collector_run_id == run.collector_run_id]
+        if not mine:
+            offenders.append(f"run {run.collector_run_id}: 0/{len(run.expected_pairs)}")
+        elif len(mine) < len(run.expected_pairs):
+            partial.append(f"run {run.collector_run_id}: {len(mine)}/{len(run.expected_pairs)}")
+
+    findings: list[Finding] = []
+    if offenders:
+        findings.append(
+            _f(
+                "completed_weather_run_missing_all_attempt_evidence",
+                Severity.CRITICAL,
+                len(offenders),
+                "a completed post-deployment weather run recorded NONE of its expected "
+                "attempts — attribution is deployed but inert",
+                offenders,
+            )
+        )
+    if partial:
+        findings.append(
+            _f(
+                "completed_weather_run_partial_attempt_evidence",
+                Severity.CRITICAL,
+                len(partial),
+                "a completed post-deployment weather run recorded only part of its "
+                "expected attempts",
+                partial,
+            )
+        )
     return findings
 
 

@@ -5680,10 +5680,12 @@ def weather_attempts_validate(
     Before migration 0012 is deployed this reports NOT DEPLOYED, which is the
     expected pre-deployment state — never treated as corrupted data."""
     import json as _json
+    from datetime import UTC as _utc2
 
     from sqlalchemy import text as _t
     from sqlalchemy.ext.asyncio import create_async_engine
 
+    from kalshi_weather.ingestion.weather_attempts import ATTEMPT_INSTRUMENTATION_KEY as wa_key
     from kalshi_weather.observatory import attempts as oa
     from kalshi_weather.observatory.severity import Severity
     from kalshi_weather.ops.quality import EXPECTED_DB_REVISION
@@ -5721,6 +5723,40 @@ def weather_attempts_validate(
                         )
                     ).all()
                     rows = [oa.AttemptRow(*r) for r in raw]
+                    expected = tuple(
+                        [(code, "CLI_OBSERVATIONS") for code in sorted(STATIONS)]
+                        + [(code, "GRIDPOINT_FORECAST") for code in sorted(STATIONS)]
+                    )
+                    run_rows = (
+                        await conn.execute(
+                            _t(
+                                "select id, started_at, finished_at, stats_json "
+                                "from collector_runs where collector='weather' "
+                                "and started_at > now() - interval '24 hours' order by started_at"
+                            )
+                        )
+                    ).all()
+                    for rr in run_rows:
+                        st = rr[3] or {}
+                        runs.append(
+                            oa.RunContext(
+                                collector_run_id=rr[0],
+                                environment="production",
+                                started_at=(rr[1] if rr[1].tzinfo else rr[1].replace(tzinfo=_utc2)),
+                                finished_at=(
+                                    None
+                                    if rr[2] is None
+                                    else (rr[2] if rr[2].tzinfo else rr[2].replace(tzinfo=_utc2))
+                                ),
+                                expected_pairs=expected,
+                                legacy_invalid_items=(
+                                    st.get("invalid_items") if isinstance(st, dict) else None
+                                ),
+                                attempt_instrumented=bool(
+                                    isinstance(st, dict) and st.get(wa_key) is not None
+                                ),
+                            )
+                        )
                 holder["deployed"] = deployed
                 holder["revision"] = revision
                 holder["rows"] = rows

@@ -33,9 +33,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from datetime import timedelta as _timedelta
 from typing import TYPE_CHECKING, Any
 
 from kalshi_weather.domain.time import utc_now
+from kalshi_weather.ingestion.weather_attempts import ATTEMPT_INSTRUMENTATION_KEY
 from kalshi_weather.observatory import (
     backup_health,
     continuity,
@@ -48,6 +50,15 @@ from kalshi_weather.observatory.severity import Finding, Severity, overall_sever
 from kalshi_weather.ops.forecast_cadence import CadenceConfig, run_forecast_cadence
 from kalshi_weather.ops.health import build_health_report
 from kalshi_weather.ops.quality import run_quality_checks
+from kalshi_weather.storage.repositories import load_attempt_validation_context
+
+#: One coherent validation window shared by every attempt-integrity consumer.
+#: Both the attempts and the collector runs are selected against these bounds,
+#: so the two can never disagree about what exists.
+ATTEMPT_WINDOW_HOURS = 24.0
+#: Safety bound on rows only -- never a second time boundary. The runs the
+#: retained rows reference are always loaded.
+ATTEMPT_ROW_LIMIT = 5000
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -337,50 +348,63 @@ async def _build_attempt_findings(session: AsyncSession, *, now: datetime) -> li
     rows: list[oa.AttemptRow] = []
     runs: list[oa.RunContext] = []
     if deployed:
-        try:
-            raw = (
-                await session.execute(
-                    _text(
-                        "select attempt_id, collector_run_id, environment, station_code, "
-                        "product_type, logical_request_key, stage, outcome, source_availability, "
-                        "requested_at, completed_at, target_station_local_date, raw_payload_id, "
-                        "parsed_entity_count, persisted_entity_count, duplicate_entity_count, "
-                        "parser_error_type, persistence_error_type "
-                        "from weather_collection_attempts "
-                        "where requested_at > now() - interval '24 hours'"
-                    )
-                )
-            ).all()
-            rows = [oa.AttemptRow(*r) for r in raw]
-            expected = tuple(
-                [(code, "CLI_OBSERVATIONS") for code in sorted(STATIONS)]
-                + [(code, "GRIDPOINT_FORECAST") for code in sorted(STATIONS)]
+        # One coherent window for BOTH attempts and runs, via the shared loader.
+        # Previously this built two independent raw queries, each calling now()
+        # separately (a race), and mis-indexed the run columns -- the SELECT was
+        # (id, started_at, finished_at, stats_json) but environment was read
+        # from started_at, started_at from finished_at, and finished_at from
+        # stats_json. A bare `except` swallowed the resulting errors, so this
+        # path silently contributed NO attempt findings at all.
+        expected = tuple(
+            [(code, "CLI_OBSERVATIONS") for code in sorted(STATIONS)]
+            + [(code, "GRIDPOINT_FORECAST") for code in sorted(STATIONS)]
+        )
+        context = await load_attempt_validation_context(
+            session,
+            window_start=now - _timedelta(hours=ATTEMPT_WINDOW_HOURS),
+            window_end=now,
+            limit=ATTEMPT_ROW_LIMIT,
+        )
+        rows = [
+            oa.AttemptRow(
+                attempt_id=a.attempt_id,
+                collector_run_id=a.collector_run_id,
+                environment=a.environment,
+                station_code=a.station_code,
+                product_type=a.product_type,
+                logical_request_key=a.logical_request_key,
+                stage=a.stage,
+                outcome=a.outcome,
+                source_availability=a.source_availability,
+                requested_at=_aware(a.requested_at),
+                completed_at=_aware(a.completed_at),
+                target_station_local_date=a.target_station_local_date,
+                raw_payload_id=a.raw_payload_id,
+                parsed_entity_count=a.parsed_entity_count,
+                persisted_entity_count=a.persisted_entity_count,
+                duplicate_entity_count=a.duplicate_entity_count,
+                parser_error_type=a.parser_error_type,
+                persistence_error_type=a.persistence_error_type,
             )
-            run_rows = (
-                await session.execute(
-                    _text(
-                        "select id, started_at, finished_at, stats_json "
-                        "from collector_runs where collector='weather' "
-                        "and started_at > now() - interval '24 hours' order by started_at"
-                    )
+            for a in context.attempts
+        ]
+        for run in context.runs:
+            stats = run.stats_json or {}
+            runs.append(
+                oa.RunContext(
+                    collector_run_id=int(run.id),
+                    environment="production",
+                    started_at=_aware(run.started_at),
+                    finished_at=None if run.finished_at is None else _aware(run.finished_at),
+                    expected_pairs=expected,
+                    legacy_invalid_items=(
+                        stats.get("invalid_items") if isinstance(stats, dict) else None
+                    ),
+                    attempt_instrumented=bool(
+                        isinstance(stats, dict) and stats.get(ATTEMPT_INSTRUMENTATION_KEY)
+                    ),
                 )
-            ).all()
-            for r in run_rows:
-                stats = r[3] or {}
-                runs.append(
-                    oa.RunContext(
-                        collector_run_id=r[0],
-                        environment=str(r[1] or "production"),
-                        started_at=_aware(r[2]),
-                        finished_at=_aware(r[3]) if r[3] is not None else None,
-                        expected_pairs=expected,
-                        legacy_invalid_items=(
-                            stats.get("invalid_items") if isinstance(stats, dict) else None
-                        ),
-                    )
-                )
-        except Exception:  # pragma: no cover - dialect without interval syntax
-            rows, runs = [], []
+            )
 
     # Deployment boundary from operational evidence: the earliest weather run
     # that started after the attempt schema existed. Derived, never guessed.
@@ -393,6 +417,9 @@ async def _build_attempt_findings(session: AsyncSession, *, now: datetime) -> li
         schema_deployed=deployed,
         db_revision=revision,
         expected_revision=EXPECTED_DB_REVISION,
+        completeness_eligible_run_ids=(
+            context.completeness_eligible_run_ids if deployed else None
+        ),
     )
 
 

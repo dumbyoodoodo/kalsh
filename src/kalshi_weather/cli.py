@@ -5669,7 +5669,18 @@ async def _attempt_schema_present(conn: Any) -> bool:
 
 @weather_attempts_app.command("validate")
 def weather_attempts_validate(
-    limit: int = typer.Option(500, help="Maximum recent attempt rows to inspect."),
+    limit: int = typer.Option(
+        500,
+        help=(
+            "Maximum attempt ROWS to inspect inside the window (a safety bound on "
+            "output size, never a second time boundary). The collector runs those "
+            "rows reference are always loaded, so truncation cannot manufacture a "
+            "foreign-lineage finding."
+        ),
+    ),
+    window_hours: float = typer.Option(
+        24.0, help="Validation window length in hours, ending now. Drives BOTH queries."
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit findings as JSON."),
     fail_on_warning: bool = typer.Option(
         False, help="Exit 1 when any WARNING-level finding is present."
@@ -5681,18 +5692,29 @@ def weather_attempts_validate(
     expected pre-deployment state — never treated as corrupted data."""
     import json as _json
     from datetime import UTC as _utc2
+    from datetime import timedelta as _timedelta
 
     from sqlalchemy import text as _t
+    from sqlalchemy.ext.asyncio import AsyncSession as _AsyncSession
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from kalshi_weather.ingestion.weather_attempts import ATTEMPT_INSTRUMENTATION_KEY as wa_key
     from kalshi_weather.observatory import attempts as oa
     from kalshi_weather.observatory.severity import Severity
     from kalshi_weather.ops.quality import EXPECTED_DB_REVISION
+    from kalshi_weather.storage.repositories import (
+        load_attempt_validation_context as _load_attempt_ctx,
+    )
     from kalshi_weather.weather.stations import STATIONS
+
+    def _as_utc(value: Any) -> Any:
+        return value if value.tzinfo else value.replace(tzinfo=_utc2)
 
     settings = get_settings()
     holder: dict[str, Any] = {}
+    # Captured ONCE and reused by every query in this pass.
+    window_end = utc_now()
+    window_start = window_end - _timedelta(hours=window_hours)
 
     async def run() -> None:
         engine = create_async_engine(settings.database_url)
@@ -5705,48 +5727,54 @@ def weather_attempts_validate(
                 revision = str(rev_row[0]) if rev_row else "unknown"
                 rows: list[oa.AttemptRow] = []
                 runs: list[oa.RunContext] = []
+                context = None
                 if deployed:
-                    raw = (
-                        await conn.execute(
-                            _t(
-                                "select attempt_id, collector_run_id, environment, "
-                                "station_code, "
-                                "product_type, logical_request_key, stage, outcome, "
-                                "source_availability, requested_at, completed_at, "
-                                "target_station_local_date, raw_payload_id, parsed_entity_count, "
-                                "persisted_entity_count, duplicate_entity_count, "
-                                "parser_error_type, persistence_error_type "
-                                "from weather_collection_attempts "
-                                "order by requested_at desc limit :n"
-                            ),
-                            {"n": limit},
-                        )
-                    ).all()
-                    rows = [oa.AttemptRow(*r) for r in raw]
                     expected = tuple(
                         [(code, "CLI_OBSERVATIONS") for code in sorted(STATIONS)]
                         + [(code, "GRIDPOINT_FORECAST") for code in sorted(STATIONS)]
                     )
-                    run_rows = (
-                        await conn.execute(
-                            _t(
-                                "select id, started_at, finished_at, stats_json "
-                                "from collector_runs where collector='weather' "
-                                "and started_at > now() - interval '24 hours' order by started_at"
-                            )
+                    # ONE window drives both queries. window_end is captured once
+                    # by the caller so a run created mid-validation cannot be
+                    # seen by one query and missed by the other.
+                    async with _AsyncSession(bind=conn) as session:
+                        context = await _load_attempt_ctx(
+                            session,
+                            window_start=window_start,
+                            window_end=window_end,
+                            limit=limit,
                         )
-                    ).all()
-                    for rr in run_rows:
-                        st = rr[3] or {}
+                    rows = [
+                        oa.AttemptRow(
+                            attempt_id=a.attempt_id,
+                            collector_run_id=a.collector_run_id,
+                            environment=a.environment,
+                            station_code=a.station_code,
+                            product_type=a.product_type,
+                            logical_request_key=a.logical_request_key,
+                            stage=a.stage,
+                            outcome=a.outcome,
+                            source_availability=a.source_availability,
+                            requested_at=_as_utc(a.requested_at),
+                            completed_at=_as_utc(a.completed_at),
+                            target_station_local_date=a.target_station_local_date,
+                            raw_payload_id=a.raw_payload_id,
+                            parsed_entity_count=a.parsed_entity_count,
+                            persisted_entity_count=a.persisted_entity_count,
+                            duplicate_entity_count=a.duplicate_entity_count,
+                            parser_error_type=a.parser_error_type,
+                            persistence_error_type=a.persistence_error_type,
+                        )
+                        for a in context.attempts
+                    ]
+                    for rr in context.runs:
+                        st = rr.stats_json or {}
                         runs.append(
                             oa.RunContext(
-                                collector_run_id=rr[0],
+                                collector_run_id=int(rr.id),
                                 environment="production",
-                                started_at=(rr[1] if rr[1].tzinfo else rr[1].replace(tzinfo=_utc2)),
+                                started_at=_as_utc(rr.started_at),
                                 finished_at=(
-                                    None
-                                    if rr[2] is None
-                                    else (rr[2] if rr[2].tzinfo else rr[2].replace(tzinfo=_utc2))
+                                    None if rr.finished_at is None else _as_utc(rr.finished_at)
                                 ),
                                 expected_pairs=expected,
                                 legacy_invalid_items=(
@@ -5761,6 +5789,7 @@ def weather_attempts_validate(
                 holder["revision"] = revision
                 holder["rows"] = rows
                 holder["runs"] = runs
+                holder["context"] = context
         finally:
             await engine.dispose()
 
@@ -5768,12 +5797,15 @@ def weather_attempts_validate(
     findings = oa.summarize(
         holder["rows"],
         holder["runs"],
-        now=utc_now(),
+        now=window_end,
         known_stations=frozenset(STATIONS),
         station_timezones={code: st.timezone for code, st in STATIONS.items()},
         schema_deployed=bool(holder["deployed"]),
         db_revision=str(holder["revision"]),
         expected_revision=EXPECTED_DB_REVISION,
+        completeness_eligible_run_ids=(
+            holder["context"].completeness_eligible_run_ids if holder.get("context") else None
+        ),
     )
     criticals = [f for f in findings if f.severity is Severity.CRITICAL]
     warnings = [f for f in findings if f.severity is Severity.WARNING]
@@ -5786,12 +5818,23 @@ def weather_attempts_validate(
     else:
         status = _ATTEMPT_VALID
 
+    ctx = holder.get("context")
     payload = {
         "status": status,
         "schema_deployed": bool(holder["deployed"]),
         "database_revision": str(holder["revision"]),
         "expected_revision": EXPECTED_DB_REVISION,
         "inspected_rows": len(holder["rows"]),
+        "validation_scope": "time_window",
+        "window_start": window_start.isoformat().replace("+00:00", "Z"),
+        "window_end": window_end.isoformat().replace("+00:00", "Z"),
+        "window_hours": window_hours,
+        "attempt_rows_truncated_by_limit": bool(ctx.truncated) if ctx else False,
+        "collector_runs_loaded": len(holder["runs"]),
+        "referenced_run_count": len(ctx.referenced_run_ids) if ctx else 0,
+        "referenced_runs_missing_from_database": (
+            sorted(ctx.missing_referenced_run_ids) if ctx else []
+        ),
         "findings": oa.to_dicts(findings),
     }
     if as_json:
@@ -5804,6 +5847,12 @@ def weather_attempts_validate(
             f"  schema_deployed={payload['schema_deployed']} "
             f"revision={payload['database_revision']} expected={EXPECTED_DB_REVISION} "
             f"rows_inspected={payload['inspected_rows']}"
+        )
+        typer.echo(
+            f"  window={payload['window_start']}..{payload['window_end']} "
+            f"({window_hours}h) runs_loaded={payload['collector_runs_loaded']} "
+            f"referenced_runs={payload['referenced_run_count']} "
+            f"truncated={payload['attempt_rows_truncated_by_limit']}"
         )
         for f in findings:
             if f.severity is not Severity.INFO or not holder["deployed"]:

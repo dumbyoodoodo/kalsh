@@ -470,3 +470,105 @@ and PID 22288 had already loaded `28cf598` into memory, so the running
 collector's behaviour is exactly the deployed commit. The on-disk tree is
 therefore one commit ahead of the running process in operator tooling only; the
 next routine restart picks it up with no change to collection.
+
+---
+
+## Validation-window mismatch and false foreign lineage (2026-08-20)
+
+### Symptom
+
+`weather attempts validate` reported **`ATTEMPT_EVIDENCE_INVALID`** with ~122
+CRITICAL `foreign_collector_run_lineage` findings against data that was
+completely clean.
+
+**Those findings were never evidence of corruption.** All 122 flagged attempts
+referenced collector runs that existed, were completed weather runs, and carried
+the right environment — verified directly before any code was changed. Do not
+read the historical findings as a data-integrity incident.
+
+### Root cause
+
+Two queries, two different scopes:
+
+| | Old selection |
+|---|---|
+| Attempts | most recent **500 rows**, no time bound |
+| Collector runs | weather runs in the last **24 hours** |
+
+At healthy 30-minute cadence 500 rows ≈ 18h, safely inside the run window. Once
+cadence degraded, 500 rows reached back **~40h** — so attempts legitimately
+referencing runs older than 24h found their run absent from the validation
+context and were labelled foreign. The rule was correct; the context it was
+given was not.
+
+### Canonical window
+
+One window now drives everything, via
+`storage.repositories.load_attempt_validation_context`:
+
+- `window_start` / `window_end` bound the attempts (`requested_at`).
+- The run set is the **union** of runs *started* inside the window and runs
+  *referenced* by the retained attempts.
+
+The union matters in both directions. Referenced runs must be loaded or a
+boundary-straddling cycle looks foreign. Window runs must be loaded or a
+completed run with **zero** attempts references nothing, is never loaded, and
+the `completed_weather_run_missing_all_attempt_evidence` CRITICAL silently stops
+working.
+
+### `--limit` semantics
+
+`--limit` bounds attempt **rows only** — a safety bound on output size, never a
+second time boundary. Whatever it retains, the runs those rows reference are
+always loaded, so truncation cannot manufacture a foreign-lineage finding.
+
+Truncation has one further consequence, found during live verification and fixed
+before shipping: a run older than the retained rows may have had its attempts
+truncated away, and judging its completeness reported *“0 of 14 attempts”* for a
+run that recorded all 14 — the same false positive, mirrored. Completeness is
+therefore evaluated only over `completeness_eligible_run_ids`: runs at or after
+the oldest retained attempt, whose attempt set is known to be fully loaded.
+Excluded runs remain loaded for lineage, so they are resolved but not judged.
+
+### Race boundary
+
+`window_end` is captured **once** per pass and passed to every query, so a run
+created while validation executes cannot be seen by one query and missed by
+another. No collector stop is required.
+
+### Query context vs real foreign lineage
+
+After this change a foreign-lineage finding means the database genuinely lacks
+the run. `AttemptValidationContext.missing_referenced_run_ids` is the direct
+expression of that, and it is surfaced as
+`referenced_runs_missing_from_database` in the JSON output. Genuine defects —
+a nonexistent run id, a reassigned run — remain CRITICAL and are covered by
+tests.
+
+### Observatory shared the defect class
+
+`observatory/report.py` built its own copy of these queries. It did not have the
+row-limit mismatch, but it did have:
+
+- two separate `now()` evaluations (a race between its attempt and run queries);
+- **mis-indexed run columns** — the SELECT was `(id, started_at, finished_at,
+  stats_json)` while the code read `environment` from `started_at`, `started_at`
+  from `finished_at`, and `finished_at` from `stats_json`;
+- a bare `except Exception` that discarded the resulting error and returned
+  empty evidence, so `ops status` silently contributed **no attempt findings at
+  all**.
+
+Both consumers now use the shared loader, and a test asserts they cannot
+silently diverge again.
+
+### Operator output
+
+Human and JSON output expose the window so a future discrepancy is debuggable:
+
+```
+window=<start>..<end> (24.0h) runs_loaded=28 referenced_runs=28 truncated=False
+```
+
+JSON adds `validation_scope: time_window`, `window_hours`,
+`attempt_rows_truncated_by_limit`, and
+`referenced_runs_missing_from_database`. No credentials or payload bodies.

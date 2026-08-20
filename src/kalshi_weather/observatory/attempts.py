@@ -505,8 +505,25 @@ def summarize(
     schema_deployed: bool,
     db_revision: str,
     expected_revision: str,
+    completeness_eligible_run_ids: frozenset[int] | None = None,
 ) -> list[Finding]:
-    """Every attempt-attribution finding, in deterministic order."""
+    """Every attempt-attribution finding, in deterministic order.
+
+    ``completeness_eligible_run_ids`` names the runs whose attempt set is known
+    to be FULLY loaded. When a caller bounds its attempt rows (a row limit), a
+    run older than the retained rows may have had its attempts truncated away --
+    judging its completeness would report "0 of 14 attempts" for a run that
+    actually recorded all 14. Such runs are still needed for LINEAGE (so an
+    attempt referencing them is not called foreign), which is why they stay in
+    ``runs`` and are excluded only from the completeness rules.
+
+    ``None`` means every supplied run is fully loaded, the normal case.
+    """
+    def _completeness_runs() -> list[RunContext]:
+        if completeness_eligible_run_ids is None:
+            return list(runs)
+        return [r for r in runs if r.collector_run_id in completeness_eligible_run_ids]
+
     findings = [
         legacy_absence_finding(schema_deployed=schema_deployed),
         schema_revision_finding(db_revision=db_revision, expected_revision=expected_revision),
@@ -517,9 +534,10 @@ def summarize(
     findings.extend(check_environment_and_lineage(rows, runs))
     findings.extend(check_target_local_dates(rows, station_timezones=station_timezones))
     findings.extend(check_provenance(rows))
-    for run in runs:
+    judged = _completeness_runs()
+    for run in judged:
         findings.extend(check_run_reconciliation(run, rows, now=now))
-    findings.extend(completed_runs_missing_all_evidence(runs, rows, now=now))
+    findings.extend(completed_runs_missing_all_evidence(judged, rows, now=now))
     findings.extend(check_operational_outcomes(rows))
     return findings
 

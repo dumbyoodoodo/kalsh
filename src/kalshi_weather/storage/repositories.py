@@ -8,7 +8,7 @@ and save_orderbook_snapshot, and docs/adr/0002-ingestion-collector.md.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -1047,3 +1047,139 @@ async def detect_duplicate_logical_attempts(
         .having(func.count() > 1)
     )
     return [str(k) for k, _ in rows.all()]
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptValidationContext:
+    """Everything one attempt-integrity validation pass needs, loaded coherently.
+
+    The defect this replaces: attempts were selected by a fixed ROW LIMIT while
+    collector runs were selected by a 24-HOUR window. Under degraded collection
+    cadence 500 rows reached back ~40h, so attempts legitimately referencing
+    runs older than 24h found their run absent from the validation context and
+    were reported as ``foreign_collector_run_lineage`` -- 122 CRITICAL findings
+    against provably clean data on 2026-08-20.
+
+    The run set is deliberately a UNION of two things, because each catches a
+    defect the other cannot:
+
+    - runs STARTED inside the window, so a completed instrumented run with zero
+      attempts is still detectable (it references nothing, so a
+      referenced-runs-only set would silently disable that CRITICAL rule);
+    - runs REFERENCED by the loaded attempts, so lineage context is complete
+      even when an attempt's run began before the window or was pushed out by
+      the row limit.
+
+    ``truncated`` reports whether the row limit bounded the attempt set, so a
+    caller can say "inspected a bounded sample" rather than implying full
+    window coverage.
+    """
+
+    window_start: datetime
+    window_end: datetime
+    attempts: tuple[WeatherCollectionAttempt, ...]
+    runs: tuple[CollectorRun, ...]
+    referenced_run_ids: frozenset[int]
+    truncated: bool
+
+    @property
+    def runs_in_window(self) -> tuple[CollectorRun, ...]:
+        return tuple(r for r in self.runs if self.window_start <= _aware(r.started_at))
+
+    @property
+    def coverage_start(self) -> datetime:
+        """Earliest instant whose attempts are FULLY represented.
+
+        Without truncation that is ``window_start``. With truncation it is the
+        oldest retained attempt: anything older may have had rows dropped, so
+        completeness cannot be judged there.
+        """
+        if not self.truncated or not self.attempts:
+            return self.window_start
+        return min(_aware(a.requested_at) for a in self.attempts)
+
+    @property
+    def completeness_eligible_run_ids(self) -> frozenset[int]:
+        """Runs whose attempt set is fully loaded, so completeness may be judged.
+
+        Truncation must not be able to make a run that recorded all its attempts
+        look like it recorded none -- that would be the same class of false
+        positive this loader exists to remove, only mirrored.
+        """
+        start = self.coverage_start
+        return frozenset(int(r.id) for r in self.runs if _aware(r.started_at) >= start)
+
+    @property
+    def missing_referenced_run_ids(self) -> frozenset[int]:
+        """Referenced runs that genuinely do not exist in the database.
+
+        After this loader, a non-empty result is a REAL lineage defect rather
+        than a query-window artifact.
+        """
+        return self.referenced_run_ids - {int(r.id) for r in self.runs}
+
+
+def _aware(value: datetime) -> datetime:
+    """Postgres returns naive UTC for these columns; compare in UTC."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+async def load_attempt_validation_context(
+    session: AsyncSession,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    limit: int = 500,
+    collector: str = "weather",
+) -> AttemptValidationContext:
+    """Load attempts and every collector run needed to validate their lineage.
+
+    ``window_end`` is supplied by the caller and used for BOTH queries, so a run
+    or attempt created while validation executes cannot be seen by one query and
+    missed by the other.
+
+    ``limit`` bounds attempt ROWS only. Whatever it retains, the runs those rows
+    reference are always loaded -- truncation can never manufacture a foreign
+    lineage finding.
+    """
+    attempt_rows = await session.scalars(
+        select(WeatherCollectionAttempt)
+        .where(
+            WeatherCollectionAttempt.requested_at >= window_start,
+            WeatherCollectionAttempt.requested_at <= window_end,
+        )
+        .order_by(WeatherCollectionAttempt.requested_at.desc())
+        .limit(limit)
+    )
+    attempts = tuple(attempt_rows.all())
+    truncated = len(attempts) == limit
+
+    referenced = frozenset(
+        int(a.collector_run_id) for a in attempts if a.collector_run_id is not None
+    )
+
+    window_runs = await session.scalars(
+        select(CollectorRun)
+        .where(
+            CollectorRun.collector == collector,
+            CollectorRun.started_at >= window_start,
+            CollectorRun.started_at <= window_end,
+        )
+        .order_by(CollectorRun.started_at)
+    )
+    runs_by_id: dict[int, CollectorRun] = {int(r.id): r for r in window_runs.all()}
+
+    outstanding = sorted(referenced - set(runs_by_id))
+    if outstanding:
+        extra = await session.scalars(select(CollectorRun).where(CollectorRun.id.in_(outstanding)))
+        for run in extra.all():
+            runs_by_id[int(run.id)] = run
+
+    return AttemptValidationContext(
+        window_start=window_start,
+        window_end=window_end,
+        attempts=attempts,
+        runs=tuple(sorted(runs_by_id.values(), key=lambda r: _aware(r.started_at))),
+        referenced_run_ids=referenced,
+        truncated=truncated,
+    )

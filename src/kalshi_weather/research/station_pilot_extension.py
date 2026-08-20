@@ -107,7 +107,12 @@ class ExtensionState(StrEnum):
 
     WAITING_FOR_ATTEMPT_ATTRIBUTION_DEPLOYMENT = "WAITING_FOR_ATTEMPT_ATTRIBUTION_DEPLOYMENT"
     COLLECTING_EXTENSION = "COLLECTING_EXTENSION"
+    #: The seventh local date has elapsed. This is a CALENDAR fact only -- it
+    #: says nothing about whether the evidence the review needs was collected.
     READY_FOR_EXTENSION_REVIEW = "READY_FOR_EXTENSION_REVIEW"
+    #: Terminal. A disposition has been recorded for this registration; the
+    #: window is closed and no further state change occurs.
+    EXTENSION_DISPOSED = "EXTENSION_DISPOSED"
 
 
 class ExtensionRegistrationError(ValueError):
@@ -176,13 +181,29 @@ def extension_state(
     *,
     now: datetime,
     deployment_validated_at: datetime | None,
+    disposition_recorded: bool = False,
 ) -> ExtensionState:
     """Lifecycle state. ``deployment_validated_at=None`` means the attempt
-    evidence layer is not deployed, so the extension has no start and no gate."""
+    evidence layer is not deployed, so the extension has no start and no gate.
+
+    This function is deliberately CALENDAR-ONLY: given a deployment anchor and a
+    clock it returns where the window sits in time. It has no access to
+    collected evidence and therefore ``READY_FOR_EXTENSION_REVIEW`` must never
+    be read as "enough evidence exists to issue a station verdict" -- for
+    STATION-PILOT-EXT-0001 the gate passed while four registered dates had zero
+    collection.
+
+    ``disposition_recorded`` is the one non-calendar input, and it only ever
+    moves the state to a terminal value: once a window has been formally
+    disposed, continuing to report it as awaiting review would invite running
+    the frozen review against evidence that was never acquired.
+    """
     if deployment_validated_at is None:
         return ExtensionState.WAITING_FOR_ATTEMPT_ATTRIBUTION_DEPLOYMENT
     if now.tzinfo is None:
         raise ExtensionRegistrationError("now must be timezone-aware UTC")
+    if disposition_recorded:
+        return ExtensionState.EXTENSION_DISPOSED
     gate = extension_review_gate(deployment_validated_at)
     if now >= gate:
         return ExtensionState.READY_FOR_EXTENSION_REVIEW

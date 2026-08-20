@@ -6103,12 +6103,25 @@ def spx_deployment_status(
     import json as _json
 
     from kalshi_weather.research import extension_deployment as ed
+    from kalshi_weather.research import extension_disposition as edisp
     from kalshi_weather.research import station_pilot_extension as ext
 
     ledger = ed.DeploymentLedger.load()
     anchors = ledger.find_for_extension_registration(ext.EXTENSION_REGISTRATION_ID)
     validated_at = anchors[0].deployment_validated_at if anchors else None
-    state = ext.extension_state(now=utc_now(), deployment_validated_at=validated_at)
+
+    # A recorded terminal disposition takes precedence over the calendar state:
+    # continuing to report READY_FOR_EXTENSION_REVIEW after a window has been
+    # closed would invite running the frozen review against evidence that was
+    # never collected.
+    disp_ledger = edisp.DispositionLedger.load()
+    disposition = disp_ledger.for_registration(ext.EXTENSION_REGISTRATION_ID)
+    state = ext.extension_state(
+        now=utc_now(),
+        deployment_validated_at=validated_at,
+        disposition_recorded=disposition is not None,
+    )
+    gate_passed = bool(anchors) and utc_now() >= anchors[0].review_gate()
     payload = {
         "registration": ext.REGISTRATION.to_dict(),
         "extension_state": str(state),
@@ -6118,16 +6131,45 @@ def spx_deployment_status(
         ),
         "ledger_records": len(ledger.records),
         "ledger_problems": ledger.verify_ledger(),
+        "calendar_gate_passed": gate_passed,
+        "evidence_complete": (disposition.evidence_complete if disposition else None),
+        "disposition": (str(disposition.disposition) if disposition else None),
+        "disposition_id": (disposition.disposition_id if disposition else None),
+        "disposition_content_hash": (disposition.content_hash if disposition else None),
+        "station_verdicts_issued": (
+            disposition.station_verdicts_issued if disposition else False
+        ),
+        "new_registration_created": False,
+        "disposition_ledger_problems": disp_ledger.validate(),
     }
     if as_json:
         typer.echo(_json.dumps(payload, indent=2, sort_keys=True))
         return
+    typer.echo("STATION PILOT EXTENSION")
     typer.echo(f"registration: {ext.EXTENSION_REGISTRATION_ID}")
     typer.echo(f"  hash: {ext.REGISTRATION.registration_hash()}")
     typer.echo(f"  extension_state: {state}")
     typer.echo(f"  deployment anchor recorded: {bool(anchors)}")
     typer.echo(f"  deployment_validated_at: {payload['deployment_validated_at']}")
     typer.echo(f"  ledger records: {len(ledger.records)}")
+    typer.echo(f"  calendar gate: {'PASSED' if gate_passed else 'NOT REACHED'}")
+    if disposition is None:
+        typer.echo("  evidence completeness: NOT ASSESSED")
+        typer.echo("  disposition: NONE RECORDED")
+        typer.echo("  station verdicts: NOT EVALUATED")
+        return
+    typer.echo(
+        f"  evidence completeness: {'PASSED' if disposition.evidence_complete else 'FAILED'}"
+    )
+    typer.echo(f"  disposition: {disposition.disposition}")
+    typer.echo(f"  disposition id: {disposition.disposition_id}")
+    typer.echo("  station verdicts: NOT EVALUATED")
+    typer.echo("  new registration: NOT CREATED")
+    for code, _tz in ext.STATION_TIMEZONES:
+        complete = disposition.complete_dates(code)
+        typer.echo(
+            f"    {code}: {complete}/{disposition.required_complete_dates} complete dates"
+        )
 
 
 @spx_deploy_app.command("preview")

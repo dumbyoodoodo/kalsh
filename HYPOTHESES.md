@@ -600,7 +600,7 @@ The purpose of this project is to test hypotheses, not to assume profitable stra
 
 ### H0019 — Future held-out replication of H0018 (weather vs market, prospective)
 
-- **Status:** Registered 2026-07-26 — **accumulating prospective data** (readiness state `NOT_READY`). Do NOT run the final test until the readiness command reports `READY_FOR_FINAL_TEST`.
+- **Status:** **TERMINAL — NON-EVALUABLE (evidence-acquisition failure), 2026-08-31.** **Never executed; no verdict exists and the hypothesis remains UNRESOLVED.** Kalshi migrated daily-temperature settlement from the NWS CLI product to The Weather Company on ~2026-08-14, two days into the frozen test window, leaving only 2 of 14 test dates governed by the registered settlement model: test event-groups 16 vs 25 required (`test_events_met`, `bootstrap_units_met` fail; all other gates pass, completion coverage 1.0). Even under flawless collection the maximum attainable was 24 — below the minimum — so this is NOT attributable to the 08-14/08-23 collection gaps, and NOT a statistical outcome. Train (112) and validation (26) event-groups remain valid. Registration, windows, thresholds, and logic unchanged. Closeout: `docs/research/postmortems/2026-08-31-h0019-closeout.md`. A successor requires a NEW pre-registration and is blocked on DESIGN-0001 (`docs/research/design/2026-08-31-post-cli-settlement-scope.md`).
 - **Opened:** 2026-07-26
 - **Related:** H0018 (closed, immutable — this is a NEW identifier because future data cannot repair H0018's historical train/val windows; missed forecast vintages are unavailable). Registration package: `docs/research/experiments/EXP-FUTURE-H0019/registration.md`.
 

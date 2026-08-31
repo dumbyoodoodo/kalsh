@@ -26,7 +26,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 #: Bump whenever parser behavior changes in a way that could alter any spec.
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 
 class SettlementStatus(StrEnum):
@@ -72,6 +72,11 @@ class SettlementSpec:
     unit: str | None = None  # "F"
     observation_window: str | None = None  # "local_calendar_day"
     rounding_rule: str | None = None  # "integer_f" (CLI reports whole degrees)
+    #: How the CLI settlement source was established. ``structured_cli_url``
+    #: means Kalshi's machine-parseable citation supplied it; ``rules_text``
+    #: means the structured field was unusable and the authoritative rules
+    #: prose was read instead (ADR 0026). Never inferred from a ticker.
+    source_provenance: str | None = None
     market_close_time: datetime | None = None
     notes: list[str] = field(default_factory=list)
 

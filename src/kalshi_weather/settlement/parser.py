@@ -40,7 +40,7 @@ from kalshi_weather.settlement.spec import (
     SettlementStatus,
     rules_hash,
 )
-from kalshi_weather.weather.stations import station_for_location_code
+from kalshi_weather.weather.stations import STATIONS, Station, station_for_location_code
 
 #: Values recorded on every CLI-sourced spec. The NWS Climatological Report
 #: (Daily) reports whole-degree Fahrenheit values for the station's local
@@ -102,6 +102,116 @@ class _SourceMatch:
     url: str
     wfo_site: str
     location_code: str
+
+
+#: How the CLI source was established, recorded on every resolved spec.
+PROVENANCE_STRUCTURED = "structured_cli_url"
+PROVENANCE_RULES_TEXT = "rules_text"
+
+#: The rules-text fallback (ADR 0026) exists ONLY because Kalshi replaced the
+#: structured CLI citation with a generic partner link
+#: (``[{"name":"The Weather Company","url":"https://weather.com/kalshi"}]``)
+#: while the authoritative prose still cites the NWS CLI product. Both of these
+#: must be present -- a market that merely mentions weather, or names a
+#: different settlement authority, is NOT eligible. Deliberately two required
+#: matches rather than one loose one.
+_NWS_RE = re.compile(r"\bnational\s+weather\s+service\b", re.IGNORECASE)
+_CLI_PRODUCT_RE = re.compile(r"\bclimatolog\w*\s+report\b", re.IGNORECASE)
+#: Positive disqualifiers. The NWS/CLI requirement above already excludes
+#: hourly Weather Company contracts; these are defense in depth, because an
+#: hourly contract must never be resolved even if its prose changes.
+_WEATHER_COMPANY_RE = re.compile(r"\bthe\s+weather\s+company\b", re.IGNORECASE)
+#: "8 AM EDT", "11 PM", "13:00" -- a time of day means an instantaneous
+#: reading, not the CLI daily calendar-day aggregate this parser models.
+_TIME_OF_DAY_RE = re.compile(r"\b(\d{1,2}\s*(?:AM|PM)\b|\d{1,2}:\d{2})", re.IGNORECASE)
+
+#: The settled location as it appears in prose, e.g. "recorded in Central Park,
+#: New York for August 06, 2026" or "recorded at New York City for Aug 6, 2026".
+#: Bounded so a malformed sentence cannot swallow the document.
+_LOCATION_PHRASE_RE = re.compile(
+    r"\brecorded\s+(?:at|in)\s+(?P<loc>.{1,80}?)\s+for\b", re.IGNORECASE
+)
+
+
+def _station_match_keys(station: Station) -> tuple[str, ...]:
+    """Registry-derived names a rules sentence may use for this station.
+
+    Both the city ("New York") and the landmark portion of the registry name
+    ("Central Park") are accepted, because live prose uses both. Nothing here
+    is derived from a ticker, series prefix, or market title.
+    """
+    landmark = station.name.split(",")[0].strip()
+    return tuple({station.city.strip(), landmark})
+
+
+def _station_from_rules(rules: str) -> tuple[Station | None, str | None]:
+    """Resolve the settled station from authoritative rules prose.
+
+    Fails closed: no location phrase, no registry match, or MORE THAN ONE
+    matching station all return ``None`` with a reason. Ambiguity is never
+    broken by preference order.
+    """
+    phrase_match = _LOCATION_PHRASE_RE.search(rules)
+    if phrase_match is None:
+        return None, "rules text has no parseable settlement location phrase"
+    phrase = phrase_match.group("loc")
+
+    matched: dict[str, Station] = {}
+    for station in STATIONS.values():
+        for key in _station_match_keys(station):
+            if not key:
+                continue
+            if re.search(rf"\b{re.escape(key)}\b", phrase, re.IGNORECASE):
+                matched[station.station_id] = station
+                break
+    if not matched:
+        return None, (
+            f"settlement location {phrase!r} does not match any station in the registry; "
+            "add it to weather/stations.py to support this market"
+        )
+    if len(matched) > 1:
+        return None, (
+            f"settlement location {phrase!r} matches multiple registry stations "
+            f"{sorted(matched)}; refusing to guess"
+        )
+    return next(iter(matched.values())), None
+
+
+def _parse_cli_source_from_rules(rules: str | None) -> tuple[_SourceMatch | None, str | None]:
+    """Rules-text fallback for the CLI citation (ADR 0026).
+
+    Returns a ``_SourceMatch`` synthesized from the REGISTRY entry, so every
+    downstream step is unchanged. One consequence is explicit: the WFO
+    cross-check in step 2 becomes vacuous here, because both sides now come
+    from the registry. The compensating control is that this path requires
+    explicit NWS + Climatological Report wording AND exactly one unambiguous
+    registry match -- strictly narrower than the structured path it replaces.
+    """
+    if not rules or not rules.strip():
+        return None, "no rules text available for settlement-source fallback"
+    if _WEATHER_COMPANY_RE.search(rules):
+        return None, "rules cite The Weather Company, not the NWS CLI product"
+    if _TIME_OF_DAY_RE.search(rules):
+        return None, (
+            "rules settle on a time-of-day reading, not the CLI daily "
+            "calendar-day aggregate"
+        )
+    if not _NWS_RE.search(rules) or not _CLI_PRODUCT_RE.search(rules):
+        return None, (
+            "rules do not explicitly cite the National Weather Service "
+            "Climatological Report"
+        )
+    station, note = _station_from_rules(rules)
+    if station is None:
+        return None, note
+    return (
+        _SourceMatch(
+            url="",
+            wfo_site=station.wfo_site,
+            location_code=station.source_location_code,
+        ),
+        None,
+    )
 
 
 def _parse_cli_source(sources: list[dict[str, Any]]) -> tuple[_SourceMatch | None, str | None]:
@@ -213,20 +323,43 @@ def parse_settlement(series: SeriesInfo, market: MarketInfo) -> SettlementSpec:
             **fields,
         )
 
-    # -- 1. settlement source (structured) --------------------------------
+    # -- 1. settlement source: structured first, rules text only as fallback --
+    # The structured citation remains the PREFERRED path. Kalshi replaced it
+    # with a generic partner link on many series while the authoritative prose
+    # still cites the NWS CLI product, which took every such market to
+    # UNSUPPORTED (ADR 0026). The fallback below is strictly narrower.
     source, source_note = _parse_cli_source(series.settlement_sources)
+    provenance = PROVENANCE_STRUCTURED
     if source is None:
-        notes.append(source_note or "unusable settlement source")
-        status = (
-            SettlementStatus.UNSUPPORTED
-            if source_note and "not an NWS CLI product" in source_note
-            else SettlementStatus.UNRESOLVED
-        )
-        return spec(status, Confidence.NONE, source_url=source_url)
+        # A CONTRADICTORY citation (two different CLI products for one market)
+        # is a genuine conflict, not a missing input. Reading prose there would
+        # silently settle a disagreement the operator must see, so the fallback
+        # is offered only when the citation is absent or simply non-CLI.
+        if source_note and "multiple distinct" in source_note:
+            notes.append(source_note)
+            return spec(SettlementStatus.UNRESOLVED, Confidence.NONE, source_url=source_url)
+
+        fallback, fallback_note = _parse_cli_source_from_rules(market.rules_primary)
+        if fallback is not None:
+            notes.append(
+                f"structured settlement source unusable ({source_note}); resolved from "
+                "authoritative rules text instead"
+            )
+            source, provenance = fallback, PROVENANCE_RULES_TEXT
+        else:
+            notes.append(source_note or "unusable settlement source")
+            notes.append(f"rules-text fallback also declined: {fallback_note}")
+            status = (
+                SettlementStatus.UNSUPPORTED
+                if source_note and "not an NWS CLI product" in source_note
+                else SettlementStatus.UNRESOLVED
+            )
+            return spec(status, Confidence.NONE, source_url=source_url)
 
     common: dict[str, Any] = {
         "settlement_source": CLI_SETTLEMENT_SOURCE,
-        "source_url": source.url,
+        "source_provenance": provenance,
+        "source_url": source.url or None,
         "wfo_site": source.wfo_site,
         "source_location_code": source.location_code,
         "unit": CLI_UNIT,

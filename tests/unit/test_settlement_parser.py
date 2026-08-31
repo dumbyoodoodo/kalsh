@@ -267,11 +267,20 @@ def test_missing_rules_text_is_unresolved() -> None:
     assert spec.station_id == "NYC"  # source/station were still identifiable
 
 
-def test_no_settlement_source_is_unresolved() -> None:
+def test_no_settlement_source_falls_back_to_authoritative_rules() -> None:
+    """Behaviour change, ADR 0026 (was: UNRESOLVED).
+
+    An absent structured citation is a MISSING input, and the rules prose is
+    authoritative and present, so the fallback resolves it. Contrast
+    ``test_multiple_distinct_cli_urls_is_unresolved_not_picked`` below, where
+    the citation is CONTRADICTORY and prose must not settle the disagreement.
+    """
     spec = parse_settlement(
         _series("KXHIGHNY", settlement_sources=[]), _market("KXHIGHNY-26JUL21-T79")
     )
-    assert spec.status is SettlementStatus.UNRESOLVED
+    assert spec.status is SettlementStatus.RESOLVED
+    assert spec.source_provenance == "rules_text"
+    assert any("rules text" in n for n in spec.notes)
 
 
 def test_multiple_distinct_cli_urls_is_unresolved_not_picked() -> None:

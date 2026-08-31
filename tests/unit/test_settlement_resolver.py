@@ -148,9 +148,14 @@ async def test_series_link_falls_back_to_event_ticker_prefix(session: AsyncSessi
     assert len(mappings) == 1
 
 
-async def test_market_without_series_row_is_unresolved(session: AsyncSession) -> None:
-    """A market whose series was never collected has no settlement source ->
-    unresolved, not an error and not a guess."""
+async def test_market_without_series_row_resolves_from_rules(session: AsyncSession) -> None:
+    """Behaviour change, ADR 0026 (was: UNRESOLVED).
+
+    A market whose series was never collected has no structured settlement
+    source, but its own rules prose is authoritative and present. Resolving
+    from it is not a guess -- the fallback still requires explicit NWS CLI
+    wording and exactly one unambiguous registry match.
+    """
     await save_market_snapshot(
         session,
         market_ticker="KXMYSTERY-26JUL21-T50",
@@ -171,8 +176,8 @@ async def test_market_without_series_row_is_unresolved(session: AsyncSession) ->
     )
     resolver = ParserSettlementResolver()
     specs = await resolver.resolve_specs(session)
-    assert specs[0].status.value == "unresolved"
-    assert await resolver.resolve(session) == []
+    assert specs[0].status.value == "resolved"
+    assert specs[0].source_provenance == "rules_text"
 
 
 # --- overrides ---------------------------------------------------------------
